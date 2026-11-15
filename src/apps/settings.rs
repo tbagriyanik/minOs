@@ -644,6 +644,10 @@ impl SystemSettings {
                         "nord" => ThemeId::Nord,
                         "terminal" => ThemeId::TerminalGreen,
                         "sunset" => ThemeId::Sunset,
+                        "dracula" => ThemeId::Dracula,
+                        "monokai" => ThemeId::Monokai,
+                        "solarized" => ThemeId::SolarizedDark,
+                        "highcontrast" | "hc" => ThemeId::HighContrast,
                         _ => ThemeId::VelvetDark,
                     };
                     theme::set_theme(self.theme);
@@ -1593,6 +1597,7 @@ impl SystemSettings {
                 ThemeId::Dracula => b"dracula",
                 ThemeId::Monokai => b"monokai",
                 ThemeId::SolarizedDark => b"solarized",
+                ThemeId::HighContrast => b"highcontrast",
             },
         );
         put(&mut cfg, &mut n, b";wallpaper=");

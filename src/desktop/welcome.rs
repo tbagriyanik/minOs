@@ -88,6 +88,16 @@ pub fn run_welcome_screen(
         welcome_update.keyboard |= welcome_usb_update.keyboard;
         welcome_update.mouse |= welcome_usb_update.mouse;
 
+        // PS/2 kesme kuyruğu: IRQ modunda klavye/fare olayları burada boşalır.
+        let irq_update = drivers::ps2::drain_input_events(
+            &mut *mouse,
+            &mut *keyboard,
+            width as i32,
+            height as i32,
+        );
+        welcome_update.keyboard |= irq_update.keyboard;
+        welcome_update.mouse |= irq_update.mouse;
+
         if welcome_update.keyboard || welcome_update.mouse {
             welcome_start_time = monotonic_ms();
         }

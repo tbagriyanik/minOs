@@ -155,6 +155,7 @@ impl MinGuiCompositor {
         let over_control = self.windows.iter().flatten().any(|win| {
             win.is_open
                 && !win.is_minimized
+                && win.workspace == self.active_workspace
                 && (in_rect(mx, my, win.close_hit_rect())
                     || in_rect(mx, my, win.max_hit_rect())
                     || in_rect(mx, my, win.min_hit_rect()))

@@ -145,13 +145,15 @@ impl MinGuiCompositor {
         let open_count = self
             .windows
             .iter()
-            .filter(|slot| slot.is_some_and(|win| win.is_open))
+            .filter(|slot| {
+                slot.is_some_and(|win| win.is_open && win.workspace == self.active_workspace)
+            })
             .count();
         let (tab_start, tab_width, tab_step, shown_tabs, tab_slots) =
             Self::taskbar_tabs_layout(fb.width, fb.height, open_count);
         let mut tab_slot = 0usize;
         for win in self.windows.iter().flatten() {
-            if win.is_open {
+            if win.is_open && win.workspace == self.active_workspace {
                 if tab_slot >= shown_tabs {
                     break;
                 }
@@ -246,6 +248,32 @@ impl MinGuiCompositor {
                     hidden.as_str(),
                     Self::text_on(Color::ACCENT_BLUE),
                     badge,
+                );
+            }
+        }
+
+        // Sanal masaüstü göstergesi: sekmelerin kapladığı alan ile tepsi
+        // arasında yer kalırsa "Masaüstü n/N" etiketi çizilir.
+        {
+            let mut ws = TextBuf::new();
+            ws.push_str(ui_text("Masaüstü ", "Workspace "));
+            ws.push_usize(self.active_workspace + 1);
+            ws.push_byte(b'/');
+            ws.push_usize(Self::MAX_WORKSPACES);
+            let ws_w = Self::text_width(ws.as_str(), 1);
+            let tabs_end = tab_start + tab_slots * tab_step;
+            let tray_x = Self::tray_left_bound(fb.width, fb.height);
+            if tabs_end + ws_w + sp(12) <= tray_x {
+                let text_h = Self::text_height();
+                let ws_y = tb_y + (taskbar_h().saturating_sub(text_h)) / 2;
+                Self::draw_string_shadow(
+                    fb,
+                    tray_x.saturating_sub(ws_w + sp(8)),
+                    ws_y,
+                    ws.as_str(),
+                    Color::TEXT_MAIN,
+                    Color::SHADOW,
+                    1,
                 );
             }
         }

@@ -147,6 +147,8 @@ pub struct MinGuiCompositor {
     pub is_start_menu_open: bool,
     /// Kirli rectangle takibi: sadece değişen bölgeler yeniden çizilir.
     pub dirty_tracker: crate::gui::dirty_rect::GlobalDirtyTracker,
+    /// Şu anda etkin sanal masaüstü (0..MAX_WORKSPACES).
+    pub active_workspace: usize,
     pub active_start_group: usize,
     pub selected_start_item: usize,
     pub start_menu_focus_submenu: bool,
@@ -185,10 +187,13 @@ pub struct MinGuiCompositor {
     alt_tab_order: [usize; MAX_WINDOWS],
     alt_tab_count: usize,
     alt_tab_selection: usize,
-    z_counter: u8,
+    z_counter: usize,
 }
 
 impl MinGuiCompositor {
+    /// Sanal masaüstü (workspace) sayısı.
+    pub const MAX_WORKSPACES: usize = 4;
+
     pub const fn new() -> Self {
         Self {
             windows: [None; MAX_WINDOWS],
@@ -221,6 +226,7 @@ impl MinGuiCompositor {
             confirm_restart: false,
             toasts: [None, None, None, None],
             dirty_tracker: crate::gui::dirty_rect::GlobalDirtyTracker::new(),
+            active_workspace: 0,
             installed_apps: [[0; 24]; 8],
             installed_apps_len: [0; 8],
             installed_apps_count: 0,
@@ -259,8 +265,10 @@ impl MinGuiCompositor {
         });
         if app_id != 9 {
             if let Some(idx) = existing {
+                // Pencere başka bir sanal masaüstündeyse önce o masaüstüne geç.
                 if let Some(win) = self.windows[idx].as_mut() {
                     win.is_minimized = false;
+                    self.active_workspace = win.workspace;
                 }
                 self.focus_window(idx);
                 return Some(idx);
@@ -273,11 +281,13 @@ impl MinGuiCompositor {
                 .position(|slot| slot.is_some_and(|w| w.app_id as usize == app_id))
         })?;
         if existing.is_none() {
+            let ws = self.windows[source_idx].map(|w| w.workspace).unwrap_or(0);
             if let Some(win) = self.windows[source_idx].as_mut() {
                 win.is_open = true;
                 win.is_minimized = false;
                 win.is_maximized = false;
             }
+            self.active_workspace = ws;
             self.focus_window(source_idx);
             return Some(source_idx);
         }
@@ -295,6 +305,8 @@ impl MinGuiCompositor {
         win.is_focused = false;
         win.is_maximized = false;
         win.restore = None;
+        // Yeni örnek her zaman geçerli sanal masaüstünde açılır.
+        win.workspace = self.active_workspace;
         win.scroll.x = 0;
         win.scroll.y = 0;
         let idx = self.windows.iter().position(Option::is_none)?;
@@ -303,6 +315,25 @@ impl MinGuiCompositor {
         }
         self.focus_window(idx);
         Some(idx)
+    }
+
+    /// Bu turun kirli bölge özetini toplar ve takipçiyi sıfırlar.
+    ///
+    /// `render_full_frame`'in `dirty_rect` parametresine beslenen birleşik
+    /// bölgeyi döndürür: `Some((x, y, w, h))` → yalnızca bu bölge çizilip
+    /// blit edilir; `None` → tam kare (taşma, izlenmeyen bölge veya güvenli
+    /// varsayılan). `GlobalDirtyTracker` kapasitesi aşıldığında birleşim
+    /// eksik kalacağı için `needs_full_redraw` durumunda `None` döner.
+    pub fn take_dirty_region(&mut self) -> Option<(usize, usize, usize, usize)> {
+        let region = if self.dirty_tracker.needs_full_redraw() {
+            None
+        } else {
+            self.dirty_tracker
+                .bounding_rect()
+                .map(|r| (r.x, r.y, r.width, r.height))
+        };
+        self.dirty_tracker.clear();
+        region
     }
 
     #[inline(always)]
@@ -314,18 +345,21 @@ impl MinGuiCompositor {
     }
 
     /// Belirtilen pencereyi odaklar ve z-sırasında en öne taşır.
+    /// Kapalı (`is_open == false`) veya boş slotlar reddedilir; Alt+Tab
+    /// sıralaması bayatladıktan sonra ölü bir pencere öne gelemez.
     pub fn focus_window(&mut self, idx: usize) {
-        if idx >= self.windows.len() || self.windows[idx].is_none() {
-            return;
+        match self.windows.get(idx).and_then(|slot| slot.as_ref()) {
+            Some(win) if win.is_open && win.workspace == self.active_workspace => {}
+            _ => return,
         }
         if self.z_counter >= 240 {
             let (order, count) = self.draw_order();
             for (new_z, &w_idx) in order[..count].iter().enumerate() {
                 if let Some(w) = self.windows[w_idx].as_mut() {
-                    w.z = new_z as u8;
+                    w.z = new_z;
                 }
             }
-            self.z_counter = count as u8;
+            self.z_counter = count;
         }
         self.z_counter = self.z_counter.saturating_add(1);
         let z = self.z_counter;
@@ -342,10 +376,10 @@ impl MinGuiCompositor {
 
     /// En üstte duran, açık ve küçültülmemiş pencereye odaklanır.
     pub fn focus_top_window(&mut self) {
-        let mut best: Option<(usize, u8)> = None;
+        let mut best: Option<(usize, usize)> = None;
         for (i, slot) in self.windows.iter().enumerate() {
             if let Some(w) = slot {
-                if w.is_open && !w.is_minimized {
+                if w.is_open && !w.is_minimized && w.workspace == self.active_workspace {
                     match best {
                         Some((_, bz)) if bz >= w.z => {}
                         _ => best = Some((i, w.z)),
@@ -387,7 +421,11 @@ impl MinGuiCompositor {
         };
         let next = self.alt_tab_order[self.alt_tab_selection];
         if let Some(win) = self.windows[next].as_mut() {
-            win.is_minimized = false;
+            // Oturum sırasında kapanan bir pencere seçildiyse diriltme;
+            // `focus_window` da zaten kapalı slotları reddeder.
+            if win.is_open {
+                win.is_minimized = false;
+            }
         }
         self.focus_window(next);
     }
@@ -398,36 +436,56 @@ impl MinGuiCompositor {
         self.alt_tab_selection = 0;
     }
 
+    /// Aktif sanal masaüstünü `delta` kadar kaydırır (sarma davranışı).
+    /// Alt+Tab durumu sıfırlanır; yeni masaüstünün en üst penceresine odaklanılır.
+    pub fn switch_workspace(&mut self, delta: isize) {
+        let n = Self::MAX_WORKSPACES as isize;
+        self.active_workspace = (self.active_workspace as isize + delta).rem_euclid(n) as usize;
+        self.finish_alt_tab();
+        self.focus_top_window();
+    }
+
+    /// Etkin pencereyi `delta` kadar ileri/geri sanal masaüstüne taşır.
+    /// Pencere aktif masaüstünden ayrılırsa kalan en üst pencereye odaklanılır.
+    pub fn move_active_window_workspace(&mut self, delta: isize) {
+        let n = Self::MAX_WORKSPACES as isize;
+        let Some(idx) = self.active_window_idx else {
+            return;
+        };
+        let new_ws = match self.windows.get_mut(idx).and_then(|slot| slot.as_mut()) {
+            Some(win) if win.is_open => {
+                win.workspace = (win.workspace as isize + delta).rem_euclid(n) as usize;
+                win.workspace
+            }
+            _ => return,
+        };
+        if new_ws != self.active_workspace {
+            self.focus_top_window();
+        }
+    }
+
     /// Açık pencereleri z-sırasına göre (arkadan öne) indeks listesi olarak döndürür.
     pub fn draw_order(&self) -> ([usize; MAX_WINDOWS], usize) {
-        let mut order: [usize; MAX_WINDOWS] = [0; MAX_WINDOWS];
-        let mut count = 0usize;
-        for (i, slot) in self.windows.iter().enumerate() {
-            if let Some(w) = slot {
-                if w.is_open && !w.is_minimized {
-                    order[count] = i;
-                    count += 1;
-                }
-            }
-        }
-        for i in 0..count {
-            for j in i + 1..count {
-                let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
-                let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
-                if zj < zi {
-                    order.swap(i, j);
-                }
-            }
-        }
-        (order, count)
+        self.sorted_open_windows(false)
     }
 
     /// Alt+Tab için açık tüm pencereleri, küçültülmüş olanlar dahil, z-sırasıyla döndürür.
     pub fn switcher_order(&self) -> ([usize; MAX_WINDOWS], usize) {
+        self.sorted_open_windows(true)
+    }
+
+    /// Açık pencereleri z değerine göre artan sırada (arkadan öne) sıralar.
+    /// `include_minimized`: true ise küçültülmüş pencereler de dahildir
+    /// (Alt+Tab hepsine dönebilir); false ise yalnız görünür olanlar.
+    fn sorted_open_windows(&self, include_minimized: bool) -> ([usize; MAX_WINDOWS], usize) {
         let mut order = [0; MAX_WINDOWS];
         let mut count = 0;
         for (i, slot) in self.windows.iter().enumerate() {
-            if slot.is_some_and(|w| w.is_open) {
+            if slot.is_some_and(|w| {
+                w.is_open
+                    && w.workspace == self.active_workspace
+                    && (include_minimized || !w.is_minimized)
+            }) {
                 order[count] = i;
                 count += 1;
             }
@@ -447,7 +505,11 @@ impl MinGuiCompositor {
     /// Verilen `(x, y)` noktasının açık ve küçültülmemiş herhangi bir pencere alanında olup olmadığını kontrol eder.
     pub fn is_point_covered_by_window(&self, x: usize, y: usize) -> bool {
         for w in self.windows.iter().flatten() {
-            if w.is_open && !w.is_minimized && in_rect(x, y, (w.x, w.y, w.width, w.height)) {
+            if w.is_open
+                && w.workspace == self.active_workspace
+                && !w.is_minimized
+                && in_rect(x, y, (w.x, w.y, w.width, w.height))
+            {
                 return true;
             }
         }

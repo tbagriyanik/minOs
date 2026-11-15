@@ -490,11 +490,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     let mut drag_dirty_rect: Option<(usize, usize, usize, usize)> = None;
 
-    let mut _app_dirty_rect: Option<(usize, usize, usize, usize)> = None;
-
     // Her tur sıfırlanan "ekran zorla çizilsin" işareti; oyun ve ses
-    // efektleri bu bayrağı kullanır (döngü başında sıfırlanır).
+    // efektleri bu bayrağı kullanır (döngü başına sıfırlanır).
     let mut force_render;
+
+    // Sanal masaüstü değişimi tüm ekranı etkilediği için kirli-bölge
+    // hesaplamasını atlayıp tam kare çizmeyi gerektirir.
+    let mut last_workspace = compositor.active_workspace;
 
     // Oyun motorunun son adım zamanı (TSC) — kare süresi ölçümü için.
     let mut cp_last_cycles: u64 = 0;
@@ -633,6 +635,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         input_update.keyboard |= usb_input_update.keyboard;
 
         input_update.mouse |= usb_input_update.mouse;
+
+        // PS/2 kesme kuyruğu: IRQ1/IRQ12 olaylarını durum makinelerine uygula.
+        let irq_update = drivers::ps2::drain_input_events(
+            &mut *mouse,
+            &mut *keyboard,
+            width as i32,
+            height as i32,
+        );
+
+        input_update.keyboard |= irq_update.keyboard;
+
+        input_update.mouse |= irq_update.mouse;
 
         // Update activity timestamps for focused application on input
         if input_update.keyboard || input_update.mouse {
@@ -2111,7 +2125,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let open_count = compositor
                     .windows
                     .iter()
-                    .filter(|slot| slot.is_some_and(|win| win.is_open))
+                    .filter(|slot| {
+                        slot.is_some_and(|win| {
+                            win.is_open && win.workspace == compositor.active_workspace
+                        })
+                    })
                     .count();
 
                 let (tab_start, tab_width, tab_step, shown_tabs, tab_slots) =
@@ -2121,7 +2139,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                 for idx in 0..gui::MAX_WINDOWS {
                     if let Some(win) = compositor.windows[idx] {
-                        if win.is_open {
+                        if win.is_open && win.workspace == compositor.active_workspace {
                             if tab_slot >= shown_tabs {
                                 break;
                             }
@@ -2173,7 +2191,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         for (hidden_idx, slot) in compositor.windows.iter().enumerate() {
                             if let Some(hidden) = slot {
-                                if hidden.is_open {
+                                if hidden.is_open && hidden.workspace == compositor.active_workspace
+                                {
                                     if ordinal >= shown_tabs {
                                         if first_hidden.is_none() {
                                             first_hidden = Some(hidden_idx);
@@ -2196,7 +2215,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             for (hidden_idx, slot) in compositor.windows.iter().enumerate() {
                                 if let Some(hidden) = slot {
-                                    if hidden.is_open {
+                                    if hidden.is_open
+                                        && hidden.workspace == compositor.active_workspace
+                                    {
                                         if ordinal > active_ordinal {
                                             next_hidden = Some(hidden_idx);
                                             break;
@@ -3018,6 +3039,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                             gui::theme::set_theme(settings_app.theme);
 
+                                            compositor.push_toast(
+                                                gui::ToastKind::Info,
+                                                gui::ui_text("Tema değiştirildi", "Theme changed"),
+                                                settings_app.theme.name(),
+                                                monotonic_ms(),
+                                                3000,
+                                            );
+
                                             swatch_hit = true;
 
                                             break;
@@ -3107,6 +3136,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             settings_app.theme = gui::theme::ThemeId::ALL[i];
 
                                             gui::theme::set_theme(settings_app.theme);
+
+                                            compositor.push_toast(
+                                                gui::ToastKind::Info,
+                                                gui::ui_text("Tema değiştirildi", "Theme changed"),
+                                                settings_app.theme.name(),
+                                                monotonic_ms(),
+                                                3000,
+                                            );
 
                                             swatch_hit = true;
 
@@ -4745,6 +4782,30 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     compositor.is_alt_tab_open = true;
 
                     compositor.cycle_focus(keyboard.shift);
+                }
+
+                drivers::keyboard::KeyAction::WorkspacePrev => {
+                    compositor.switch_workspace(-1);
+
+                    force_render = true;
+                }
+
+                drivers::keyboard::KeyAction::WorkspaceNext => {
+                    compositor.switch_workspace(1);
+
+                    force_render = true;
+                }
+
+                drivers::keyboard::KeyAction::MoveWindowWorkspacePrev => {
+                    compositor.move_active_window_workspace(-1);
+
+                    force_render = true;
+                }
+
+                drivers::keyboard::KeyAction::MoveWindowWorkspaceNext => {
+                    compositor.move_active_window_workspace(1);
+
+                    force_render = true;
                 }
 
                 drivers::keyboard::KeyAction::WinShowDesktop => {
@@ -7894,18 +7955,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 {
                     if let Some(act_idx) = compositor.active_window_idx {
                         if let Some(w) = compositor.windows[act_idx] {
-                            let dirty = (
+                            let dirty = crate::gui::dirty_rect::DirtyRect::new(
                                 w.x.saturating_sub(8),
                                 w.y.saturating_sub(8),
-                                w.width + 16,
-                                w.height + 16,
+                                w.width.saturating_add(16),
+                                w.height.saturating_add(16),
                             );
-
-                            _app_dirty_rect = Some(match _app_dirty_rect {
-                                Some(d) => drivers::video::rect_union(d, dirty),
-
-                                None => dirty,
-                            });
+                            compositor.dirty_tracker.track(act_idx, dirty);
                         }
                     }
                 }
@@ -8015,6 +8071,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     }
                 }
             }
+            // Bellek baskısı yoklaması: PMM boş oranı eşik geçişlerinde
+            // seri kayıt + kayıtlı geri çağrıyı tetikler.
+            crate::kernel::heap::poll_pressure();
+
             let frozen = watchdog::drain_frozen();
             for fw in frozen.iter() {
                 crate::serial_print("[WATCHDOG] Frozen app detected: app_id=");
@@ -8610,11 +8670,16 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // CPU yukunu ve gereksiz VRAM kopyalamasini %60-70 azalt.
 
+            // Kirli bölge takibini her dalda boşalt: menü/modal dalı
+            // tam kare çizse bile eski kayıtlar sonraki tura taşınmamalı.
+            let tracked_dirty = compositor.take_dirty_region();
+
             let target_dirty = if force_render
                 || busy_dirty
                 || compositor.is_start_menu_open
                 || compositor.is_context_menu_open
                 || compositor.is_alt_tab_open
+                || compositor.active_workspace != last_workspace
                 || run_dialog_open
                 || night_light_active
             {
@@ -8622,8 +8687,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             } else if let Some(drag) = drag_dirty_rect {
                 Some(drag)
             } else {
-                _app_dirty_rect
+                // GlobalDirtyTracker'dan bu turun birleşik kirli bölgeyi al.
+                // Taşma (overflow) veya boş takip → None → tam yeniden çizim.
+                tracked_dirty
             };
+            last_workspace = compositor.active_workspace;
 
             gui::frame::render_full_frame(
                 &mut fb,
@@ -8676,8 +8744,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
 
             drag_dirty_rect = None;
-
-            _app_dirty_rect = None;
         } else if mouse_moved {
             // Imlec hareketinde uygulamalari ve tum ekrani yeniden cizmek yerine
 

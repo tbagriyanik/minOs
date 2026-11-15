@@ -22,6 +22,7 @@ pub mod hda;
 pub mod http;
 pub mod http2;
 pub mod i219;
+pub mod input_queue;
 pub mod keyboard;
 pub mod legacy_audio;
 pub mod marvell;

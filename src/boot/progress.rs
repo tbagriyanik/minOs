@@ -44,6 +44,8 @@ pub fn draw_io_progress(context: *mut (), done: usize, total: usize) {
         let kbd_ptr = core::ptr::addr_of_mut!(GLOBAL_KEYBOARD);
         drivers::ps2::poll_input(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
         drivers::usb_hid::poll_events(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
+        // PS/2 kesme kuyruğu: IRQ modunda biriken olayları burada boşalt.
+        drivers::ps2::drain_input_events(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
         state.mx = (*mouse_ptr).x.max(0) as usize;
         state.my = (*mouse_ptr).y.max(0) as usize;
     }

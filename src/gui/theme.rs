@@ -56,6 +56,7 @@
 /// - [`ThemeId::Dracula`] - Dracula color scheme
 /// - [`ThemeId::Monokai`] - Monokai editor theme
 /// - [`ThemeId::SolarizedDark`] - Solarized dark
+/// - [`ThemeId::HighContrast`] - Erişilebilirlik için maksimum kontrast
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 /// Tema jetonlarını normal 0xRRGGBB renklerinden ayıran üst bayt.
@@ -184,11 +185,13 @@ pub enum ThemeId {
     Monokai,
     /// Solarized dark variant.
     SolarizedDark,
+    /// Maximum-contrast accessibility theme (WCAG AAA hedefi).
+    HighContrast,
 }
 
 impl ThemeId {
     /// All available themes in order.
-    pub const ALL: [ThemeId; 8] = [
+    pub const ALL: [ThemeId; 9] = [
         ThemeId::VelvetDark,
         ThemeId::Daylight,
         ThemeId::Nord,
@@ -197,6 +200,7 @@ impl ThemeId {
         ThemeId::Dracula,
         ThemeId::Monokai,
         ThemeId::SolarizedDark,
+        ThemeId::HighContrast,
     ];
 
     /// Returns the next theme in the cycle.
@@ -214,7 +218,8 @@ impl ThemeId {
             ThemeId::Sunset => ThemeId::Dracula,
             ThemeId::Dracula => ThemeId::Monokai,
             ThemeId::Monokai => ThemeId::SolarizedDark,
-            ThemeId::SolarizedDark => ThemeId::VelvetDark,
+            ThemeId::SolarizedDark => ThemeId::HighContrast,
+            ThemeId::HighContrast => ThemeId::VelvetDark,
         }
     }
 
@@ -232,6 +237,7 @@ impl ThemeId {
             ThemeId::Dracula => "Dracula",
             ThemeId::Monokai => "Monokai",
             ThemeId::SolarizedDark => "Gün Işığı Koyu (Solarized Dark)",
+            ThemeId::HighContrast => "Yüksek Kontrast (High Contrast)",
         }
     }
 
@@ -249,6 +255,7 @@ impl ThemeId {
             ThemeId::Dracula => "Dracula",
             ThemeId::Monokai => "Monokai",
             ThemeId::SolarizedDark => "Solarized",
+            ThemeId::HighContrast => "Kontrast",
         }
     }
 
@@ -266,6 +273,7 @@ impl ThemeId {
             ThemeId::Dracula => 5,
             ThemeId::Monokai => 6,
             ThemeId::SolarizedDark => 7,
+            ThemeId::HighContrast => 8,
         }
     }
 }
@@ -442,6 +450,29 @@ const SOLARIZED_DARK: [u32; PALETTE_LEN] = [
     0x00141A, // shadow
 ];
 
+// Yuksek kontrast / erisilebilirlik temasi: saf siyah zemin, saf beyaz metin,
+// kalin beyaz cerceveler ve son derece belirgin vurgu renkleri. Metin ve arayuz
+// renkleri WCAG AAA (~7:1 ve ustu) kontrast hedefler.
+const HIGH_CONTRAST: [u32; PALETTE_LEN] = [
+    0x000000, // desktop bg (saf siyah)
+    0x0A0A0A, // window bg (neredeyse siyah, beyaz metin ile ~18:1)
+    0x0000B4, // titlebar (aktif) (koyu mavi, klasik HC stili)
+    0x404040, // titlebar (pasif) (acik gri, pasif ayrimi belirgin)
+    0x000000, // taskbar
+    0x66B3FF, // accent blue (metin olarak okunabilir acik mavi)
+    0x33FF99, // accent green (parlak nane yesili)
+    0xFF8080, // accent red (acik kirmizi, baslik zemininde AA+)
+    0xFFFF66, // accent yellow (saf sari)
+    0xFF99FF, // accent pink (acik magenta)
+    0xFFCC66, // accent cat
+    0xFFFFFF, // text main (saf beyaz)
+    0xD0D0D0, // text muted (acik gri, ~10:1 kontrast)
+    0xFFFFFF, // cursor fill
+    0x000000, // cursor outline
+    0xFFFFFF, // border (saf beyaz - maksimum gorunurluk)
+    0x000000, // shadow
+];
+
 const fn palette_for(id: ThemeId) -> [u32; PALETTE_LEN] {
     match id {
         ThemeId::VelvetDark => VELVET_DARK,
@@ -452,6 +483,7 @@ const fn palette_for(id: ThemeId) -> [u32; PALETTE_LEN] {
         ThemeId::Dracula => DRACULA,
         ThemeId::Monokai => MONOKAI,
         ThemeId::SolarizedDark => SOLARIZED_DARK,
+        ThemeId::HighContrast => HIGH_CONTRAST,
     }
 }
 

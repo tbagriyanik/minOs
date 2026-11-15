@@ -222,6 +222,7 @@ pub fn init_subsystems(
     serial_print("[BOOT] Büyük sayfa ve sıkıştırma testleri çalıştırılıyor...\n");
     mm::memory::run_boot_tests(&mut memory_mgr.pmm);
     crate::kernel::heap::test_heap_growth();
+    crate::kernel::heap::test_tiered_alloc();
     mm::memory::profile::report_boot_summary();
 
     serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");

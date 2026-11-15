@@ -3,6 +3,10 @@ pub enum KeyAction {
     ToggleStartMenu,
     CloseActiveWindow,
     CycleWindowFocus,
+    WorkspacePrev,
+    WorkspaceNext,
+    MoveWindowWorkspacePrev,
+    MoveWindowWorkspaceNext,
     OpenTaskManager,
     ArrowUp,
     ArrowDown,
@@ -457,6 +461,26 @@ impl KeyboardState {
                 self.push_action(KeyAction::BrowserRefresh);
                 return None;
             } // Ctrl+R
+            0x4B if self.super_key && self.shift => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::MoveWindowWorkspacePrev);
+                return None;
+            } // Super+Shift+Left
+            0x4B if self.super_key => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::WorkspacePrev);
+                return None;
+            } // Super+Left
+            0x4D if self.super_key && self.shift => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::MoveWindowWorkspaceNext);
+                return None;
+            } // Super+Shift+Right
+            0x4D if self.super_key => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::WorkspaceNext);
+                return None;
+            } // Super+Right
             0x4B if self.alt => {
                 self.push_action(KeyAction::BrowserBack);
                 return None;
@@ -645,6 +669,15 @@ impl KeyboardState {
                 return None;
             }
             0x4B => {
+                if self.super_key {
+                    self.super_key_combo = true;
+                    if self.shift {
+                        self.push_action(KeyAction::MoveWindowWorkspacePrev);
+                    } else {
+                        self.push_action(KeyAction::WorkspacePrev);
+                    }
+                    return None;
+                }
                 if self.alt {
                     self.push_action(KeyAction::BrowserBack);
                     return None;
@@ -653,6 +686,15 @@ impl KeyboardState {
                 return None;
             }
             0x4D => {
+                if self.super_key {
+                    self.super_key_combo = true;
+                    if self.shift {
+                        self.push_action(KeyAction::MoveWindowWorkspaceNext);
+                    } else {
+                        self.push_action(KeyAction::WorkspaceNext);
+                    }
+                    return None;
+                }
                 if self.alt {
                     self.push_action(KeyAction::BrowserForward);
                     return None;

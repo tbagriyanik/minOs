@@ -2,6 +2,7 @@ pub mod apic;
 pub mod context;
 pub mod gdt;
 pub mod idt;
+pub mod ioapic;
 pub mod ring3;
 pub mod smp;
 pub mod sync;
@@ -59,10 +60,22 @@ pub fn disable_pic() {
     }
 }
 
+/// NX (yürütülemez) sayfa bayrağı (x86-64 PTE/PDE bit 63).
+const NX_BIT: u64 = 1 << 63;
+
 /// Cihaz MMIO bölgesini (2MB hizalı) mevcut sayfa tablosuna HHDM üzerinden
 /// 2MB huge page olarak ekler. Limine HHDM yalnızca RAM'i map'lediğinden
 /// PCI MMIO bölgesi için bu elle eşleme gerekir.
 pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
+    mmio_map_2mb_flags(phys_2mb_aligned, 0x93, 0x13);
+}
+
+/// Aynı eşlemeyi verilen PDE/PTE bayraklarıyla yapar.
+///
+/// `pde_flags`: 2MB huge page girdisi için bayraklar (P|RW|PCD|PS = 0x93).
+/// `pte_flags`: 4KB sayfa girdisi için bayraklar (P|RW|US = 0x13).
+/// Salt-okunur veri bölgeleri için `NX_BIT` eklenerek yürütülemez işaretlenir.
+fn mmio_map_2mb_flags(phys_2mb_aligned: u64, pde_flags: u64, pte_flags: u64) {
     unsafe {
         let hhdm = crate::drivers::phys_to_virt(0);
         let v = hhdm + phys_2mb_aligned;
@@ -134,7 +147,7 @@ pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
                     let pte = pt.add(pti).read_volatile();
                     if (pte & 1) == 0 {
                         let page_phys = phys_2mb_aligned + (pti as u64 * 4096);
-                        pt.add(pti).write_volatile(page_phys | 0x13);
+                        pt.add(pti).write_volatile(page_phys | pte_flags);
                     }
                 }
             }
@@ -142,9 +155,31 @@ pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
         }
 
         // 2MB sayfa: Present (0x1) | RW (0x2) | PCD (0x10) | PS (0x80) = 0x93
-        pd.add(i2).write_volatile(phys_2mb_aligned | 0x93);
+        pd.add(i2).write_volatile(phys_2mb_aligned | pde_flags);
 
         // Sanal adres için TLB'yi temizle
         core::arch::asm!("invlpg [{}]", in(reg) v, options(nostack, preserves_flags));
     }
+}
+
+/// Verilen fiziksel adresin HHDM üzerinden **okunabilir** olmasını sağlar.
+///
+/// Limine'nin HHDM eşlemesi yalnızca "RAM" olarak sınıflandırdığı fiziksel
+/// bölgeleri kapsar. ACPI tablolarının bulunduğu ROM / "ACPI reclaimable"
+/// sayfalar (QEMU'da RSDP ve MADT 0xE0000 F-segmentinde) HHDM'de
+/// *not-present* kalır; eşlenmeden okunmaya çalışılırsa #PF üretilir.
+///
+/// Fonksiyon, hedef adresin içinde bulunduğu 2 MiB bloğunu HHDM'ye ekler ve
+/// sayfaları yürütülemez (NX) işaretler.
+pub fn map_phys_readable(phys: u64) {
+    mmio_map_2mb_flags(phys & !0x1F_FFFF, 0x93 | NX_BIT, 0x13 | NX_BIT);
+}
+
+/// Düşük fiziksel bölgeyi (0..2 MiB: EBDA, BIOS ROM / F-segment) HHDM'de
+/// erişilebilir hâle getirir.
+///
+/// ACPI tablo taramaları RSDP'yi bu bölgede arar; Limine bu sayfaları
+/// "RAM değil" sayıp HHDM'ye eşlemediği için tarama öncesinde çağrılmalıdır.
+pub fn map_legacy_acpi_region() {
+    map_phys_readable(0);
 }

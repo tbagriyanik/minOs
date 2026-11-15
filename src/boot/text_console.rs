@@ -475,6 +475,24 @@ pub fn poll_input_char() -> Option<char> {
     }
 
     // 3. Direct PS/2 Keyboard polling (port 0x64 and 0x60)
+    // Kesme modu etkinken baytlar INPUT_QUEUE'da birikir; önce kuyruğu
+    // GLOBAL_KEYBOARD'a boşalt ki tuşlar kaybolmasın. Enter gibi eylem
+    // üreten tuşlar da karakter akışına çevrilir.
+    if crate::drivers::ps2::irq_mode() {
+        unsafe {
+            let kbd = &mut *core::ptr::addr_of_mut!(crate::GLOBAL_KEYBOARD);
+            crate::drivers::ps2::drain_keyboard_events(kbd);
+            if let Some(ch) = kbd.take_last_char() {
+                return Some(ch);
+            }
+            while let Some(action) = kbd.take_last_action() {
+                if matches!(action, crate::drivers::keyboard::KeyAction::EnterKey) {
+                    return Some('\n');
+                }
+            }
+        }
+        return None;
+    }
     unsafe {
         let mut status: u8;
         core::arch::asm!("in al, dx", in("dx") 0x64u16, out("al") status, options(nomem, nostack, preserves_flags));

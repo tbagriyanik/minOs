@@ -126,10 +126,14 @@ pub struct Window {
     pub is_open: bool,
     /// Whether window is maximized to full screen.
     pub is_maximized: bool,
+    /// Sanal masaüstü (workspace) indeksi; yalnızca `active_workspace`'teki
+    /// pencereler çizilir ve etkileşir.
+    pub workspace: usize,
     /// Previous geometry for restoring after maximize.
     pub restore: Option<(usize, usize, usize, usize)>,
-    /// Z-order index; higher values render on top.
-    pub z: u8,
+    /// Z-order index; higher values render on top. `usize` so the monotonic
+    /// counter never wraps in practice and no compaction pass is needed.
+    pub z: usize,
     /// Content scroll state for overflow handling.
     pub scroll: scrollbar::ScrollState,
     /// Last reported content width (for horizontal scrollbar).
@@ -194,6 +198,7 @@ impl Window {
             is_minimized: false,
             is_open,
             is_maximized: false,
+            workspace: 0,
             restore: None,
             z: 0,
             scroll: scrollbar::ScrollState::new(),

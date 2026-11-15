@@ -279,7 +279,8 @@ pub fn focused_window_for_app(
     compositor: &gui::MinGuiCompositor,
     app_id: usize,
 ) -> Option<(usize, gui::Window)> {
-    compositor
+    // 1. Birincil yol: `is_focused` bayrağı taşıyan açık pencere.
+    let focused = compositor
         .windows
         .iter()
         .enumerate()
@@ -291,7 +292,20 @@ pub fn focused_window_for_app(
                     && window.is_focused
             })
             .map(|window| (idx, window))
-        })
+        });
+    if focused.is_some() {
+        return focused;
+    }
+
+    // 2. Yedek yol: odak bayrakları uyumsuz kaldığında bile girdi kaybolmasın
+    //    diye `active_window_idx`'deki pencere app_id eşleşiyorsa kullanılır.
+    let idx = compositor.active_window_idx?;
+    let window = compositor.windows.get(idx)?.as_ref()?;
+    if window.app_id as usize == app_id && window.is_open && !window.is_minimized {
+        Some((idx, *window))
+    } else {
+        None
+    }
 }
 
 /// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.

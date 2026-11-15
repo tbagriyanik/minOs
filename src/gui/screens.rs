@@ -447,6 +447,7 @@ pub fn render_welcome_screen(
                 theme::ThemeId::Dracula => "Dracula",
                 theme::ThemeId::Monokai => "Monokai",
                 theme::ThemeId::SolarizedDark => "Solarized",
+                theme::ThemeId::HighContrast => "High Contrast",
             }
         } else {
             id.short_name()

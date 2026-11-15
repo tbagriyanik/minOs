@@ -61,6 +61,8 @@ static EXTEND_FAILURES: AtomicU64 = AtomicU64::new(0);
 static LAZY_ALLOCS: AtomicU64 = AtomicU64::new(0);
 static LAZY_PAGES: AtomicU64 = AtomicU64::new(0);
 static OOM_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Aşamalı tahsis denemesi sayacı (baskı yoklaması sıklığı için).
+static ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 static GROWTH_LOCK: AtomicBool = AtomicBool::new(false);
 static HEAP_READY: AtomicBool = AtomicBool::new(false);
 
@@ -118,6 +120,742 @@ static LAZY: SpinMutex<LazyTable> = SpinMutex::new(LazyTable::new());
 #[inline]
 fn heap_active() -> bool {
     HEAP_READY.load(Ordering::Acquire)
+}
+
+// ---------------------------------------------------------------------------
+// Aşamalı (tiered) tahsis katmanları
+// ---------------------------------------------------------------------------
+//
+// `KernelHeap::alloc` üç katmana dağıtır:
+//
+// 1. **Slab** — `size <= 64 && align <= 16` istekleri 16/32/64 baytlık
+//    sınıflara yönlendirilir. Her sınıf 4 KiB'lık sayfalar halinde heap'ten
+//    beslenir; nesneler sayfa içinde serbest listeyle geri dönüştürülür.
+//    Slab kapasitesi dolarsa istek normal heap yoluna düşer — `dealloc`
+//    tarafı slab sayfa tablosuyla doğruladığı için bu güvenlidir.
+// 2. **Sayfa ayırıcı** — `size >= 64 KiB && align <= 4096` istekleri
+//    `LARGE_WINDOW_BASE` altındaki sabit yuvalara PMM çerçeveleriyle
+//    eşlenir. Başlıkta magic + slot bilgisi taşınır; eşleme başarısızsa
+//    istek yine heap'e düşer ve `dealloc` sihirli başlık yoksa heap
+//    yolunu seçer.
+// 3. **Heap** — geri kalan her şey mevcut `linked_list_allocator` +
+//    tembel doldurma yolundan geçer.
+//
+// Ayrıca her başarılı tahsis [`AllocTracker`] defterine işlenir
+// (sınırlı, tahsis yapmayan doğrudan eşlemeli tablo) ve PMM boş bellek
+// oranı [`PressureLevel`] geçişlerinde geri çağrılır.
+
+/// Slab yoluna giren azami istek boyu (bayt).
+const SLAB_THRESHOLD: usize = 64;
+/// Slab boyut sınıfları (bayt).
+const SLAB_CLASSES: [usize; 3] = [16, 32, 64];
+/// Sınıf başına en fazla sayfa (4 KiB × 256 = 1 MiB/sınıf üst sınırı).
+const MAX_SLAB_PAGES_PER_CLASS: usize = 256;
+/// Slab sayfa tablosu kapasitesi (sınıf başına sayfa üst sınırı toplamı).
+const SLAB_PAGE_TABLE_SIZE: usize = SLAB_CLASSES.len() * MAX_SLAB_PAGES_PER_CLASS;
+
+/// Sayfa ayırıcıya giren asgari istek boyu (bayt).
+const LARGE_THRESHOLD: usize = 64 * 1024;
+/// Büyük tahsisatların yaşadığı sanal pencere tabanı (çekirdek yarı).
+/// Heap penceresi `0xFFFF_C000_0000_0000` tabanında 64 MiB ile biter;
+/// bu bölge ondan belirgin şekilde yukarıda ve sayfa tablolarında boş.
+const LARGE_WINDOW_BASE: u64 = 0xFFFF_C000_1000_0000;
+/// Yuva başına sayfa sayısı (256 KiB) ve toplam yuva sayısı (16 MiB).
+const LARGE_SLOT_PAGES: usize = 64;
+const LARGE_SLOTS: usize = 64;
+const LARGE_WINDOW_SIZE: u64 = (LARGE_SLOT_PAGES * LARGE_SLOTS * 4096) as u64;
+/// Büyük tahsisat başlığındaki doğrulama değeri.
+const LARGE_MAGIC: u64 = 0x4C4F_5247_454E_4B21; // "LORGENK!"
+
+/// Tahsis katmanı etiketi (teşhis tablosu için).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AllocTier {
+    Slab,
+    Large,
+    Heap,
+}
+
+impl AllocTier {
+    fn index(self) -> usize {
+        match self {
+            Self::Slab => 0,
+            Self::Large => 1,
+            Self::Heap => 2,
+        }
+    }
+}
+
+// --- Slab allocator ---------------------------------------------------------
+
+struct SlabClass {
+    /// Serbest nesnelerin intrusive tek yönlü listesi başı (ilk 8 bayt `next`).
+    /// `usize` olarak tutulur: ham işaretçi `Send` olmadığı için statik
+    /// `SpinMutex` içinde derlenemezdi; 0 = boş.
+    free_head: usize,
+    /// Heap'ten alınan sayfa sayısı.
+    pages: usize,
+    /// Canlı nesne sayısı (teşhis).
+    live_objects: usize,
+}
+
+struct SlabAllocator {
+    classes: [SlabClass; SLAB_CLASSES.len()],
+}
+
+impl SlabAllocator {
+    const fn new() -> Self {
+        const EMPTY: SlabClass = SlabClass {
+            free_head: 0,
+            pages: 0,
+            live_objects: 0,
+        };
+        Self {
+            classes: [EMPTY; SLAB_CLASSES.len()],
+        }
+    }
+}
+
+static SLAB: SpinMutex<SlabAllocator> = SpinMutex::new(SlabAllocator::new());
+
+/// `(sayfa tabanı, sınıf)` kayıtları — açık adreslemeli, asla silinmez.
+/// Slab sayfaları heap'e iade edilmediği için kayıtlar kalıcıdır.
+static SLAB_PAGES: SpinMutex<[(u64, u8); SLAB_PAGE_TABLE_SIZE]> =
+    SpinMutex::new([(0, u8::MAX); SLAB_PAGE_TABLE_SIZE]);
+
+fn slab_hash(page_base: u64) -> usize {
+    ((page_base >> 12) as usize) & (SLAB_PAGE_TABLE_SIZE - 1)
+}
+
+/// Sayfa tabanını sınıfıyla kaydeder; tablo doluysa `false` (çağıran sayfayı
+/// heap'e iade edip bu seferlik heap yolunu seçer).
+fn slab_register_page(page_base: u64, class: usize) -> bool {
+    let mut table = SLAB_PAGES.lock();
+    let start = slab_hash(page_base);
+    for offset in 0..SLAB_PAGE_TABLE_SIZE {
+        let slot = (start + offset) % SLAB_PAGE_TABLE_SIZE;
+        let (base, cls) = table[slot];
+        if cls == u8::MAX {
+            table[slot] = (page_base, class as u8);
+            return true;
+        }
+        if base == page_base {
+            return true; // zaten kayıtlı
+        }
+    }
+    false
+}
+
+/// `ptr`'nin sayfası bir slab sayfasıysa sınıfını döndürür.
+fn slab_page_class(ptr: *mut u8) -> Option<usize> {
+    if ptr.is_null() {
+        return None;
+    }
+    let page = (ptr as u64) & !4095;
+    let table = SLAB_PAGES.lock();
+    let start = slab_hash(page);
+    for offset in 0..SLAB_PAGE_TABLE_SIZE {
+        let (base, cls) = table[(start + offset) % SLAB_PAGE_TABLE_SIZE];
+        if cls == u8::MAX {
+            return None; // ilk boşlukta ara biter
+        }
+        if base == page {
+            let cls = cls as usize;
+            return if cls < SLAB_CLASSES.len() {
+                Some(cls)
+            } else {
+                None
+            };
+        }
+    }
+    None
+}
+
+/// Heap'ten ham 4 KiB'lık sayfa ayırır (slab beslemesi; `KernelHeap`
+/// sarmalayıcısını atlar, kilit iç içe geçmez).
+fn heap_alloc_page() -> *mut u8 {
+    let layout = Layout::from_size_align(4096, 16).unwrap();
+    let ptr = {
+        let mut heap = ALLOCATOR.lock();
+        heap.allocate_first_fit(layout)
+            .map(|p| p.as_ptr())
+            .unwrap_or_default()
+    };
+    if !ptr.is_null() {
+        return ptr;
+    }
+    let request = HEAP_SIZE / 4;
+    if !extend_heap(request) {
+        return null_mut();
+    }
+    let mut heap = ALLOCATOR.lock();
+    heap.allocate_first_fit(layout)
+        .map(|p| p.as_ptr())
+        .unwrap_or_default()
+}
+
+fn slab_eligible(layout: &Layout) -> Option<usize> {
+    if layout.size() == 0 || layout.size() > SLAB_THRESHOLD || layout.align() > 16 {
+        return None;
+    }
+    SLAB_CLASSES.iter().position(|&s| s >= layout.size())
+}
+
+fn slab_alloc(class: usize) -> *mut u8 {
+    let mut slab = SLAB.lock();
+    let state = &mut slab.classes[class];
+    unsafe {
+        if state.free_head != 0 {
+            let ptr = state.free_head as *mut u8;
+            state.free_head = *(ptr as *const usize);
+            state.live_objects += 1;
+            return ptr;
+        }
+    }
+    if state.pages >= MAX_SLAB_PAGES_PER_CLASS {
+        return null_mut();
+    }
+    let page = heap_alloc_page();
+    if page.is_null() {
+        return null_mut();
+    }
+    let stride = SLAB_CLASSES[class];
+    let count = 4096 / stride;
+    if !slab_register_page(page as u64, class) {
+        // Tablo dolu: sayfayı heap'e iade et, bu istek heap yoluna düşsün.
+        let layout = Layout::from_size_align(4096, 16).unwrap();
+        unsafe {
+            ALLOCATOR
+                .lock()
+                .deallocate(core::ptr::NonNull::new_unchecked(page), layout);
+        }
+        return null_mut();
+    }
+    state.pages += 1;
+    // Sayfadaki tüm nesneleri serbest listeye dizer.
+    unsafe {
+        for i in (0..count).rev() {
+            let obj = page.add(i * stride);
+            *(obj as *mut usize) = state.free_head;
+            state.free_head = obj as usize;
+        }
+    }
+    // İlk nesneyi listeden çıkarıp döndür.
+    let ptr = state.free_head as *mut u8;
+    unsafe {
+        state.free_head = *(ptr as *const usize);
+    }
+    state.live_objects += 1;
+    ptr
+}
+
+fn slab_dealloc(ptr: *mut u8, class: usize, layout: Layout) {
+    if let Some(found) = slab_page_class(ptr) {
+        if found == class {
+            let mut slab = SLAB.lock();
+            let state = &mut slab.classes[class];
+            unsafe {
+                *(ptr as *mut usize) = state.free_head;
+            }
+            state.free_head = ptr as usize;
+            state.live_objects = state.live_objects.saturating_sub(1);
+            return;
+        }
+    }
+    // Slab sayfası değil (heap'e düşmüş istek): çağıranın verdiği özgün
+    // `layout` ile heap'e iade et — boyut/hizalama eşleşmesi şarttır.
+    heap_dealloc(ptr, layout);
+}
+
+/// Heap taşıması (relocate) sonrası slab durumunu sıfırlar: eski sayfa
+/// kayıtları geçersizdir, canlı nesne kalmaması gerekir (taşıma sözleşmesi
+/// kullanıcı tahsislerinden önce yapılır).
+fn slab_reset() {
+    let mut slab = SLAB.lock();
+    for class in &mut slab.classes {
+        class.free_head = 0;
+        class.pages = 0;
+        class.live_objects = 0;
+    }
+    let mut table = SLAB_PAGES.lock();
+    for entry in table.iter_mut() {
+        *entry = (0, u8::MAX);
+    }
+}
+
+// --- Sayfa ayırıcı (büyük nesneler) ------------------------------------------
+
+/// Büyük tahsisat yuvası: `[LARGE_WINDOW_BASE + slot*256KiB, +64 sayfa)`.
+/// Sayfa sayısı yuva kaydında tutulmaz; gerçek boyut `LargeHeader`'dadır.
+struct LargeSlot {
+    used: bool,
+}
+
+static LARGE_SLOTS_STATE: SpinMutex<[LargeSlot; LARGE_SLOTS]> = SpinMutex::new({
+    const EMPTY: LargeSlot = LargeSlot { used: false };
+    [EMPTY; LARGE_SLOTS]
+});
+
+#[repr(C)]
+struct LargeHeader {
+    magic: u64,
+    slot: u32,
+    pages: u32,
+}
+
+fn large_window_contains(addr: u64) -> bool {
+    (LARGE_WINDOW_BASE..LARGE_WINDOW_BASE + LARGE_WINDOW_SIZE).contains(&addr)
+}
+
+fn large_header_offset(align: usize) -> usize {
+    // Döndürülen işaretçi `base + offset` olur; `offset` hizalamayı korur
+    // ve 16 baytlık başlık için yer açar. 4 KiB hizalama için ek sayfa gerekir.
+    if align >= 4096 {
+        4096
+    } else {
+        align.max(16)
+    }
+}
+
+fn large_alloc(layout: &Layout) -> *mut u8 {
+    if layout.align() > 4096 {
+        return null_mut();
+    }
+    let size = layout.size();
+    let offset = large_header_offset(layout.align());
+    let total = offset + size;
+    let pages = total.div_ceil(4096);
+    if pages > LARGE_SLOT_PAGES {
+        return null_mut();
+    }
+    let mut slots = LARGE_SLOTS_STATE.lock();
+    let Some(slot_idx) = slots.iter().position(|s| !s.used) else {
+        return null_mut();
+    };
+    let base = LARGE_WINDOW_BASE + (slot_idx as u64) * (LARGE_SLOT_PAGES as u64 * 4096);
+    // Önce kayıt kap, sonra sayfaları eşle; hata durumunda geri al.
+    slots[slot_idx] = LargeSlot { used: true };
+    drop(slots);
+
+    // Önce tüm çerçeveleri ayır (bellek kilidi tutulmadan), sonra sayfa
+    // tablosu eşlemesini yap. `alloc_frame` ham `MEMORY_MGR` erişimi
+    // kullandığından kilit kapsamında çağrılmaz.
+    let mut frames = [0u64; LARGE_SLOT_PAGES + 1];
+    let mut taken = 0usize;
+    for frame in frames.iter_mut().take(pages) {
+        let Some(f) = alloc_frame() else {
+            break;
+        };
+        *frame = f;
+        taken += 1;
+    }
+    let mut ok = taken == pages;
+    let mut mapped = 0usize;
+    if ok {
+        let mut space = crate::mm::vmm::AddressSpace::current();
+        let mut guard = crate::mm::try_lock_memory();
+        match guard.as_mut() {
+            Some(g) => {
+                let pmm = &mut g.get().pmm;
+                for (i, &frame) in frames.iter().enumerate().take(pages) {
+                    if space
+                        .map_page(
+                            base + (i as u64) * 4096,
+                            frame,
+                            crate::mm::vmm::PageFlags::PRESENT
+                                | crate::mm::vmm::PageFlags::WRITABLE,
+                            pmm,
+                        )
+                        .is_err()
+                    {
+                        ok = false;
+                        break;
+                    }
+                    mapped += 1;
+                }
+            }
+            None => ok = false,
+        }
+    }
+    if !ok {
+        // Eşlenen sayfaları sök, kalan çerçeveleri iade et.
+        if mapped > 0 {
+            let mut space = crate::mm::vmm::AddressSpace::current();
+            let mut guard = crate::mm::try_lock_memory();
+            if let Some(g) = guard.as_mut() {
+                let pmm = &mut g.get().pmm;
+                for i in 0..mapped {
+                    let virt = base + (i as u64) * 4096;
+                    if let Some(frame) = space.unmap_page(virt) {
+                        pmm.free_frame(frame);
+                    }
+                }
+            }
+        }
+        for frame in frames.iter().take(taken).skip(mapped) {
+            free_frame(*frame);
+        }
+        LARGE_SLOTS_STATE.lock()[slot_idx] = LargeSlot { used: false };
+        return null_mut();
+    }
+
+    unsafe {
+        let header = base as *mut LargeHeader;
+        core::ptr::write(
+            header,
+            LargeHeader {
+                magic: LARGE_MAGIC,
+                slot: slot_idx as u32,
+                pages: pages as u32,
+            },
+        );
+    }
+    unsafe { (base as *mut u8).add(offset) }
+}
+
+fn large_dealloc(ptr: *mut u8, layout: &Layout) {
+    let offset = large_header_offset(layout.align());
+    let base = (ptr as u64).wrapping_sub(offset as u64);
+    if !large_window_contains(base) || !base.is_multiple_of(4096) {
+        // Heap'e düşmüş istek: normal heap yoluna bırak.
+        heap_dealloc(ptr, *layout);
+        return;
+    }
+    let header = unsafe { &*(base as *const LargeHeader) };
+    if header.magic != LARGE_MAGIC || (header.slot as usize) >= LARGE_SLOTS {
+        heap_dealloc(ptr, *layout);
+        return;
+    }
+    let slot_idx = header.slot as usize;
+    let pages = (header.pages as usize).min(LARGE_SLOT_PAGES);
+    let slot_base = LARGE_WINDOW_BASE + (slot_idx as u64) * (LARGE_SLOT_PAGES as u64 * 4096);
+    if base != slot_base {
+        heap_dealloc(ptr, *layout);
+        return;
+    }
+
+    let mut space = crate::mm::vmm::AddressSpace::current();
+    let mut guard = crate::mm::try_lock_memory();
+    if let Some(guard) = guard.as_mut() {
+        let pmm = &mut guard.get().pmm;
+        for i in 0..pages {
+            let virt = base + (i as u64) * 4096;
+            if let Some(frame) = space.unmap_page(virt) {
+                pmm.free_frame(frame);
+            }
+        }
+    }
+    LARGE_SLOTS_STATE.lock()[slot_idx] = LargeSlot { used: false };
+}
+
+fn large_eligible(layout: &Layout) -> bool {
+    layout.size() >= LARGE_THRESHOLD && layout.align() <= 4096
+}
+
+fn heap_dealloc(ptr: *mut u8, layout: Layout) {
+    if let Some(np) = core::ptr::NonNull::new(ptr) {
+        unsafe {
+            ALLOCATOR.lock().deallocate(np, layout);
+        }
+    }
+}
+
+// --- Tahsis takibi (debug) ----------------------------------------------------
+
+/// Doğrudan eşlemeli, tahsis yapmayan sınırlı tahsis kaydı.
+/// Her yuva `(ptr, boyut, hizalama, katman)` tutar; çakışmada eski kayıt
+/// ezilir (teşhis amaçlı yaklaşık canlı sayım).
+const TRACKER_SLOTS: usize = 4096;
+
+struct TrackEntry {
+    ptr: u64,
+    size: u32,
+    align: u32,
+    tier: u8,
+    used: bool,
+}
+
+static TRACKER: SpinMutex<[TrackEntry; TRACKER_SLOTS]> = SpinMutex::new({
+    const EMPTY: TrackEntry = TrackEntry {
+        ptr: 0,
+        size: 0,
+        align: 0,
+        tier: u8::MAX,
+        used: false,
+    };
+    [EMPTY; TRACKER_SLOTS]
+});
+
+static TRACK_LIVE: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+static TRACK_HITS: AtomicU64 = AtomicU64::new(0);
+static TRACK_MISSES: AtomicU64 = AtomicU64::new(0);
+static TRACK_PEAK: AtomicU64 = AtomicU64::new(0);
+
+fn track_insert(ptr: *mut u8, layout: &Layout, tier: AllocTier) {
+    let mut table = TRACKER.lock();
+    let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
+    let entry = &mut table[idx];
+    if entry.used {
+        // Ezilen kayıt: önceki canlı tahsis kayıp sayılır.
+        TRACK_MISSES.fetch_add(1, Ordering::Relaxed);
+    } else {
+        entry.used = true;
+    }
+    entry.ptr = ptr as u64;
+    entry.size = layout.size() as u32;
+    entry.align = layout.align() as u32;
+    entry.tier = tier.index() as u8;
+    TRACK_LIVE[tier.index()].fetch_add(1, Ordering::Relaxed);
+    let total: u64 = TRACK_LIVE.iter().map(|a| a.load(Ordering::Relaxed)).sum();
+    TRACK_PEAK.fetch_max(total, Ordering::Relaxed);
+}
+
+fn track_remove(ptr: *mut u8, layout: &Layout) -> Option<AllocTier> {
+    let mut table = TRACKER.lock();
+    let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
+    let entry = &mut table[idx];
+    if entry.used
+        && entry.ptr == ptr as u64
+        && entry.size == layout.size() as u32
+        && entry.align == layout.align() as u32
+    {
+        entry.used = false;
+        let tier = match entry.tier {
+            0 => AllocTier::Slab,
+            1 => AllocTier::Large,
+            _ => AllocTier::Heap,
+        };
+        TRACK_LIVE[tier.index()].fetch_sub(1, Ordering::Relaxed);
+        TRACK_HITS.fetch_add(1, Ordering::Relaxed);
+        return Some(tier);
+    }
+    TRACK_MISSES.fetch_add(1, Ordering::Relaxed);
+    None
+}
+
+/// Adresin tracker kaydını döndürür (teşhis; `(size, align, tier)`).
+pub fn track_find(ptr: u64) -> Option<(u32, u32, u8)> {
+    let table = TRACKER.lock();
+    let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
+    let entry = &table[idx];
+    if entry.used && entry.ptr == ptr {
+        Some((entry.size, entry.align, entry.tier))
+    } else {
+        None
+    }
+}
+
+/// Heap taşıması sonrası tracker'ı sıfırlar (eski adres kayıtları geçersiz).
+fn tracker_reset() {
+    let mut table = TRACKER.lock();
+    for entry in table.iter_mut() {
+        entry.used = false;
+    }
+}
+
+/// Tahsis takibi özeti (teşhis; `heap::profile` içinde de raporlanır).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TrackStats {
+    pub slab_live: u64,
+    pub large_live: u64,
+    pub heap_live: u64,
+    pub total_live: u64,
+    pub peak_live: u64,
+    pub hits: u64,
+    pub misses: u64,
+}
+
+pub fn track_stats() -> TrackStats {
+    let slab = TRACK_LIVE[0].load(Ordering::Relaxed);
+    let large = TRACK_LIVE[1].load(Ordering::Relaxed);
+    let heap = TRACK_LIVE[2].load(Ordering::Relaxed);
+    TrackStats {
+        slab_live: slab,
+        large_live: large,
+        heap_live: heap,
+        total_live: slab + large + heap,
+        peak_live: TRACK_PEAK.load(Ordering::Relaxed),
+        hits: TRACK_HITS.load(Ordering::Relaxed),
+        misses: TRACK_MISSES.load(Ordering::Relaxed),
+    }
+}
+
+// --- Bellek baskısı (memory pressure) -----------------------------------------
+
+/// Sistem geneli bellek baskısı düzeyi.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressureLevel {
+    /// Yeterli boş bellek var.
+    Normal,
+    /// Boş bellek %15'in altına indi.
+    Low,
+    /// Boş bellek %5'in altına indi veya OOM görüldü.
+    Critical,
+}
+
+static PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
+static PRESSURE_CB: SpinMutex<Option<fn(PressureLevel)>> = SpinMutex::new(None);
+
+/// Düzey geçişlerinde çağrılacak geri çağrıyı kaydeder (`None` ile kaldırır).
+pub fn set_pressure_callback(cb: Option<fn(PressureLevel)>) {
+    *PRESSURE_CB.lock() = cb;
+}
+
+/// Anlık baskı düzeyi (PMM boş bellek yüzdesine göre; asla bloklanmaz).
+pub fn pressure_level() -> PressureLevel {
+    let Some(mut guard) = crate::mm::try_lock_memory() else {
+        return match PRESSURE_LEVEL.load(Ordering::Relaxed) {
+            1 => PressureLevel::Low,
+            2 => PressureLevel::Critical,
+            _ => PressureLevel::Normal,
+        };
+    };
+    // PMM henüz init edilmediyse `free_percent` 0 döner; bu "bellek yok"
+    // değil "henüz ölçülmedi" demektir — Normal kabul edilir.
+    if guard.get().pmm.total_memory_bytes == 0 {
+        return PressureLevel::Normal;
+    }
+    let free_percent = guard.get().pmm.free_percent();
+    let oom = OOM_COUNT.load(Ordering::Relaxed) > 0;
+    if free_percent < 5 || (oom && free_percent < 20) {
+        PressureLevel::Critical
+    } else if free_percent < 15 {
+        PressureLevel::Low
+    } else {
+        PressureLevel::Normal
+    }
+}
+
+/// Baskı düzeyini yeniden değerlendirir; geçişte geri çağrıyı ve seri
+/// kaydını tetikler. Olay döngüsü zaman tikinde `poll_pressure` üzerinden
+/// çağrılabilir; tahsis yolunda seyrek olarak da çalışır.
+pub fn check_pressure() {
+    let level = pressure_level();
+    let encoded = match level {
+        PressureLevel::Normal => 0,
+        PressureLevel::Low => 1,
+        PressureLevel::Critical => 2,
+    };
+    let prev = PRESSURE_LEVEL.swap(encoded, Ordering::AcqRel);
+    if prev == encoded {
+        return;
+    }
+    let names = ["NORMAL", "LOW", "CRITICAL"];
+    serial_print("[MEM-PRESSURE] Seviye: ");
+    serial_print(names[encoded as usize]);
+    serial_print(" (onceki=");
+    serial_print(names[prev as usize]);
+    serial_print(")\n");
+    // Geri çağrıyı kilit altında çağırma: callback `set_pressure_callback`
+    // çağırırsa deadlock olur.
+    let cb = *PRESSURE_CB.lock();
+    if let Some(cb) = cb {
+        cb(level);
+    }
+}
+
+/// Zamanlanmış baskı yoklaması (olay döngüsünden çağrılır).
+pub fn poll_pressure() {
+    check_pressure();
+}
+
+// ---------------------------------------------------------------------------
+// GlobalAlloc
+// ---------------------------------------------------------------------------
+
+struct KernelHeap;
+
+/// Aşamalı yolun `alloc` tarafı: slab → sayfa ayırıcı → heap.
+/// Başarılı tahsis `Some((ptr, tier))`, tüm katmanlar tükendiyse `None`.
+fn tiered_alloc(layout: Layout) -> Option<(*mut u8, AllocTier)> {
+    if layout.size() == 0 {
+        return Some((layout.align() as *mut u8, AllocTier::Heap));
+    }
+    if let Some(class) = slab_eligible(&layout) {
+        let ptr = slab_alloc(class);
+        if !ptr.is_null() {
+            return Some((ptr, AllocTier::Slab));
+        }
+    }
+    if large_eligible(&layout) {
+        let ptr = large_alloc(&layout);
+        if !ptr.is_null() {
+            return Some((ptr, AllocTier::Large));
+        }
+    }
+    // Heap yolu (mevcut davranış: ilk-sığan + büyütme + tembel kayıt).
+    let mut ptr = {
+        let mut heap = ALLOCATOR.lock();
+        heap.allocate_first_fit(layout)
+            .map(|p| p.as_ptr())
+            .unwrap_or_default()
+    };
+    if ptr.is_null() {
+        let request = layout.size().max(HEAP_SIZE / 4);
+        if !extend_heap(request) {
+            return None;
+        }
+        let mut heap = ALLOCATOR.lock();
+        ptr = heap
+            .allocate_first_fit(layout)
+            .map(|p| p.as_ptr())
+            .unwrap_or_default();
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    register_lazy(ptr as u64, layout.size());
+    Some((ptr, AllocTier::Heap))
+}
+
+fn tiered_dealloc(ptr: *mut u8, layout: Layout) {
+    if layout.size() == 0 || ptr.is_null() {
+        return;
+    }
+    if let Some(class) = slab_eligible(&layout) {
+        // Slab sayfasıysa sınıfa, değilse heap'e gider (sayfa tablosu
+        // doğrulaması `slab_dealloc` içinde yapılır).
+        slab_dealloc(ptr, class, layout);
+        return;
+    }
+    if large_eligible(&layout) {
+        large_dealloc(ptr, &layout);
+        return;
+    }
+    heap_dealloc(ptr, layout);
+}
+
+unsafe impl GlobalAlloc for KernelHeap {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if !heap_active() {
+            return null_mut();
+        }
+        match tiered_alloc(layout) {
+            Some((ptr, tier)) => {
+                // Sıfır boyutlu "tahsisler" dealloc'da erken döndüğü için
+                // takibe alınmaz (aksi halde sayaç şişer).
+                if layout.size() != 0 {
+                    track_insert(ptr, &layout, tier);
+                }
+                // Seyrek baskı yoklaması: her 256 tahsisatta bir.
+                if ALLOC_COUNT.fetch_add(1, Ordering::Relaxed) % 256 == 0 {
+                    check_pressure();
+                }
+                ptr
+            }
+            None => {
+                check_pressure();
+                null_mut()
+            }
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if !heap_active() {
+            return;
+        }
+        track_remove(ptr, &layout);
+        tiered_dealloc(ptr, layout);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -357,49 +1095,6 @@ pub fn is_lazy_address(addr: u64) -> bool {
 // GlobalAlloc
 // ---------------------------------------------------------------------------
 
-struct KernelHeap;
-
-unsafe impl GlobalAlloc for KernelHeap {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if !heap_active() {
-            return null_mut();
-        }
-        // `linked_list_allocator::Heap` `GlobalAlloc` uygulamaz; ilk-sığan
-        // ayrılmış API'si `allocate_first_fit` kullanılır. Kilit
-        // `extend_heap` boyunca tutulmaz (içeride yeniden ayırma olabilir).
-        let mut ptr = {
-            let mut heap = ALLOCATOR.lock();
-            heap.allocate_first_fit(layout)
-                .map(|ptr| ptr.as_ptr())
-                .unwrap_or_default()
-        };
-        if ptr.is_null() {
-            let request = layout.size().max(HEAP_SIZE / 4);
-            if !extend_heap(request) {
-                return null_mut();
-            }
-            let mut heap = ALLOCATOR.lock();
-            ptr = heap
-                .allocate_first_fit(layout)
-                .map(|ptr| ptr.as_ptr())
-                .unwrap_or_default();
-        }
-        if !ptr.is_null() {
-            register_lazy(ptr as u64, layout.size());
-        }
-        ptr
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if !heap_active() {
-            return;
-        }
-        if let Some(ptr) = core::ptr::NonNull::new(ptr) {
-            ALLOCATOR.lock().deallocate(ptr, layout);
-        }
-    }
-}
-
 #[global_allocator]
 static GLOBAL: KernelHeap = KernelHeap;
 
@@ -506,6 +1201,10 @@ fn relocate_locked() -> bool {
     unsafe {
         ALLOCATOR.lock().init(HEAP_WINDOW_BASE as *mut u8, old_size);
     }
+    // Aşamalı katmanlar eski yığın adreslerine işaret eder; taşıma
+    // sözleşmesi tahsislerden önce yapıldığından hepsi boş sıfırlanır.
+    slab_reset();
+    tracker_reset();
     serial_print("[KHEAP] Heap sanal penceresi etkin: base=0x");
     crate::boot::console::serial_print_hex(HEAP_WINDOW_BASE);
     serial_print(" max_kb=");
@@ -564,6 +1263,23 @@ pub fn report_profile() {
     serial_print_dec(p.lazy_pages);
     serial_print(" oom=");
     serial_print_dec(p.oom_count);
+    let t = track_stats();
+    serial_print(" tracked=");
+    serial_print_dec(t.total_live);
+    serial_print("(s");
+    serial_print_dec(t.slab_live);
+    serial_print("/l");
+    serial_print_dec(t.large_live);
+    serial_print("/h");
+    serial_print_dec(t.heap_live);
+    serial_print(") peak=");
+    serial_print_dec(t.peak_live);
+    serial_print(" pressure=");
+    serial_print(match pressure_level() {
+        PressureLevel::Normal => "NORMAL",
+        PressureLevel::Low => "LOW",
+        PressureLevel::Critical => "CRITICAL",
+    });
     serial_print("\n");
 }
 
@@ -612,4 +1328,53 @@ pub fn test_heap_growth() -> bool {
         serial_print("[KHEAP-TEST] 2. Buyuk tahsisat / tembel doldurma: BASARISIZ\n");
     }
     extend_ok && lazy_ok
+}
+
+/// Aşamalı (tiered) tahsis doğrulama testi (`[TIER-TEST]`).
+///
+/// Üç katmanın da doğru yola gittiğini `track_find` katman etiketiyle
+/// doğrular: slab (0), sayfa ayırıcı (1), heap (2). Büyük katman PMM
+/// yetersizse heap'e düşer; bu durumda test başarısız sayılır çünkü
+/// katman yönlendirmesinin kendisi doğrulanmak istenen davranıştır.
+pub fn test_tiered_alloc() -> bool {
+    serial_print("[TIER-TEST] --- Asamali tahsis yonlendirme testi ---\n");
+
+    let tier_of = |ptr: *mut u8| track_find(ptr as u64).map(|(_, _, t)| t);
+
+    // 1. Slab: 32 bayt / 8 hizalı istek 16/32/64 sınıflarından birine düşer.
+    let small_layout = Layout::from_size_align(32, 8).unwrap();
+    let small = unsafe { alloc::alloc::alloc(small_layout) };
+    let slab_ok = !small.is_null() && tier_of(small) == Some(0);
+    if !small.is_null() {
+        unsafe { alloc::alloc::dealloc(small, small_layout) };
+    }
+
+    // 2. Sayfa ayırıcı: 64 KiB üzeri, 4 KiB altı hizalama.
+    let big_layout = Layout::from_size_align(LARGE_THRESHOLD + 4096, 16).unwrap();
+    let big = unsafe { alloc::alloc::alloc(big_layout) };
+    let large_ok = !big.is_null() && tier_of(big) == Some(1);
+    if !big.is_null() {
+        unsafe { alloc::alloc::dealloc(big, big_layout) };
+    }
+
+    // 3. Heap: ara boyut (512 B) ne slab ne sayfa kapsamına girer.
+    let mid_layout = Layout::from_size_align(512, 8).unwrap();
+    let mid = unsafe { alloc::alloc::alloc(mid_layout) };
+    let heap_ok = !mid.is_null() && tier_of(mid) == Some(2);
+    if !mid.is_null() {
+        unsafe { alloc::alloc::dealloc(mid, mid_layout) };
+    }
+
+    if slab_ok && large_ok && heap_ok {
+        serial_print("[TIER-TEST] slab/sayfa/heap yonlendirmesi: BASARILI\n");
+    } else {
+        serial_print("[TIER-TEST] slab=");
+        serial_print(if slab_ok { "OK " } else { "FAIL " });
+        serial_print("buyuk=");
+        serial_print(if large_ok { "OK " } else { "FAIL " });
+        serial_print("heap=");
+        serial_print(if heap_ok { "OK" } else { "FAIL" });
+        serial_print("\n");
+    }
+    slab_ok && large_ok && heap_ok
 }

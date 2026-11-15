@@ -142,6 +142,10 @@ pub static RSDP_REQUEST: LimineRsdpRequest = LimineRsdpRequest {
 // ---------------------------------------------------------------------------
 
 pub fn find_rsdp() -> Option<u64> {
+    // Limine'nin HHDM eşlemesi düşük fiziksel bölgeyi (EBDA, BIOS ROM /
+    // F-segment) kapsamaz; RSDP tam olarak bu bölgede (0xE0000) durur ve
+    // eşlenmeden okunursa #PF üretilir. Tarama öncesi bölgeyi eşle.
+    crate::arch::x86_64::map_legacy_acpi_region();
     unsafe {
         // 1. Limine RSDP isteğini kontrol et
         if let Some(resp) =
@@ -151,6 +155,9 @@ pub fn find_rsdp() -> Option<u64> {
             if !addr.is_null() && crate::boot::limine::is_canonical_ptr(addr) {
                 let p = addr as u64;
                 let vaddr = if p < 0xFFFF_8000_0000_0000 {
+                    // Fiziksel adres: HHDM'de eşlenmemiş olabilir (örn. RSDP
+                    // 0xE0000 F-segmentinde). Okumadan önce eşle.
+                    crate::arch::x86_64::map_phys_readable(p);
                     crate::drivers::phys_to_virt(p)
                 } else {
                     p

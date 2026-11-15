@@ -76,29 +76,32 @@ const PCI_CONFIG_ADDR: u16 = 0xCF8;
 const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[inline]
-fn pci_read8(bus: u8, dev: u8, func: u8, off: u8) -> u8 {
+fn pci_read8(bus: u8, dev: u8, func: u8, off: u16) -> u8 {
+    debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
         | ((func as u32) << 8)
         | ((off & 0xFC) as u32);
     io_out32(PCI_CONFIG_ADDR, addr);
-    io_in8(PCI_CONFIG_DATA + (off & 0x3) as u16)
+    io_in8(PCI_CONFIG_DATA + (off & 0x3))
 }
 
 #[inline]
-fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
+fn pci_read16(bus: u8, dev: u8, func: u8, off: u16) -> u16 {
+    debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
         | ((func as u32) << 8)
         | ((off & 0xFC) as u32);
     io_out32(PCI_CONFIG_ADDR, addr);
-    io_in16(PCI_CONFIG_DATA + (off & 0x2) as u16)
+    io_in16(PCI_CONFIG_DATA + (off & 0x2))
 }
 
 #[inline]
-fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
+fn pci_read32(bus: u8, dev: u8, func: u8, off: u16) -> u32 {
+    debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -109,18 +112,20 @@ fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
 }
 
 #[inline]
-fn pci_write16(bus: u8, dev: u8, func: u8, off: u8, val: u16) {
+fn pci_write16(bus: u8, dev: u8, func: u8, off: u16, val: u16) {
+    debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
         | ((func as u32) << 8)
         | ((off & 0xFC) as u32);
     io_out32(PCI_CONFIG_ADDR, addr);
-    io_out16(PCI_CONFIG_DATA + (off & 0x2) as u16, val);
+    io_out16(PCI_CONFIG_DATA + (off & 0x2), val);
 }
 
 #[inline]
-fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
+fn pci_write32(bus: u8, dev: u8, func: u8, off: u16, val: u32) {
+    debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -465,6 +470,13 @@ pub fn detect() -> bool {
                     if device_id == VIRTIO_GPU_DEVICE_MODERN
                         || device_id == VIRTIO_GPU_DEVICE_LEGACY
                     {
+                        // CF8/CFC portlari paylasimli; yirtilmis bir okuma
+                        // yanlis pozitif uretebilir. Kimligi yeniden dogrula.
+                        if pci_read16(bus, dev, func, 0x00) != VIRTIO_VENDOR
+                            || pci_read16(bus, dev, func, 0x02) != device_id
+                        {
+                            continue;
+                        }
                         DEVICE.bus = bus;
                         DEVICE.dev = dev;
                         DEVICE.func = func;
@@ -494,42 +506,59 @@ unsafe fn parse_pci_capabilities(bus: u8, dev: u8, func: u8) {
         let bar0 = pci_read32(bus, dev, func, 0x10);
         if bar0 & 1 == 0 {
             let phys = (bar0 & 0xFFFF_FFF0) as u64;
-            crate::arch::x86_64::mmio_map_2mb(phys & !0x1F_FFFF);
-            DEVICE.mmio_mode = true;
-            DEVICE.mmio_base = crate::drivers::phys_to_virt(phys);
+            // 1 MiB alti legacy bolge; cop BAR degerini reddet.
+            if phys >= 0x10_0000 {
+                crate::arch::x86_64::mmio_map_2mb(phys & !0x1F_FFFF);
+                DEVICE.mmio_mode = true;
+                DEVICE.mmio_base = crate::drivers::phys_to_virt(phys);
+            }
         }
         return;
     }
 
-    let mut cap_ptr = pci_read8(bus, dev, func, 0x34) & 0xFC;
-    while cap_ptr != 0 {
+    // Capability pointer'lari byte ofsetidir ve 256 baytlik config alani
+    // disina tasamaz; u16 aritmetigi ile tasma olmadan ilerlenir.
+    let mut cap_ptr = (pci_read8(bus, dev, func, 0x34) as u16) & 0xFC;
+    let mut guard = 0u8;
+    while cap_ptr != 0 && cap_ptr < 0x100 && guard < 48 {
+        guard += 1;
         let cap_vndr = pci_read8(bus, dev, func, cap_ptr);
-        let cap_next = pci_read8(bus, dev, func, cap_ptr + 1) & 0xFC;
+        let cap_next = (pci_read8(bus, dev, func, cap_ptr + 1) as u16) & 0xFC;
         let cap_len = pci_read8(bus, dev, func, cap_ptr + 2);
 
-        if cap_vndr == 0x09 && cap_len >= 16 {
+        // Vendor-specific capability govdesi cap_ptr+20'ye kadar okunur;
+        // config alani disina tasmamasi icin baslangic 0xEC ile sinirli.
+        if cap_vndr == 0x09 && cap_len >= 20 && cap_ptr <= 0xEC {
             // VirtIO Vendor-Specific Capability
             let cfg_type = pci_read8(bus, dev, func, cap_ptr + 3);
-            let bar = pci_read8(bus, dev, func, cap_ptr + 4);
+            let bar = pci_read8(bus, dev, func, cap_ptr + 4) as u16;
             let offset = pci_read32(bus, dev, func, cap_ptr + 8);
             let length = pci_read32(bus, dev, func, cap_ptr + 12);
 
-            let bar_reg = 0x10 + bar * 4;
-            let bar_val = pci_read32(bus, dev, func, bar_reg);
-            if bar_val != 0 && bar_val & 1 == 0 {
-                let bar_phys = (bar_val & 0xFFFF_FFF0) as u64;
-                crate::arch::x86_64::mmio_map_2mb(bar_phys & !0x1F_FFFF);
-                let vaddr = crate::drivers::phys_to_virt(bar_phys) + offset as u64;
+            // BAR indeksi 0x10..0x30 araliginda olmali (BAR0-5 + ROM BAR).
+            let bar_reg = 0x10u16 + bar * 4;
+            if bar_reg < 0x34 && length != 0 {
+                let bar_val = pci_read32(bus, dev, func, bar_reg);
+                if bar_val != 0 && bar_val & 1 == 0 {
+                    let bar_phys = (bar_val & 0xFFFF_FFF0) as u64;
+                    // PCI MMIO BAR'lari 1 MiB altindaki legacy alana
+                    // dusemez; cop/yarissal degerleri burada reddet.
+                    if bar_phys >= 0x10_0000 {
+                        crate::arch::x86_64::mmio_map_2mb(bar_phys & !0x1F_FFFF);
+                        let vaddr = crate::drivers::phys_to_virt(bar_phys) + offset as u64;
 
-                match cfg_type {
-                    VIRTIO_PCI_CAP_COMMON_CFG => DEVICE.common_cfg_addr = vaddr,
-                    VIRTIO_PCI_CAP_NOTIFY_CFG => {
-                        DEVICE.notify_cfg_addr = vaddr;
-                        DEVICE.notify_off_multiplier = pci_read32(bus, dev, func, cap_ptr + 16);
+                        match cfg_type {
+                            VIRTIO_PCI_CAP_COMMON_CFG => DEVICE.common_cfg_addr = vaddr,
+                            VIRTIO_PCI_CAP_NOTIFY_CFG => {
+                                DEVICE.notify_cfg_addr = vaddr;
+                                DEVICE.notify_off_multiplier =
+                                    pci_read32(bus, dev, func, cap_ptr + 16);
+                            }
+                            VIRTIO_PCI_CAP_ISR_CFG => DEVICE.isr_cfg_addr = vaddr,
+                            VIRTIO_PCI_CAP_DEVICE_CFG => DEVICE.device_cfg_addr = vaddr,
+                            _ => {}
+                        }
                     }
-                    VIRTIO_PCI_CAP_ISR_CFG => DEVICE.isr_cfg_addr = vaddr,
-                    VIRTIO_PCI_CAP_DEVICE_CFG => DEVICE.device_cfg_addr = vaddr,
-                    _ => {}
                 }
             }
         }

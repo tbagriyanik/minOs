@@ -290,6 +290,13 @@ pub mod arch {
     pub mod x86_64 {
         pub fn mmio_map_2mb(_p: u64) {}
 
+        /// Host testlerinde sayfa eşlemesi yok; ACPI tablo okumaları
+        /// çalıştırılmadığı için yedek (no-op) uygulama yeterlidir.
+        pub fn map_phys_readable(_phys: u64) {}
+
+        /// Host testlerinde sayfa eşlemesi yok; yedek (no-op) uygulama.
+        pub fn map_legacy_acpi_region() {}
+
         pub mod sync {
             use core::cell::UnsafeCell;
             use core::ops::{Deref, DerefMut};

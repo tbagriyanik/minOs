@@ -75,7 +75,9 @@ Desktop usage, MinShell commands and shortcut reference.
   - Yellow `[-]`: Minimizes to taskbar
 - **Window Snap:** Drag title bar to top of screen (auto-maximize).
 - **Window Switching:** `Alt+Tab` (forward), `Shift+Alt+Tab` (backward).
-- **Super Shortcuts:** `Super+D` desktop, `Super+M` minimize all windows, `Super+E` File Manager.
+- **Super Shortcuts:** `Super+D` desktop, `Super+M` minimize all windows, `Super+E` File Manager, `Super+R` Run dialog.
+- **Workspace Shortcuts:** `Super+←` / `Super+→` switches between virtual desktops (workspaces); `Super+Shift+←` / `Super+Shift+→` moves the focused window to the previous/next workspace.
+- **Other System Shortcuts:** `Alt+F4` closes the focused window, `F2` renames the selected item, `F5` refreshes, `F12`/`PrintScreen` takes a screenshot, `Ctrl+Alt+Delete` opens Task Manager, `Ctrl+Alt+NumLock` toggles MouseKeys (keyboard-driven mouse) mode.
 - **System Tray:** Keyboard layout (`TR`/`EN`), theme button, volume button, live clock.
 - **Theme Change:** Use the taskbar color swatch, System Settings > Change, or the theme palette strip.
 - **Desktop Right-Click Menu:** On an empty area, use **New** to create a file/folder, **Refresh** to update the desktop list, or open **Task Manager**.

@@ -1,3 +1,11 @@
+use crate::arch::x86_64::sync::SpinMutex;
+
+/// Fiziksel bellek yöneticisi tek bir bitmap'i korur; SMP altında çekirdek
+/// heap büyümesi, sayfa hatası kurtarma ve sürücü DMA tahsisleri aynı
+/// anda çağrılabilir. Tüm değiştirici yöntemler bu kilidi alır; iç
+/// çağrılar `*_locked` varyantlarını kullanır (kilit yeniden girmez).
+static PMM_LOCK: SpinMutex<()> = SpinMutex::new(());
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum MemoryEntryType {
@@ -191,6 +199,7 @@ impl PhysicalMemoryManager {
     /// Limine bellek haritasından gelen bölgeleri kaydeder.
     /// `Usable` bölgeler için çakışmayan 4KB hizalı gerçek çerçeveler indekslenir.
     pub fn add_region(&mut self, base: u64, length: u64, entry_type: MemoryEntryType) {
+        let _guard = PMM_LOCK.lock();
         if entry_type != MemoryEntryType::Usable
             || length == 0
             || self.total_managed_frames >= MAX_FRAMES
@@ -278,6 +287,12 @@ impl PhysicalMemoryManager {
     /// Gerçek ve çakışmayan 4KB fiziksel sayfa çerçevesi tahsis eder.
     /// Her çağrıda boş bir çerçeve bulunur, bitmap'te işaretlenir ve benzersiz fiziksel adresi döndürülür.
     pub fn allocate_frame(&mut self) -> Option<u64> {
+        let _guard = PMM_LOCK.lock();
+        self.allocate_frame_locked()
+    }
+
+    /// `PMM_LOCK` tutulurken çağrılan kilitsiz tahsis gövdesi.
+    fn allocate_frame_locked(&mut self) -> Option<u64> {
         let max = self.total_managed_frames;
         if max == 0 {
             return None;
@@ -320,6 +335,11 @@ impl PhysicalMemoryManager {
     /// Dönen adres `BIG_PAGE_SIZE` sınırına hizalıdır; böylece doğrudan bir PD
     /// girdisine `HUGE_PAGE` olarak yazılabilir. Blok bulunamazsa `None`.
     pub fn allocate_big_page(&mut self) -> Option<u64> {
+        let _guard = PMM_LOCK.lock();
+        self.allocate_big_page_locked()
+    }
+
+    fn allocate_big_page_locked(&mut self) -> Option<u64> {
         if self.total_managed_frames < (BIG_PAGE_SIZE / PAGE_SIZE) as usize {
             return None;
         }
@@ -360,8 +380,9 @@ impl PhysicalMemoryManager {
 
     /// 2 MiB hizalı büyük sayfa bloğunu serbest bırakır.
     pub fn free_big_page(&mut self, base: u64) {
+        let _guard = PMM_LOCK.lock();
         for offset in 0..(BIG_PAGE_SIZE / PAGE_SIZE) {
-            self.free_frame(base + offset * PAGE_SIZE);
+            self.free_frame_locked(base + offset * PAGE_SIZE);
         }
     }
 
@@ -372,6 +393,12 @@ impl PhysicalMemoryManager {
 
     /// Daha önce tahsis edilmiş bir fiziksel çerçeveyi serbest bırakır.
     pub fn free_frame(&mut self, frame_addr: u64) {
+        let _guard = PMM_LOCK.lock();
+        self.free_frame_locked(frame_addr);
+    }
+
+    /// `PMM_LOCK` tutulurken çağrılan kilitsiz serbest bırakma gövdesi.
+    fn free_frame_locked(&mut self, frame_addr: u64) {
         if let Some(frame_idx) = self.address_to_frame_index(frame_addr) {
             let word_idx = frame_idx / 64;
             let bit_idx = frame_idx % 64;
@@ -392,11 +419,12 @@ impl PhysicalMemoryManager {
 
     /// DMA aygıtları (ses, ağ kartı vb.) için bitişik (contiguous) fiziksel çerçeveler tahsis eder.
     pub fn allocate_contiguous_frames(&mut self, count: usize) -> Option<u64> {
+        let _guard = PMM_LOCK.lock();
         if count == 0 {
             return None;
         }
         if count == 1 {
-            return self.allocate_frame();
+            return self.allocate_frame_locked();
         }
 
         let max = self.total_managed_frames;
@@ -458,9 +486,10 @@ impl PhysicalMemoryManager {
 
     /// Bitişik tahsis edilen fiziksel çerçeveleri serbest bırakır.
     pub fn free_contiguous_frames(&mut self, start_addr: u64, count: usize) {
+        let _guard = PMM_LOCK.lock();
         for offset in 0..count {
             let addr = start_addr + (offset as u64) * PAGE_SIZE;
-            self.free_frame(addr);
+            self.free_frame_locked(addr);
         }
     }
 }

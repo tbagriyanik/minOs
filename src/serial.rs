@@ -1,6 +1,13 @@
 use core::arch::asm;
 extern crate alloc;
 
+use crate::arch::x86_64::sync::SpinMutex;
+
+/// `LOG_BYTES` bir `Vec`'tir ve COM1 yazımı tektir; SMP altında birden çok
+/// CPU aynı anda yazdırırsa yığın bozulur ve baytlar iç içe geçer. Tüm
+/// kayıt/okuma yolları bu kilidi alır (RAII: kapsam çıkışında bırakılır).
+static SERIAL_LOCK: SpinMutex<()> = SpinMutex::new(());
+
 const COM1_DATA: u16 = 0x3F8;
 const COM1_INT_EN: u16 = 0x3F9;
 const COM1_FIFO: u16 = 0x3FA;
@@ -15,6 +22,7 @@ const YELLOW: &[u8] = b"\x1b[33m";
 const RESET: &[u8] = b"\x1b[0m";
 
 pub fn print(message: &str) {
+    let _guard = SERIAL_LOCK.lock();
     append_log(message.as_bytes());
     let color = if is_warning(message) {
         Some(YELLOW)
@@ -46,6 +54,7 @@ fn append_log(bytes: &[u8]) {
 
 #[allow(static_mut_refs)]
 pub fn log_snapshot() -> alloc::vec::Vec<u8> {
+    let _guard = SERIAL_LOCK.lock();
     unsafe { LOG_BYTES.clone() }
 }
 
@@ -53,6 +62,7 @@ pub fn log_snapshot() -> alloc::vec::Vec<u8> {
 /// can render this tail while the boot screen is active.
 #[allow(static_mut_refs)]
 pub fn copy_log_tail(out: &mut [u8]) -> usize {
+    let _guard = SERIAL_LOCK.lock();
     unsafe {
         let len = LOG_BYTES.len().min(out.len());
         if len == 0 {
@@ -82,20 +92,27 @@ pub fn print_dec(mut v: u64) {
 }
 
 pub fn print_hex(mut v: u64) {
-    print("0x");
+    // Tek print çağrısı: "0x" öneki ile sayı aynı kritik bölümde yazılır,
+    // SMP altında parçalar arası karışma olmaz.
     if v == 0 {
-        print("0");
+        print("0x0");
         return;
     }
     let hex_chars = b"0123456789ABCDEF";
-    let mut buf = [0u8; 16];
-    let mut i = buf.len();
-    while v > 0 && i > 0 {
-        i -= 1;
-        buf[i] = hex_chars[(v & 0xF) as usize];
+    let mut tmp = [0u8; 16];
+    let mut n = 0usize;
+    while v > 0 {
+        tmp[n] = hex_chars[(v & 0xF) as usize];
         v >>= 4;
+        n += 1;
     }
-    if let Ok(s) = core::str::from_utf8(&buf[i..]) {
+    let mut buf = [0u8; 18];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for k in 0..n {
+        buf[2 + k] = tmp[n - 1 - k];
+    }
+    if let Ok(s) = core::str::from_utf8(&buf[..2 + n]) {
         print(s);
     }
 }

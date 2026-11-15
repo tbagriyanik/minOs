@@ -75,7 +75,9 @@ Masaüstü kullanımı, MinShell komutları ve kısayol referansı.
   - Sarı `[-]`: Simge durumuna küçültür
 - **Pencere Yerleştirme (Snap):** Başlık çubuğunu ekran üstüne sürükleyip bırakın (otomatik maksimize).
 - **Pencere Değiştirme:** `Alt+Tab` (ileri), `Shift+Alt+Tab` (geri).
-- **Super Kısayolları:** `Super+D` masaüstü, `Super+M` tüm pencereleri küçültür, `Super+E` Dosya Yöneticisi.
+- **Super Kısayolları:** `Super+D` masaüstü, `Super+M` tüm pencereleri küçültür, `Super+E` Dosya Yöneticisi, `Super+R` Çalıştır iletişim kutusu.
+- **Workspace Kısayolları:** `Super+←` / `Super+→` sanal masaüstleri arasında geçiş yapar; `Super+Shift+←` / `Super+Shift+→` odaklı pencereyi önceki/sonraki workspace'e taşır.
+- **Diğer Sistem Kısayolları:** `Alt+F4` pencereyi kapatır, `F2` yeniden adlandırır, `F5` yeniler, `F12`/`PrintScreen` ekran görüntüsü alır, `Ctrl+Alt+Delete` Görev Yöneticisi'ni açar, `Ctrl+Alt+NumLock` fare tuşları (MouseKeys) modunu açıp kapatır.
 - **Sistem Tepsisi:** Klavye rozeti (`TR`/`EN`), tema düğmesi, SES düğmesi, canlı saat.
 - **Tema Değiştirme:** Görev çubuğundaki renk örneği, Sistem Ayarları > Değiştir veya tema palet şeridinden yapılır.
 - **Masaüstü Sağ Tık Menüsü:** Boş alanda **Yeni** alt menüsüyle dosya/klasör oluşturabilir, masaüstünü **Yenile**'yebilir veya **Görev Yöneticisi**'ni açabilirsiniz.

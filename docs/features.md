@@ -44,6 +44,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerle
 
 - **Önyükleme ve kurtarma:** Limine v8 ile x86_64 BIOS ve UEFI önyükleme; kritik açılış hatalarında hata bilgisi ve `restart`, `halt`, `help` komutları sunan `recovery#` metin konsolu.
 - **İşlemci ve giriş:** SMP zamanlayıcısı ve tek CPU'ya güvenli geri dönüş; xHCI USB HID klavye/fare ve PS/2 yedek yolu. EHCI/UHCI/OHCI transfer altyapısı bulunsa da HID raporlarının ayrıştırılması bu denetleyicilerde tamamlanmış değildir.
+- **Açılış ve SMP:** Boot fazları `[BOOT-TIME]` ile ölçülür (`<faz>=<ms> toplam=<ms>` + `SURUM` özeti); sürücüler `smp::parallel_run()` görev kuyruğu üzerinden 4 paralel hatta başlatılır (ses, ağ, USB, HID). PCI config portları, PMM, seri çıkış ve erken boot konsolu SMP-safe spinlock'larla korunur.
 - **Grafik:** QEMU/Bochs framebuffer ve VirtIO-GPU 2D yolu desteklenir. AMD ve NVIDIA sürücüleri temel framebuffer/2D işlemleri sunar; 3D hızlandırma kapsam dışıdır.
 - **Ağ:** IPv4/IPv6, TCP/UDP, DNS, HTTP ve TLS 1.3 altyapısı; ağ kartlarının model bazında uyumluluk durumu [donanım tablosunda](HARDWARE_DRIVER_SUPPORT_MATRIX.md) yer alır.
 - **Tarayıcı:** Yerel demo sayfaları, HTML/CSS/JavaScript işleme, çeşitli görsel biçimleri, HTTPS ve ağ kaynaklarını ana döngüyü engellemeden yükleme. Dahili **minJs** JavaScript motoru closure, ok fonksiyonları, `setTimeout`/`setInterval`, Promise ve dizi geri çağırmalarını destekler (ayrıntı: [wiki — Yerleşik Uygulamalar](https://github.com/tbagriyanik/minos/wiki/tr/Uygulamalar)).
@@ -81,7 +82,7 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
   - Büyüyen kernel heap (16→64 MiB sanal pencere, 64 KiB üstü tahsislar tembel), canlı bellek profilleme (`[MEM-PROFILE]`/`[MEM-STAT]`) ve `meminfo` komutu.
 - [x] **SMP (Symmetric Multiprocessing) Mimarisi:**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
-  - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve Görev Yöneticisi per-core CPU izleme çubukları.
+  - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu, `parallel_run()` genel amaçlı paralel görev dağıtımı (paralel sürücü init) ve Görev Yöneticisi per-core CPU izleme çubukları.
 - [x] **Yerel xHCI USB HID & PS/2 Fallback:**
   - xHCI (USB 3.x) denetleyicileri üzerinde yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`), port tarama, boot protokolü ve olay kuyruğu; BIOS CSM/Legacy USB kapalı olduğunda tanılama bildirimli PS/2 fallback.
 - [x] **Limine v8 BIOS & UEFI Dual-Boot Desteği:**

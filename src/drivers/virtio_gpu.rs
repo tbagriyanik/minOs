@@ -77,6 +77,7 @@ const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[inline]
 fn pci_read8(bus: u8, dev: u8, func: u8, off: u16) -> u8 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
@@ -89,6 +90,7 @@ fn pci_read8(bus: u8, dev: u8, func: u8, off: u16) -> u8 {
 
 #[inline]
 fn pci_read16(bus: u8, dev: u8, func: u8, off: u16) -> u16 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
@@ -101,6 +103,7 @@ fn pci_read16(bus: u8, dev: u8, func: u8, off: u16) -> u16 {
 
 #[inline]
 fn pci_read32(bus: u8, dev: u8, func: u8, off: u16) -> u32 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
@@ -113,6 +116,7 @@ fn pci_read32(bus: u8, dev: u8, func: u8, off: u16) -> u32 {
 
 #[inline]
 fn pci_write16(bus: u8, dev: u8, func: u8, off: u16, val: u16) {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
@@ -125,6 +129,7 @@ fn pci_write16(bus: u8, dev: u8, func: u8, off: u16, val: u16) {
 
 #[inline]
 fn pci_write32(bus: u8, dev: u8, func: u8, off: u16, val: u32) {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     debug_assert!(off < 0x100, "PCI config offset 0x{off:X} out of range");
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)

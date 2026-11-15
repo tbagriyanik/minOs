@@ -4,6 +4,53 @@
 //! işlevleri tek bir yerde toplanmıştır.
 
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// PCI yapılandırma mekanizması (0xCF8/0xCFC) tek bir paylaşılan port
+/// çifti kullanır; eşzamanlı CPU'lar adres ve veri çevrimlerini
+/// iç içe geçirebilir. Tüm `pci_read*`/`pci_write*` çağrıları bu kilidi
+/// almalıdır. `port_io.rs` host testlerine de bağlandığı için kilit
+/// `arch` bağımlılığı olmadan yerel olarak uygulanır.
+pub struct ConfigLock {
+    locked: AtomicBool,
+}
+
+/// `ConfigLock::lock()` tarafından döndürülen RAII koruma nesnesi;
+/// kapsam çıkışında kilidi otomatik bırakır.
+pub struct ConfigGuard<'a> {
+    lock: &'a ConfigLock,
+}
+
+impl ConfigLock {
+    pub const fn new() -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    pub fn lock(&self) -> ConfigGuard<'_> {
+        while self.locked.swap(true, Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+        ConfigGuard { lock: self }
+    }
+}
+
+impl Default for ConfigLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ConfigGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.lock.locked.store(false, Ordering::Release);
+    }
+}
+
+pub static PCI_CONFIG_LOCK: ConfigLock = ConfigLock::new();
 
 // ---------------------------------------------------------------------------
 // I/O Port Yardımcıları
@@ -66,6 +113,7 @@ pub const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[inline]
 pub fn pci_read8(bus: u8, dev: u8, func: u8, off: u8) -> u8 {
+    let _guard = PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -77,6 +125,7 @@ pub fn pci_read8(bus: u8, dev: u8, func: u8, off: u8) -> u8 {
 
 #[inline]
 pub fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
+    let _guard = PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -88,6 +137,7 @@ pub fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
 
 #[inline]
 pub fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
+    let _guard = PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -99,6 +149,7 @@ pub fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
 
 #[inline]
 pub fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
+    let _guard = PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -110,6 +161,7 @@ pub fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
 
 #[inline]
 pub fn pci_write16(bus: u8, dev: u8, func: u8, off: u8, val: u16) {
+    let _guard = PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)

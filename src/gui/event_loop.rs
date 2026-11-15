@@ -47,6 +47,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     // 6. MinGUI Pencere Yoneticisi ve Tum Uygulamalar
 
     serial_print("[BOOT] Pencere yöneticisi ve uygulamalar hazırlanıyor...\n");
+    let mut boot_timer = crate::boot::timing::PhaseTimer::new();
 
     // Kurulum `Box` döner; içerikler ayrılan (heap) yerde açıldığı için
     // ~110 KiB'lık yapılar yığın çerçevesine kopyalanmaz ve dönüş değerinin
@@ -129,6 +130,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     }
 
     serial_print("[BOOT] Grafik arayüz denetimleri tamamlandı.\n");
+    boot_timer.mark("gui-kurulum");
 
     serial_print("[BOOT] CRITICAL_CHECKS_COMPLETE - Kritik denetimler tamamlandı; grafik arayüz başlatılıyor.\n");
 
@@ -200,6 +202,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             memory_mgr,
         );
         serial_print("[BOOT] Hoş geldin kabul edildi; masaüstüne geçiliyor.\n");
+        boot_timer.mark("hos-geldin");
     }
 
     // Welcome ekranindan masaustune gecisi de ayni animasyonla yumusat.
@@ -504,6 +507,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
     serial_print("[BOOT] Masaüstü döngüsü başladı.\n");
+    // Açılış süresi özeti: Limine'den devralmadan masaüstüne kadar geçen süre.
+    boot_timer.mark("masaustu");
+    crate::boot::timing::report_total();
 
     loop {
         // Bir onceki turda yakalanan uygulama hatasini raporla ve yalnizca

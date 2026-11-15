@@ -79,8 +79,8 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 203 dosya (`src/` + `tests/` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | 140.094 satır |
+| **Toplam Rust Kaynak Dosyası** | 206 dosya (`src/` + `tests/` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | 154.957 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Birim Testleri** | 295 test (0 hata, %100 başarılı) |

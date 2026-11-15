@@ -8,7 +8,7 @@
 //!   polling ile kontrol edilir. Çekirdek veri yarışını önlemek için paylaşılan durum yalnızca atomikler ve
 //!   [`crate::arch::x86_64::sync`] kilitleri üzerinden erişilir.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use super::gdt;
 use super::sync::SpinMutex;
@@ -226,8 +226,9 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
 
     let mut idle_spins: u32 = 0;
     loop {
-        // İş kuyruğunu yokla; iş varsa çalıştır.
-        if !poll_job(cpu) {
+        // İş kuyruklarını yokla; iş varsa çalıştır.
+        let did_work = poll_job(cpu) | poll_parallel_task();
+        if !did_work {
             crate::task::poll_tasks();
             idle_spins = idle_spins.wrapping_add(1);
             // Kalp atışını her turda atomik yazmak veri yolunu kilitler (cache bouncing).
@@ -356,6 +357,118 @@ pub fn parallel_checksum(data_phys: u64, total_u64: usize, chunk_u64: usize) -> 
             spins = 0;
         }
     }
+}
+
+// --- Genel amaçlı paralel görev kuyruğu --------------------------------------
+//
+// `parallel_checksum`'in aksine keyfi bir işlevi keyfi argümanla çalıştırır.
+// Önyüklemede bağımsız sürücü hatlarını (ses, ağ, USB, HID) AP'lere dağıtmak
+// için kullanılır. Görevler `unsafe fn(*mut u8)` işaretçileriyle tanımlanır;
+// argüman işaretçisi çağıranın yığın/heap verisine işaret edebilir çünkü
+// `parallel_run` tüm görevler bitene kadar dönmez.
+
+/// Paralel görev işlevi imzası.
+pub type ParallelTaskFn = unsafe fn(*mut u8);
+
+/// Dağıtılacak tek bir paralel görev.
+pub struct ParallelTask {
+    pub func: ParallelTaskFn,
+    pub arg: *mut u8,
+}
+
+/// Tek seferde dağıtılabilecek azami görev sayısı (slot başına 3 atomik).
+const MAX_PARALLEL_TASKS: usize = 8;
+
+struct ParallelSlot {
+    /// 0 = boş, 1 = sahiplenildi, 2 = tamamlandı.
+    state: AtomicU32,
+    func: AtomicUsize,
+    arg: AtomicUsize,
+}
+
+impl ParallelSlot {
+    const fn empty() -> Self {
+        Self {
+            state: AtomicU32::new(0),
+            func: AtomicUsize::new(0),
+            arg: AtomicUsize::new(0),
+        }
+    }
+}
+
+static PARALLEL_SLOTS: [ParallelSlot; MAX_PARALLEL_TASKS] =
+    [const { ParallelSlot::empty() }; MAX_PARALLEL_TASKS];
+static PARALLEL_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PARALLEL_COUNT: AtomicU32 = AtomicU32::new(0);
+static PARALLEL_DONE: AtomicU32 = AtomicU32::new(0);
+/// Uzun bekleyiş uyarısı için kaba çevirim sayacı (yalnızca `parallel_run`).
+static PARALLEL_WAIT_SPINS: AtomicU64 = AtomicU64::new(0);
+
+/// Boş bir paralel görev slotu sahiplenip çalıştırır. İş yapıldıysa true.
+fn poll_parallel_task() -> bool {
+    if !PARALLEL_ACTIVE.load(Ordering::Acquire) {
+        return false;
+    }
+    let count = PARALLEL_COUNT.load(Ordering::Acquire) as usize;
+    for slot in PARALLEL_SLOTS.iter().take(count.min(MAX_PARALLEL_TASKS)) {
+        if slot
+            .state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            continue;
+        }
+        let func = slot.func.load(Ordering::Acquire);
+        let arg = slot.arg.load(Ordering::Acquire);
+        // SAFETY: `func`/`arg` `parallel_run` tarafından görevler
+        // tamamlanana kadar canlı tutulan veriden doldurulur; slot yalnızca
+        // bir CPU tarafından sahiplenilir (state CAS).
+        unsafe {
+            core::mem::transmute::<usize, ParallelTaskFn>(func)(arg as *mut u8);
+        }
+        slot.state.store(2, Ordering::Release);
+        PARALLEL_DONE.fetch_add(1, Ordering::AcqRel);
+        return true;
+    }
+    false
+}
+
+/// `tasks` içindeki işleri tüm çevrimiçi CPU'lara dağıtır ve hepsi
+/// bitene kadar bekler. BSP de işçi gibi katılır; AP yoksa görevler
+/// sırayla BSP üzerinde koşar (tek CPU'da davranış değişmez).
+///
+/// Görev işlevleri keyfi donanım/sürücü kodu çalıştırabilir; PMM, seri
+/// konsol ve PCI yapılandırma erişimi kendi iç kilitleriyle korunur.
+pub fn parallel_run(tasks: &[ParallelTask]) {
+    let count = tasks.len().min(MAX_PARALLEL_TASKS);
+    if count == 0 {
+        return;
+    }
+    for (i, task) in tasks.iter().take(count).enumerate() {
+        let slot = &PARALLEL_SLOTS[i];
+        slot.func.store(task.func as usize, Ordering::Relaxed);
+        slot.arg.store(task.arg as usize, Ordering::Relaxed);
+        slot.state.store(0, Ordering::Release);
+    }
+    PARALLEL_DONE.store(0, Ordering::Relaxed);
+    PARALLEL_COUNT.store(count as u32, Ordering::Release);
+    PARALLEL_ACTIVE.store(true, Ordering::Release);
+
+    loop {
+        while poll_parallel_task() {}
+        if PARALLEL_DONE.load(Ordering::Acquire) as usize >= count {
+            break;
+        }
+        // Uzun süren hatalar (DHCP, USB port reseti) normaldir; yalnızca
+        // aşırı uzun bekleyişte bir kez durum dökümü yapılır.
+        if PARALLEL_WAIT_SPINS.fetch_add(1, Ordering::Relaxed) == 2_000_000_000 {
+            print_locked("[SMP] Paralel görevler hâlâ çalışıyor (beklenen: yavaş sürücü init).\n");
+        }
+        core::hint::spin_loop();
+    }
+
+    PARALLEL_ACTIVE.store(false, Ordering::Release);
+    PARALLEL_COUNT.store(0, Ordering::Relaxed);
 }
 
 // --- BSP kurulumu --------------------------------------------------------------

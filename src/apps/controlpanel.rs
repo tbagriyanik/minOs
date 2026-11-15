@@ -983,26 +983,61 @@ pub fn render_content(
                 y,
                 row_w,
                 crate::gui::ui_text("Kısayollar:", "Shortcuts:"),
-                crate::gui::ui_text(
-                    "F5 yenile • Super+R çalıştır • Super+D masaüstü",
-                    "F5 refresh • Super+R run • Super+D desktop",
-                ),
-                Color::TEXT_MAIN,
-            );
-            y += step;
-            draw_row(
-                fb,
-                left,
-                y,
-                row_w,
                 "",
-                crate::gui::ui_text(
-                    "Alt+Tab pencere • Ctrl+R sayfayı yenile",
-                    "Alt+Tab windows • Ctrl+R reload page",
-                ),
                 Color::TEXT_MUTED,
             );
             y += step;
+            let shortcut_rows: [(&str, &str, &str); 9] = [
+                (
+                    "Alt+Tab",
+                    "Pencere değiştir • Shift+Alt+Tab geri • Alt+F4 kapat",
+                    "Switch windows • Shift+Alt+Tab back • Alt+F4 close",
+                ),
+                (
+                    "Super+←/→",
+                    "Workspace değiştir • Shift: pencereyi taşı",
+                    "Switch workspace • Shift: move window",
+                ),
+                (
+                    "Super",
+                    "Başlat • D masaüstü • M küçült • E Dosyalar • R Çalıştır",
+                    "Start • D desktop • M minimize • E Files • R Run",
+                ),
+                (
+                    "F2 • F5 • F12",
+                    "Yeniden adlandır • Yenile • Ekran görüntüsü",
+                    "Rename • Refresh • Screenshot",
+                ),
+                (
+                    "Ctrl+C/X/V/A/Z/Y",
+                    "Kopyala • Kes • Yapıştır • Seç • Geri/İleri al",
+                    "Copy • Cut • Paste • Select • Undo/Redo",
+                ),
+                (
+                    "Ctrl+S/O/N/F/H",
+                    "Kaydet • Aç • Yeni • Bul • Değiştir",
+                    "Save • Open • New • Find • Replace",
+                ),
+                (
+                    "Ctrl+L/R • Alt+←/→",
+                    "Tarayıcı: adres • yenile • geri/ileri",
+                    "Browser: address • reload • back/fwd",
+                ),
+                ("Ctrl+Shift+D", "Tarayıcı DevTools", "Browser DevTools"),
+                ("Ctrl+Alt+Del", "Görev Yöneticisi", "Task Manager"),
+            ];
+            for (keys, desc_tr, desc_en) in shortcut_rows {
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    keys,
+                    crate::gui::ui_text(desc_tr, desc_en),
+                    Color::TEXT_MAIN,
+                );
+                y += step;
+            }
             draw_row(
                 fb,
                 left,

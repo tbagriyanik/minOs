@@ -29,11 +29,15 @@ pub fn init_subsystems(
     memory_mgr: &mut mm::MemoryManager,
     alloc_pmm_frame_global: fn() -> Option<u64>,
 ) -> BootSubsystems {
+    // Açılış süresi profili: her aşamanın süresi seri konsola yazılır.
+    let mut timer = crate::boot::timing::PhaseTimer::new();
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
     serial_print("[BOOT] Sanal dosya sistemi başlatılıyor...\n");
     let mut fs_mgr = fs::FileSystemManager::new();
     let boot_log = Vec::with_capacity(4096);
     boot::console::save_boot_log(&mut fs_mgr.vfs);
+    timer.mark("vfs");
 
     // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
     serial_print("[BOOT] Donanım kesmeleri ve bellek yöneticisi başlatılıyor...\n");
@@ -97,6 +101,7 @@ pub fn init_subsystems(
 
     serial_print("[PMM] Fiziksel bellek yöneticisi başlatıldı.\n");
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
+    timer.mark("pmm");
 
     // Kernel heap büyütme: ayırıcıyı yeşil alan (greenfield) sanal pencereye
     // taşı; statik tampon yalnızca erken önyükleme içindi ve bu noktadan
@@ -106,6 +111,7 @@ pub fn init_subsystems(
             "[KHEAP] UYARI: Heap sanal penceresi kurulamadı; statik 16 MB sınırı geçerli.\n",
         );
     }
+    timer.mark("heap");
 
     // VRAM MMIO aralığını (16MB) sayfa tablolarına eşle; çözünürlük veya çizim unmapped #PF üretmesin.
     let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
@@ -164,6 +170,7 @@ pub fn init_subsystems(
         }
         loaded.unmap_and_free(&mut address_space, &mut memory_mgr.pmm);
     }
+    timer.mark("vmm");
 
     // Süreç Yöneticisi ve Sistem Çağrılarının (syscalls) Başlatımı
     serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
@@ -211,6 +218,7 @@ pub fn init_subsystems(
     if test_pid == 0 {
         serial_print("[PROC] Süreç tablosu ve sistem çağrıları (syscalls) etkin.\n");
     }
+    timer.mark("proc");
 
     // Paylaşılan sıfır sayfasını önden ayır: tembel eşleme altyapısının
     // tek seferlik kaynağı süreç testi ölçümlerine "sızıntı" olarak yansımasın.
@@ -224,12 +232,14 @@ pub fn init_subsystems(
     crate::kernel::heap::test_heap_growth();
     crate::kernel::heap::test_tiered_alloc();
     mm::memory::profile::report_boot_summary();
+    timer.mark("bellek-testleri");
 
     serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");
     mm::process::test_process_lifecycle_and_fault_recovery(
         &mut memory_mgr.proc_mgr,
         &mut memory_mgr.pmm,
     );
+    timer.mark("surec-testleri");
 
     serial_print("[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n");
     mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
@@ -248,6 +258,7 @@ pub fn init_subsystems(
     if !ring3_demo_ok {
         serial_print("[RING3-TEST] Syscall/register dönüş doğrulaması: BAŞARISIZ\n");
     }
+    timer.mark("ring3-testleri");
 
     serial_print("[BOOT] SMP başlatılıyor...\n");
     serial_print("[SMP] BSP GDT yükleniyor...\n");
@@ -316,6 +327,7 @@ pub fn init_subsystems(
     }
 
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
+    timer.mark("smp");
     serial_print("[BOOT] Donanım sürücüleri başlatılıyor...\n");
     let cmdline = limine_boot_cmdline().unwrap_or("");
     let driver_profile = if cmdline_has_token(cmdline, "full") {
@@ -338,63 +350,68 @@ pub fn init_subsystems(
         .vfs
         .write_file("/root/Documents/boot.log", profile_line.as_bytes());
 
+    // DMA çerçeveleri BSP'de önceden ayrılır: PMM kilidi sayesinde hatlar
+    // boyunca tek iş parçacıklı seri kalır ve ayrıcalıklı `&mut` paylaşımı
+    // gerekmez. Tahsis profiline göre yalnızca gerekli hatlar beslenir.
+    let mut hda_dma_phys = None;
+    let mut e1000_dma_phys = None;
     if driver_profile == "audio" || driver_profile == "full" {
-        serial_print("[DRIVER] HDA ses sürücüsü başlatılıyor...\n");
-        let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
-        let Some(hda_dma_phys) = hda_dma_phys else {
+        hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
+        if hda_dma_phys.is_none() {
             boot::text_console::fatal("HDA DMA bellek tahsisi başarısız");
-        };
-        drivers::hda::init(Some(hda_dma_phys));
-        serial_print("[DRIVER] HDA ses sürücüsü hazır.\n");
+        }
     }
-
     if driver_profile == "hardware" || driver_profile == "full" {
-        serial_print("[DRIVER] PCI ağ sürücüsü (e1000/VMXNET3/RTL816x/RTL8139) başlatılıyor...\n");
-        let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
-        let Some(e1000_dma_phys) = e1000_dma_phys else {
+        e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
+        if e1000_dma_phys.is_none() {
             boot::text_console::fatal("e1000 DMA bellek tahsisi başarısız");
-        };
-        drivers::e1000::init(Some(e1000_dma_phys));
-        if drivers::e1000::is_ready() {
-            serial_print("[DRIVER] PCI ağ sürücüsü hazır: ");
-            serial_print(drivers::e1000::nic_name());
-            serial_print("\n");
-        } else {
-            // PCI kart yoksa NE2000 (ISA/PnP) denenir.
-            serial_print("[DRIVER] NE2000 ağ sürücüsü başlatılıyor...\n");
-            if drivers::ne2000::init_isa_pnp() {
-                serial_print("[DRIVER] NE2000 ağ sürücüsü hazır.\n");
-            } else {
-                serial_print("[DRIVER] Ağ adaptörü bulunamadı (PCI/ISA).\n");
-            }
         }
-
-        serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
-        drivers::netstack::init();
-        let _ = drivers::netstack::dhcp_request();
-        drivers::netstack::run_network_self_test();
-        serial_print("[DRIVER] Ağ protokolü hazır.\n");
-
-        serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
-        drivers::usb::init();
-        drivers::usb::test_usb_subsystems();
-        serial_print("[DRIVER] Wi-Fi (802.11) alt sistemi başlatılıyor...\n");
-        drivers::wifi::init();
-        serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
-        drivers::usb_hid::init(&mut memory_mgr.pmm);
-        if drivers::usb_touchscreen::init() {
-            serial_print("[DRIVER] USB dokunmatik ekran hazır (");
-            crate::serial::print_dec(drivers::usb_touchscreen::max_x() as u64);
-            serial_print("x");
-            crate::serial::print_dec(drivers::usb_touchscreen::max_y() as u64);
-            if drivers::usb_touchscreen::supports_multitouch() {
-                serial_print(", multi-touch");
-            }
-            serial_print(").\n");
-        }
-        serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
-        serial_print("[DRIVER] USB sürücüsü hazır.\n");
     }
+
+    // Bağımsız sürücü hatları AP'lere dağıtılır; `parallel_run` tümü
+    // bitene kadar bekler. Tek CPU'da aynı kod sırayla BSP'de koşar.
+    let lane_args = DriverLaneArgs {
+        hda_dma: hda_dma_phys,
+        e1000_dma: e1000_dma_phys,
+        // SAFETY: `pmm` ham işaretçisi yalnızca HID hattı tarafından,
+        // `parallel_run` süresince başka hiçbir kod PMM'e erişmezken
+        // tek seferde `&mut`'e çevrilir. PMM metodları ayrıca kendi
+        // iç kilidini aldığı için çekirdek heap büyümesiyle çakışma
+        // bile güvenlidir.
+        pmm: &mut memory_mgr.pmm,
+    };
+    let arg_ptr = core::ptr::addr_of!(lane_args) as *mut u8;
+    let lanes = [
+        arch::x86_64::smp::ParallelTask {
+            func: driver_lane_audio,
+            arg: arg_ptr,
+        },
+        arch::x86_64::smp::ParallelTask {
+            func: driver_lane_net,
+            arg: arg_ptr,
+        },
+        arch::x86_64::smp::ParallelTask {
+            func: driver_lane_usb,
+            arg: arg_ptr,
+        },
+        arch::x86_64::smp::ParallelTask {
+            func: driver_lane_hid,
+            arg: arg_ptr,
+        },
+    ];
+    let tasks: &[arch::x86_64::smp::ParallelTask] = match driver_profile {
+        "audio" => &lanes[0..1],
+        "hardware" => &lanes[1..4],
+        "full" => &lanes[0..4],
+        _ => &[],
+    };
+    serial_print("[BOOT] Sürücü hatları paralel başlatılıyor (hat sayısı: ");
+    crate::serial::print_dec(tasks.len() as u64);
+    serial_print(", CPU: ");
+    crate::serial::print_dec(arch::x86_64::smp::cpu_count() as u64);
+    serial_print(")\n");
+    arch::x86_64::smp::parallel_run(tasks);
+    serial_print("[DRIVERS] Paralel sürücü hatları tamamlandı.\n");
 
     let _socket_timeout_task = task::spawn("socket-timeouts", task::TaskPriority::Normal, || {
         drivers::socket::poll_timeouts();
@@ -407,6 +424,7 @@ pub fn init_subsystems(
     audio_dev.test_audio_subsystem();
 
     serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
+    timer.mark("suruculer");
     serial_print("[NET] smoltcp protokolleri etkin: ");
     serial_print(crate::net_smoltcp::Protocols::summary());
     serial_print("\n");
@@ -427,6 +445,7 @@ pub fn init_subsystems(
     } else {
         serial_print("[GPU] BGA yok; çözünürlük Limine ile sabit, yazılım imleci.\n");
     }
+    timer.mark("gpu");
 
     // 5. PS/2 Donanim Suruculeri
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
@@ -437,6 +456,7 @@ pub fn init_subsystems(
     } else {
         serial_print("[BOOT] PS/2 denetleyicisi yok; girdi yalnızca USB HID üzerinden.\n");
     }
+    timer.mark("ps2");
 
     let usb_hid_count = drivers::usb_hid::device_count();
     if usb_hid_count == 0 {
@@ -448,6 +468,7 @@ pub fn init_subsystems(
     // 5b. Tema motorunu başlat
     crate::gui::theme::init();
     serial_print("[BOOT] Tema hazır.\n");
+    timer.mark("tema");
 
     // 5c. önyükleme modu denetimi:
     let wants_installed = boot_wants_installed();
@@ -480,8 +501,11 @@ pub fn init_subsystems(
         probe_and_init_all();
     }
     serial_print("[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n");
+    timer.mark("surucu-kesfi");
 
     serial_print("[BOOT] Tüm kritik alt sistemler başlatıldı. GUI ve uygulamalar yükleniyor...\n");
+    timer.mark("alt-sistemler");
+    crate::boot::timing::report_total();
 
     BootSubsystems {
         fs_mgr,
@@ -493,4 +517,103 @@ pub fn init_subsystems(
         installed,
         wants_installed,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Paralel sürücü hatları (SMP)
+// ---------------------------------------------------------------------------
+//
+// `init_subsystems` içindeki bağımsız donanım grupları `smp::parallel_run`
+// üzerinden AP'lere dağıtılır. Hatlar farklı aygıtlara dokunduğu için
+// çakışmaz; paylaşılan kaynaklar (PMM, seri, PCI config) kendi kilitleriyle
+// korunur. DMA çerçeveleri dağıtımdan önce BSP'de ayrılır.
+
+/// Paralel hatlara verilen ortak argüman paketi. Yalnızca okunur alanlar
+/// paylaşılır; `pmm` işaretçisi tek hat (HID) tarafından kullanılır.
+struct DriverLaneArgs {
+    /// HDA ses DMA'sı için ayrılan fiziksel çerçeve aralığı (ses profili).
+    hda_dma: Option<u64>,
+    /// NIC TX/RX halkaları için ayrılan fiziksel çerçeve aralığı (ağ profili).
+    e1000_dma: Option<u64>,
+    /// USB HID xHCI denetleyicisinin DMA tamponları için PMM.
+    pmm: *mut mm::pmm::PhysicalMemoryManager,
+}
+
+/// Hat 0 — HDA ses sürücüsü (yalnızca `audio`/`full` profilinde DMA dolu).
+unsafe fn driver_lane_audio(arg: *mut u8) {
+    let Some(dma) = (unsafe { &*(arg as *const DriverLaneArgs) }).hda_dma else {
+        return;
+    };
+    serial_print("[DRIVER] HDA ses sürücüsü başlatılıyor...\n");
+    drivers::hda::init(Some(dma));
+    serial_print("[DRIVER] HDA ses sürücüsü hazır.\n");
+}
+
+/// Hat 1 — PCI/ISA ağ kartı + protokol yığını (yalnızca `hardware`/`full`).
+unsafe fn driver_lane_net(arg: *mut u8) {
+    let Some(dma) = (unsafe { &*(arg as *const DriverLaneArgs) }).e1000_dma else {
+        return;
+    };
+    serial_print("[DRIVER] PCI ağ sürücüsü (e1000/VMXNET3/RTL816x/RTL8139) başlatılıyor...\n");
+    drivers::e1000::init(Some(dma));
+    if drivers::e1000::is_ready() {
+        serial_print("[DRIVER] PCI ağ sürücüsü hazır: ");
+        serial_print(drivers::e1000::nic_name());
+        serial_print("\n");
+    } else {
+        // PCI kart yoksa NE2000 (ISA/PnP) denenir.
+        serial_print("[DRIVER] NE2000 ağ sürücüsü başlatılıyor...\n");
+        if drivers::ne2000::init_isa_pnp() {
+            serial_print("[DRIVER] NE2000 ağ sürücüsü hazır.\n");
+        } else {
+            serial_print("[DRIVER] Ağ adaptörü bulunamadı (PCI/ISA).\n");
+        }
+    }
+
+    serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
+    drivers::netstack::init();
+    let _ = drivers::netstack::dhcp_request();
+    drivers::netstack::run_network_self_test();
+    serial_print("[DRIVER] Ağ protokolü hazır.\n");
+}
+
+/// Hat 2 — USB ana makine denetleyicileri + Wi-Fi algılama
+/// (yalnızca `hardware`/`full`).
+unsafe fn driver_lane_usb(arg: *mut u8) {
+    if (unsafe { &*(arg as *const DriverLaneArgs) })
+        .e1000_dma
+        .is_none()
+    {
+        return;
+    }
+    serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
+    drivers::usb::init();
+    drivers::usb::test_usb_subsystems();
+    serial_print("[DRIVER] Wi-Fi (802.11) alt sistemi başlatılıyor...\n");
+    drivers::wifi::init();
+    serial_print("[DRIVER] USB sürücüsü hazır.\n");
+}
+
+/// Hat 3 — xHCI HID (klavye/fare/dokunmatik) taraması; PMM'e tek erişen hat.
+/// `usb::init`'ten bağımsızdır: kendi PCI taramasını yapar.
+unsafe fn driver_lane_hid(arg: *mut u8) {
+    let args = unsafe { &*(arg as *const DriverLaneArgs) };
+    if args.e1000_dma.is_none() {
+        return;
+    }
+    serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
+    // SAFETY: `args->pmm` `parallel_run` çağrısı süresince tek erişimlidir;
+    // PMM metodları iç kilitle korunur.
+    drivers::usb_hid::init(unsafe { &mut *args.pmm });
+    if drivers::usb_touchscreen::init() {
+        serial_print("[DRIVER] USB dokunmatik ekran hazır (");
+        crate::serial::print_dec(drivers::usb_touchscreen::max_x() as u64);
+        serial_print("x");
+        crate::serial::print_dec(drivers::usb_touchscreen::max_y() as u64);
+        if drivers::usb_touchscreen::supports_multitouch() {
+            serial_print(", multi-touch");
+        }
+        serial_print(").\n");
+    }
+    serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
 }

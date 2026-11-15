@@ -41,6 +41,7 @@ const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[inline]
 fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)

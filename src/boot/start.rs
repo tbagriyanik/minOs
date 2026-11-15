@@ -108,6 +108,9 @@ pub fn early_init() -> BootDisplay {
         serial_print("[BOOT] UYARI: PIT yanıt vermedi; CPUID TSC tahmini kullanılıyor.\n");
     }
 
+    // Zaman tabanı hazır: açılış süresi ölçümünü buradan başlat.
+    crate::boot::timing::begin();
+
     serial_print("[VIDEO] ");
     serial_print_dec(width as u64);
     serial_print("x");

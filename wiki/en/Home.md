@@ -28,7 +28,7 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Raw Rust Lines** | 140,094 lines (`src/` + `tests/` + `build.rs`) |
+| **Total Raw Rust Lines** | 154,957 lines (`src/` + `tests/` + `build.rs`) |
 | **Unit Tests** | 295 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |

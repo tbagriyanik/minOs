@@ -2,7 +2,13 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::arch::x86_64::sync::SpinMutex;
 use crate::drivers::video::Framebuffer;
+
+/// `write_color` paylaşılan imleç çerçevesi (`CURSOR_*`), framebuffer ve
+/// `BOOT_LOG_*` tamponlarına dokunur; paralel sürücü hatları birden çok
+/// CPU'dan aynı anda yazdırabildiği için tüm çıktı bu kilitle serileştirilir.
+static TEXT_LOCK: SpinMutex<()> = SpinMutex::new(());
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static IN_ERROR_PROMPT: AtomicBool = AtomicBool::new(false);
@@ -341,6 +347,7 @@ fn write_to_buffer(_text: &str) {
 
 /// Renkli metin çıktısı verir (hata, uyarı ve komut satırı için).
 pub fn write_color(text: &str, color: u32) {
+    let _guard = TEXT_LOCK.lock();
     write_to_buffer(text);
     if !ACTIVE.load(Ordering::Acquire) {
         return;

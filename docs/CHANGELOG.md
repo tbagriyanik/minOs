@@ -21,6 +21,12 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - Kullanıcı `brk`/`mmap` sayfaları tembel eşlenir (`PAGE_LAZY`, ilk yazmada çerçeve); `mmap`'e `MAP_SHARED_FILE` zero-copy paylaşım bayrağı; kernel heap 16→64 MiB büyüyen sanal pencere (≥64 KiB tahsislar tembel).
 - `src/mm/memory/` alt modülü: 2 MiB büyük sayfa desteği (`[BIGPAGE]`), disk'siz bellek sıkıştırma deposu (`[MZRAM]`), canlı bellek profilleme (`[MEM-PROFILE]`/`[MEM-STAT]`/`[KHEAP]`) ve genişletilmiş `SYS_MEMINFO` (12 × `u64`).
 - MinShell'e `meminfo` komutu eklendi; `[SCHED-STAT]` artık `susp=` sayacı da raporlar.
+- Açılışta sürücü başlatma paralelleştirildi: `smp::parallel_run()` genel SMP görev kuyruğu (8 slot; AP'ler `poll_parallel_task()` ile iş çeker, BSP de işçi olarak katılır; tek CPU'da sıralı çalışır). `full`/`hardware`/`audio` profillerine göre 4 hat: HDA ses, ağ (e1000/NE2000 + netstack + DHCP + self-test), USB (host + testler + Wi-Fi), xHCI HID + dokunmatik. `[BOOT-TIME] suruculer=` fazı gerçek paralel süreyi ölçer.
+- Boot aşama zamanlaması: `[BOOT-TIME] <faz>=<ms> toplam=<ms>` satırları ve `SURUM=<ms> asama=<n>` özeti; vfs/pmm/heap/vmm/proc/bellek/süreç/Ring3/SMP/sürücü/GPU/PS-2/tema/keşif/alt-sistem/GUI/hoş-geldin/masaüstü fazları.
+- SMP yarış korumaları: PCI config portlarına global `PCI_CONFIG_LOCK` (0xCF8/0xCFC, 14 sürücü dosyası), PMM'e iç `PMM_LOCK` (public API kilitli, `*_locked` iç varyantlar), seri çıktıya `SERIAL_LOCK`, erken boot konsoluna `TEXT_CONSOLE_LOCK`.
+- Kontrol Paneli → Hakkında sekmesine gruplu klavye kısayolu listesi eklendi (pencere, workspace, Super, F2/F5/F12, düzenleme, tarayıcı, Ctrl+Alt+Del — TR/EN).
+- Workspace kısayolları belgelendi: `Super+←`/`Super+→` workspace geçişi, `Super+Shift+←`/`→` pencere taşıma (kullanım rehberi, wiki TR/EN, README).
+- `gui/frame.rs` ölü kod temizliği: çağrılmayan `RenderContext`/`render_frame`/`render_dirty` kopyaları ve kullanılmayan `EventLoopState` kaldırıldı.
 
 - [v2.3.0](#yenilikler-v230) — önceki sürüm
 - [v1.6.0 ve öncesi](releases.md)

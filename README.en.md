@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-140%2C094%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-154%2C957%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 
 - [Features and roadmap](docs/features.md) *(Turkish)*
 - [Hardware & Driver Support Matrix](docs/HARDWARE_DRIVER_SUPPORT_MATRIX.md) *(Turkish)*
-- [Shell commands and desktop shortcuts](docs/usage.md) *(Turkish)*
+- [Shell commands, desktop and workspace (virtual desktop) shortcuts](docs/usage.md) *(Turkish)*
 - [Requirements, building, QEMU and VirtualBox](docs/building.md) *(Turkish)*
 - [Previous release notes](docs/releases.md) *(Turkish)*
 - [Detailed technical documentation](https://github.com/tbagriyanik/minOs/wiki)

@@ -21,6 +21,12 @@ The README files only summarise the highlights; the full list lives here.
 - User `brk`/`mmap` pages are lazily mapped (`PAGE_LAZY`, frames allocated on first write); `mmap` gained a `MAP_SHARED_FILE` zero-copy sharing flag; kernel heap moved to a 16→64 MiB growing virtual window (≥64 KiB allocations lazy).
 - New `src/mm/memory/` subsystem: 2 MiB huge-page support (`[BIGPAGE]`), disk-less compressed memory store (`[MZRAM]`), live memory profiling (`[MEM-PROFILE]`/`[MEM-STAT]`/`[KHEAP]`) and extended `SYS_MEMINFO` (12 × `u64`).
 - MinShell gained a `meminfo` command; `[SCHED-STAT]` now also reports the `susp=` counter.
+- Driver startup is parallelised at boot: `smp::parallel_run()` is a general SMP task queue (8 slots; APs pull work via `poll_parallel_task()`, the BSP also works; falls back to sequential on single-CPU). Four lanes under `full`/`hardware`/`audio` profiles: HDA audio, network (e1000/NE2000 + netstack + DHCP + self-test), USB (host + tests + Wi-Fi), xHCI HID + touchscreen. `[BOOT-TIME] suruculer=` measures the real parallel duration.
+- Boot phase timing: `[BOOT-TIME] <phase>=<ms> total=<ms>` lines and a `SURUM=<ms> asama=<n>` summary covering vfs/pmm/heap/vmm/proc/memory/process/Ring3/SMP/drivers/GPU/PS-2/theme/discovery/subsystems/GUI/welcome/desktop phases.
+- SMP race protections: global `PCI_CONFIG_LOCK` for PCI config ports (0xCF8/0xCFC, 14 driver files), internal `PMM_LOCK` in the PMM (public API locked, `*_locked` inner variants), `SERIAL_LOCK` for serial output, `TEXT_CONSOLE_LOCK` for the early boot console.
+- Control Panel → About tab gained a grouped keyboard-shortcut list (windows, workspaces, Super, F2/F5/F12, editing, browser, Ctrl+Alt+Del — TR/EN).
+- Workspace shortcuts documented: `Super+←`/`Super+→` switches workspaces, `Super+Shift+←`/`→` moves the window (user guide, wiki TR/EN, README).
+- `gui/frame.rs` dead-code cleanup: unused `RenderContext`/`render_frame`/`render_dirty` copies and the unused `EventLoopState` were removed.
 
 - [v2.3.0](#whats-new-v230) — previous release
 - [v1.6.0 and earlier](releases.md)

@@ -71,6 +71,7 @@ const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[inline]
 fn pci_read8(bus: u8, dev: u8, func: u8, off: u8) -> u8 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -82,6 +83,7 @@ fn pci_read8(bus: u8, dev: u8, func: u8, off: u8) -> u8 {
 
 #[inline]
 fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -93,6 +95,7 @@ fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
 
 #[inline]
 fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -104,6 +107,7 @@ fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
 
 #[inline]
 fn pci_write8(bus: u8, dev: u8, func: u8, off: u8, val: u8) {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -115,6 +119,7 @@ fn pci_write8(bus: u8, dev: u8, func: u8, off: u8, val: u8) {
 
 #[inline]
 fn pci_write16(bus: u8, dev: u8, func: u8, off: u8, val: u16) {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)
@@ -126,6 +131,7 @@ fn pci_write16(bus: u8, dev: u8, func: u8, off: u8, val: u16) {
 
 #[inline]
 fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
+    let _guard = crate::drivers::port_io::PCI_CONFIG_LOCK.lock();
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
         | ((dev as u32) << 11)

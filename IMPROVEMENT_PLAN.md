@@ -41,11 +41,13 @@ This document outlines a comprehensive plan for improving the MinOS codebase acr
 
 ### 2.1 Heap Allocator Improvements
 **Problem**: Fixed 16MB heap with linked_list_allocator; no OOM recovery.
-**Status**: Partially done — heap now grows on demand: 16 MiB initial
-commitment inside a 64 MiB virtual window (`HEAP_WINDOW_BASE`), pages are
-mapped lazily and large allocations (≥64 KiB) populate on first touch
-(`[KHEAP]`, `[MEM-PROFILE]` markers). Remaining: tiered allocator,
-pressure notifications, per-allocation tracking.
+**Status**: **Done** — heap grows on demand inside a 64 MiB virtual window
+(`HEAP_WINDOW_BASE`), pages map lazily and large allocations (≥64 KiB)
+populate on first touch. Tiered allocation landed (`tiered_alloc` /
+`test_tiered_alloc`), pressure detection triggers compression
+(`check_pressure` → `mm::memory::compress::pressure_report`,
+`MemoryProfile::under_pressure`), and per-allocation tracking exists
+(`track_insert`/`track_remove`, `[MEM-PROFILE]` markers).
 **Solution**:
 - Implement tiered allocator (small/large object separation)
 - Add memory pressure notifications
@@ -54,19 +56,21 @@ pressure notifications, per-allocation tracking.
 
 ### 2.2 Page Frame Allocator
 **Problem**: Basic bitmap allocator; no zone support (DMA, Normal, HighMem).
+**Status**: Partially done — 2 MiB huge-page alloc/free landed
+(`allocate_big_page`/`free_big_page`, `bigpage.rs`), contiguous DMA
+allocation exists, and the whole PMM is now SMP-safe via an internal
+`PMM_LOCK` spinlock (all mutating methods serialize; `*_locked` private
+variants avoid self-deadlock). Remaining: memory zones, per-cpu page
+caches.
 **Solution**:
 - Add memory zones
 - Implement per-cpu page caches
-- ~~Add huge page support (2MB/1GB)~~ — 2 MiB large-page map/unmap landed
-  (`src/mm/memory/bigpage.rs`, `[BIGPAGE]` test); PMM `alloc_big`/`free_big`
-  and per-process usage stats remain
 
 ### 2.3 Virtual Memory
 **Problem**: Manual page table management; no ASLR for kernel.
-**Solution**:
-- Add KASLR support
-- Implement copy-on-write for process memory
-- Add memory protection keys (PKRU)
+**Status**: Partially done — user-space ASLR and copy-on-write landed
+(`[USER-MEM]`/`[COW-TEST]` boot checks, `mm::user_mem`, `mm::memory::cow`).
+Remaining: KASLR, PKRU.
 
 ---
 
@@ -74,32 +78,35 @@ pressure notifications, per-allocation tracking.
 
 ### 3.1 Rendering Pipeline
 **Problem**: Full-frame redraw on every tick; limited dirty-rect support.
-**Solution**:
-- Full dirty-rect tracking per window
-- Implement render command buffering
-- Add frame pacing (vsync support)
-- GPU acceleration path for virtio-gpu/AMD/NVIDIA
+**Status**: Partially done — `GlobalDirtyTracker` + `take_dirty_region()`
+feed a unified dirty rect into `render_full_frame`, which clips drawing via
+`fb.set_frame_clip()`; overflow or untracked regions fall back to full
+redraw. Remaining: per-window render lists, frame pacing/vsync, broader GPU
+acceleration.
 
 ### 3.2 Window Management
 **Problem**: O(n²) z-order sorting; no workspace support.
-**Solution**:
-- Use balanced tree for Z-order
-- Add virtual desktop/workspace support
-- Implement window snapping zones
+**Status**: Partially done — 4 virtual workspaces landed
+(`active_workspace`, `switch_workspace`, `move_active_window_workspace`,
+workspace-aware focus/alt-tab), Aero Snap preview exists. Remaining:
+O(n²) z-order scan (still a linear `draw_order` pass), more snap zones.
 
 ### 3.3 Input Handling
 **Problem**: Direct mouse/keyboard polling in main loop.
-**Solution**:
-- Event-driven input subsystem
-- Input focus management
-- Accessibility support (screen reader, high contrast)
+**Status**: **Done (core)** — PS/2 IRQ1/IRQ12 routed through IOAPIC into
+`INPUT_QUEUE` (`InputEvent` ring buffer); `drain_input_events` feeds
+`MouseState`/`KeyboardState` in the event loop, with polling fallback when
+IOAPIC is unavailable. USB HID path also feeds the same queue.
+Remaining: screen reader, richer accessibility options.
 
 ### 3.4 Theme System
 **Problem**: Global theme token; no per-app theming.
-**Solution**:
-- Theme inheritance (global → app → widget)
-- Runtime theme loading from config
-- Dark/light/auto modes
+**Status**: **Done (core)** — `gui::theme` provides 9 runtime-switchable
+themes (`ThemeId`: VelvetDark, Daylight, Nord, TerminalGreen, Sunset,
+Dracula, Monokai, SolarizedDark, HighContrast) via a token palette;
+settings UI swatches, welcome-screen picker, and config persistence all
+landed. Remaining: per-app/widget theme inheritance, auto (day/night)
+mode.
 
 ---
 
@@ -156,10 +163,10 @@ pressure notifications, per-allocation tracking.
 ## 6. Testing Infrastructure (P2)
 
 ### 6.1 Unit Tests
-- Memory allocator tests
-- VFS operation tests
-- GUI widget tests
-- Parser tests (HTTP, HTML, CSS)
+- **Done (host suite)**: `tests/host_tests.rs` + `test_host.ps1` run ~300
+  host-side unit tests covering allocator, VFS/fs (ext4/exfat), crypto,
+  TLS, JS engine, widgets/themes readability, drivers' pure logic.
+- Remaining: in-kernel test coverage beyond boot self-tests, fuzzing.
 
 ### 6.2 Integration Tests
 - Boot-to-desktop test
@@ -196,9 +203,9 @@ pressure notifications, per-allocation tracking.
 - Benchmarks
 
 ### 8.2 CI Pipeline
-- rustfmt/clippy checks
-- Unit tests on host target
-- QEMU integration tests
+- rustfmt/clippy checks — `cargo fmt` + `cargo clippy` run clean locally
+- Unit tests on host target — `test_host.ps1` (295+ tests passing)
+- QEMU integration tests — `test_qemu.ps1`, `boot_check.ps1`
 - Binary size tracking
 
 ---
@@ -248,8 +255,26 @@ Notes:
 
 ---
 
+## Boot & SMP Notes (2026-11)
+
+- **Boot time profiling**: `src/boot/timing.rs` (`PhaseTimer`, `begin()`,
+  `mark()`, `report_total()`) instruments every boot phase; serial output
+  shows `[BOOT-TIME] phase=Nms toplam=Mms` and a final `SURUM=` line.
+- **Parallel driver init**: independent driver groups (HDA audio, NIC+netstack,
+  USB host+Wi-Fi, xHCI HID) run as lanes on APs via
+  `smp::parallel_run()`/`ParallelTask` (`unsafe fn(*mut u8)` work queue
+  polled by AP idle loops and the BSP). DMA frames are pre-allocated on the
+  BSP; the HID lane is the only PMM consumer during the run.
+- **New SMP safety locks** (required by parallel init):
+  - `drivers::port_io::PCI_CONFIG_LOCK` — serializes the shared 0xCF8/0xCFC
+    config mechanism across all driver-local `pci_read*`/`pci_write*` helpers.
+  - `mm::pmm::PMM_LOCK` — internal spinlock in `PhysicalMemoryManager`;
+    mutating methods lock, internal callers use `*_locked` variants.
+  - `serial::SERIAL_LOCK` — protects `LOG_BYTES` and UART output.
+
 ## Success Metrics
-- Boot time < 3s (currently ~5s)
+- Boot time < 3s kernel-side (currently ~3.5s to desktop-ready; welcome
+  screen is interactive and excluded from kernel timing)
 - Idle CPU < 1% (currently ~3%)
 - Zero panics in 24h stress test
 - All public APIs documented

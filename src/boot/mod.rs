@@ -12,3 +12,4 @@ pub mod start;
 pub mod subsystems;
 pub mod text_console;
 pub mod time;
+pub mod timing;

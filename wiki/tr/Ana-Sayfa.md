@@ -28,7 +28,7 @@ minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.102.0-nightly |
-| **Toplam Kod Satırı (ham)** | 140.094 satır (Rust: `src/` + `tests/` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | 154.957 satır (Rust: `src/` + `tests/` + `build.rs`) |
 | **Birim Testleri** | 295 geçti / 0 hata |
 | **Güvenilen Kök CA** | 51 sertifika |
 | **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Başlat Menüsü |

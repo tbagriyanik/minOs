@@ -80,7 +80,9 @@ Tarayıcı `browser` komutu veya Başlat menüsünden açılır. `https://` adre
   - Sarı `[-]` butonu: Pencereyi simge durumuna küçülterek görev çubuğuna indirir.
 - **Pencere Yerleştirme (Snap):** Başlık çubuğunu ekranın en üstüne sürükleyip bırakırsanız pencere otomatik olarak maksimize edilir.
 - **Pencere Değiştirme:** `Alt+Tab` pencereler arasında soldan sağa ilerler; `Shift+Alt+Tab` aynı sırada geriye gider. Alt tuşunu bırakınca seçili pencere öne gelir.
-- **Super Kısayolları:** `Super+D` masaüstünü gösterir/geri getirir, `Super+M` tüm pencereleri küçültür, `Super+E` Dosya Yöneticisi'ni açar. Küçültülmüş pencereler de `Alt+Tab` listesinde görünür ve seçilince geri açılır.
+- **Super Kısayolları:** `Super+D` masaüstünü gösterir/geri getirir, `Super+M` tüm pencereleri küçültür, `Super+E` Dosya Yöneticisi'ni açar, `Super+R` Çalıştır iletişim kutusunu açar. Küçültülmüş pencereler de `Alt+Tab` listesinde görünür ve seçilince geri açılır.
+- **Workspace Kısayolları:** `Super+←` / `Super+→` sanal masaüstleri (workspace) arasında geçiş yapar; `Super+Shift+←` / `Super+Shift+→` ise odaklı pencereyi önceki/sonraki workspace'e taşır.
+- **Diğer Sistem Kısayolları:** `Alt+F4` odaklı pencereyi kapatır, `F2` seçili öğeyi yeniden adlandırır, `F5` içeriği yeniler, `F12`/`PrintScreen` ekran görüntüsü alır, `Ctrl+Alt+Delete` Görev Yöneticisi'ni açar, `Ctrl+Alt+NumLock` fare tuşları (MouseKeys) modunu açıp kapatır.
 - **Sistem Tepsisi (Sağ Alt):** Sırasıyla **klavye rozeti (`TR`/`EN`)**, **tema düğmesi**, **SES** düğmesi ve **canlı saat** bulunur. Saate tıklayınca canlı takvim, **SES**'e tıklayınca ses paneli açılır.
 - **Tema Değiştirme:** Görev çubuğundaki renk örneğine, Sistem Ayarları > **Değiştir** düğmesine veya **tema palet şeridindeki renk örneklerine** tıklayın.
 - **Masaüstü Sağ Tık Menüsü:** Boş alana sağ tıklayarak **Yeni** alt menüsünden dosya/klasör oluşturun, **Yenile** ile masaüstü listesini güncelleyin veya **Görev Yöneticisi**'ni açın.
@@ -162,8 +164,8 @@ minos/
 > Son güncelleme: 15 Kasım 2026 (v2.4.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 203 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | 140.094 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 206 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | 154.957 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Birim Testleri (`test_host.ps1`)** | 295 test (0 hata, %100 başarılı) |

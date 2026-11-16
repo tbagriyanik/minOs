@@ -203,28 +203,24 @@ pub fn unmap_range(
     let mut address = page_of(start);
     let limit = page_up(end);
     let mut freed = 0usize;
-    // 64'lü parçalar halinde toplu kaldırma: sayfa başına dört seviyeli
-    // tablo yürüyüşü yerine PT kapsamı başına bir kez yol kurulur.
-    let mut buf = [0u64; 64];
     while address < limit {
-        let chunk = ((limit - address) / PAGE_SIZE).min(buf.len() as u64) as usize;
-        let n = process
-            .address_space
-            .unmap_page_run(address, chunk, &mut buf);
-        for frame in buf.iter().take(n) {
-            if is_zero_frame(*frame) {
-                // Paylaşılan sıfır sayfası: süreçlerce ortak, asla iade edilmez.
-                freed += 1;
-                continue;
-            }
-            let _ = process.resources.take_user_frame(*frame);
-            match crate::mm::vmm::release_frame_shared(*frame) {
-                Some(false) => {}
-                _ => pmm.free_frame(*frame),
-            }
+        let Some(frame) = process.address_space.unmap_page(address) else {
+            address += PAGE_SIZE;
+            continue;
+        };
+        if is_zero_frame(frame) {
+            // Paylaşılan sıfır sayfası: süreçlerce ortak, asla iade edilmez.
             freed += 1;
+            address += PAGE_SIZE;
+            continue;
         }
-        address += (chunk as u64) * PAGE_SIZE;
+        let _ = process.resources.take_user_frame(frame);
+        match crate::mm::vmm::release_frame_shared(frame) {
+            Some(false) => {}
+            _ => pmm.free_frame(frame),
+        }
+        freed += 1;
+        address += PAGE_SIZE;
     }
     freed
 }
@@ -245,29 +241,33 @@ pub fn map_lazy_range(
 ) -> Result<(), &'static str> {
     let start_page = page_of(start);
     let limit = page_up(end);
+    let mut address = start_page;
+    while address < limit {
+        if process.address_space.read_entry(address).is_some() {
+            unmap_range_keep_frames(process, start_page, address);
+            return Err("Bellek araligi zaten eslenmis");
+        }
+        address += PAGE_SIZE;
+    }
     // Veri sayfası semantiği: kullanıcı + NX; yazma koruma ihlaliyle #PF üretir.
     let _ = flags;
     let Some(zero) = zero_page_frame(pmm) else {
         return Err("PMM yetersiz bellek: sifir sayfasi");
     };
     let lazy_flags = (PageFlags::USER_DATA & !PageFlags::WRITABLE) | PAGE_LAZY;
-    // Tek geçişte toplu eşleme: tablo zinciri PT kapsamı (512 sayfa)
-    // başına bir kez kurulur; sayfa başına dört seviyeli yürüyüş yapılmaz.
-    // Mevcut eşlemeyle çakışma veya PMM tablo tahsisi hatasında yazılan
-    // sayfalar geri alınır (atomiklik korunur).
-    let total = ((limit - start_page) / PAGE_SIZE) as usize;
-    let (mapped, err) = process
-        .address_space
-        .map_uniform_pages(start_page, total, zero, lazy_flags, pmm);
-    if err.is_none() && mapped == total {
-        return Ok(());
+    address = start_page;
+    while address < limit {
+        if process
+            .address_space
+            .map_page(address, zero, lazy_flags, pmm)
+            .is_err()
+        {
+            unmap_range_keep_frames(process, start_page, address);
+            return Err("Tembel sayfa eslenemedi");
+        }
+        address += PAGE_SIZE;
     }
-    unmap_range_keep_frames(
-        process,
-        start_page,
-        start_page + (mapped as u64) * PAGE_SIZE,
-    );
-    Err(err.unwrap_or("Tembel sayfa eslenemedi"))
+    Ok(())
 }
 
 /// Tembel bir kullanıcı sayfasını gerçekleştirir: sıfırlanmış çerçeve
@@ -740,13 +740,11 @@ pub fn unmap_range_keep_frames(process: &mut Process, start: u64, end: u64) -> u
     let mut address = page_of(start);
     let limit = page_up(end);
     let mut unmapped = 0usize;
-    let mut buf = [0u64; 64];
     while address < limit {
-        let chunk = ((limit - address) / PAGE_SIZE).min(buf.len() as u64) as usize;
-        unmapped += process
-            .address_space
-            .unmap_page_run(address, chunk, &mut buf);
-        address += (chunk as u64) * PAGE_SIZE;
+        if process.address_space.unmap_page(address).is_some() {
+            unmapped += 1;
+        }
+        address += PAGE_SIZE;
     }
     unmapped
 }

@@ -93,9 +93,6 @@ pub struct ProcessContext {
     pub rflags: u64,
     pub ss: u64,
     pub cr3: u64,
-    /// PCID (Process-Context Identifier). Kernel için 0, user süreçler için atanan değer.
-    /// TR / EN: PCID for this process context. Kernel = 0, user processes get assigned.
-    pub pcid: u16,
     /// Sürecin kendi çekirdek yığını üzerinde, kayıtlı yazmaç alanının
     /// başlangıcını gösteren RSP değeri. Timer/syscall kesmesinin hazırladığı
     /// `frame` işaretçisi buraya yazılır; `resume_user_frame` bu adresten
@@ -155,7 +152,6 @@ impl ProcessContext {
             cr3 = out(reg) ctx.cr3,
             options(nostack, preserves_flags),
         );
-        ctx.pcid = (ctx.cr3 & 0xFFF) as u16;
         ctx
     }
 
@@ -167,7 +163,6 @@ impl ProcessContext {
     /// eşlenmiş bir PML4 fiziksel adresine işaret etmelidir. Çağrı sonrası
     /// eski yığına dönülemez.
     pub unsafe fn restore(&self) {
-        let cr3 = self.cr3 | (self.pcid as u64);
         core::arch::asm!(
             "mov cr3, {cr3}",
             "mov rax, {rax}",
@@ -189,7 +184,7 @@ impl ProcessContext {
             "push {rflags}",
             "popfq",
             "jmp {rip}",
-            cr3 = in(reg) cr3,
+            cr3 = in(reg) self.cr3,
             rax = in(reg) self.rax,
             rbx = in(reg) self.rbx,
             rcx = in(reg) self.rcx,
@@ -437,14 +432,10 @@ impl Process {
                 rflags: 0x202,
                 ss: 0,
                 cr3: 0,
-                pcid: 0,
                 kernel_rsp: 0,
             },
             resources: ProcessResources::empty(),
-            address_space: AddressSpace {
-                pml4_phys: 0,
-                pcid: 0,
-            },
+            address_space: AddressSpace { pml4_phys: 0 },
             kstack_phys: 0,
             kstack_top: 0,
             resources_reaped: false,
@@ -499,9 +490,6 @@ pub struct ProcessManager {
     pub files: FileTable,
     /// Kullanıcı süreçleri için round-robin imleci (çekirdek slotu atlanır).
     user_rr: usize,
-    /// Sonraki kullanılacak PCID değeri (kernel için 0 ayrıldı).
-    /// TR / EN: Next PCID to assign (0 reserved for kernel).
-    next_pcid: u16,
 }
 
 /// Sürece özel çekirdek yığını sayfa sayısı (4 x 4 KiB = 16 KiB).
@@ -516,32 +504,7 @@ impl ProcessManager {
             active_count: 0,
             files: FileTable::new(),
             user_rr: 1,
-            next_pcid: 1, // 0 kernel için ayrıldı
         }
-    }
-
-    /// Yeni bir PCID atar (kernel için 0 ayrıldı). 4095'e ulaşıldığında
-    /// sarmalanır (wraparound) — pratikte süreç sayısı sınırlı olduğu için
-    /// çakışma riski düşüktür.
-    ///
-    /// INVPCID desteği olmayan işlemcide PCID kullanılmaz: tüm süreçler
-    /// PCID=0 ile tek TLB bağlamını paylaşır (`invlpg` her zaman yeterli
-    /// olur). INVPCID varsa atanan PCID tek-bağlam invalidation ile
-    /// temizlenir — PCID daha önce kullanıldıysa (sarmalama) eski sahibin
-    /// bayat çevirileri yeni sahibin sayfa tablolarıyla çakışmasın.
-    /// TR / EN: Assign a new PCID (0 reserved for kernel). Wraps at 4095.
-    fn alloc_pcid(&mut self) -> u16 {
-        if !crate::arch::x86_64::invpcid_supported() {
-            return 0;
-        }
-        let pcid = self.next_pcid;
-        crate::arch::x86_64::invpcid_flush_context(pcid);
-        self.next_pcid = if self.next_pcid >= 4095 {
-            1
-        } else {
-            self.next_pcid + 1
-        };
-        pcid
     }
 
     /// Initialize kernel process (PID 0 / init / kernel_core).
@@ -556,10 +519,8 @@ impl ProcessManager {
         p.state = ProcessState::Running;
         p.priority = ProcessPriority::Realtime;
         p.resources.limits = ResourceLimits::unlimited();
-        // Kernel sureci mevcut adres uzayini kullanir, PCID = 0
-        let mut aspace = AddressSpace::current();
-        aspace.pcid = 0;
-        p.address_space = aspace;
+        // Kernel sureci mevcut adres uzayini kullanir
+        p.address_space = AddressSpace::current();
         fd::init_standard_fds(&mut p.fds);
         self.processes[0] = p;
         self.current_pid = 0;
@@ -599,10 +560,8 @@ impl ProcessManager {
             core::ptr::write_bytes(pml4_ptr, 0, 4096);
         }
 
-        let pcid = self.alloc_pcid();
         let mut address_space = AddressSpace {
             pml4_phys: pml4_frame,
-            pcid,
         };
 
         // Kernel mapping'leri yeni adres uzayına kopyala (tam izolasyon için gerekli)
@@ -630,7 +589,6 @@ impl ProcessManager {
         p.context.rip = entry_point;
         p.context.rsp = stack_top;
         p.context.cr3 = pml4_frame; // Yeni CR3 değeri
-        p.context.pcid = pcid; // PCID
         p.context.rflags = 0x202; // IF = 1 (Kesmeler acik)
 
         p.resources.app_id = app_id;
@@ -1101,7 +1059,6 @@ impl ProcessManager {
                 PAGE_SIZE as usize,
             );
         }
-        let child_pcid = self.alloc_pcid();
         let mut child = Process::empty();
         child.pid = self.next_pid;
         self.next_pid = self.next_pid.saturating_add(1);
@@ -1112,7 +1069,6 @@ impl ProcessManager {
         child.priority = parent.priority;
         child.context = parent.context;
         child.context.cr3 = root;
-        child.context.pcid = child_pcid;
         child.context.rax = 0;
         child.context.kernel_rsp = 0;
         child.has_saved_user_context = parent.has_saved_user_context;
@@ -1136,13 +1092,7 @@ impl ProcessManager {
         child.signal_handlers = parent.signal_handlers;
         child.signal_mask = parent.signal_mask;
         child.syscall_mask = parent.syscall_mask;
-        // context.pcid ile address_space.pcid aynı değeri taşımalıdır;
-        // iki ayrı alloc_pcid çağrısı PCID sarmalamasını iki kat hızlandırır
-        // ve restore()'un yazdığı PCID ile adres uzayının kaydı çelişirdi.
-        child.address_space = AddressSpace {
-            pml4_phys: root,
-            pcid: child_pcid,
-        };
+        child.address_space = AddressSpace { pml4_phys: root };
         child.resources.record_frame(root);
 
         if let Err(error) = child.address_space.clone_kernel_mappings(pmm) {
@@ -1276,24 +1226,10 @@ impl ProcessManager {
         let private_flags = (entry & !PAGE_COW) | PageFlags::WRITABLE;
 
         // Paylaşım tek eldeyse kopya gerekmez: çerçeveyi yerinde yazılabilir yap.
-        let release = crate::mm::vmm::release_frame_shared(shared_frame);
-        let copy_needed = !matches!(release, Some(true));
-        // GEÇİCİ TEŞHİS: COW yol seçimini ve paylaşım sayacını izle.
-        crate::serial_print("[COW-DBG] pid=");
-        crate::serial::print_dec(pid as u64);
-        crate::serial_print(" page=");
-        crate::serial::print_hex(page);
-        crate::serial_print(" frame=");
-        crate::serial::print_hex(shared_frame);
-        crate::serial_print(" release=");
-        crate::serial::print_dec(match release {
-            Some(true) => 1,
-            Some(false) => 2,
-            None => 3,
-        });
-        crate::serial_print(" copy_needed=");
-        crate::serial::print_dec(copy_needed as u64);
-        crate::serial_print("\n");
+        let copy_needed = !matches!(
+            crate::mm::vmm::release_frame_shared(shared_frame),
+            Some(true)
+        );
         if !copy_needed {
             return self.processes[slot]
                 .address_space
@@ -1311,10 +1247,6 @@ impl ProcessManager {
             let destination = crate::drivers::phys_to_virt(copy) as *mut u8;
             core::ptr::copy_nonoverlapping(source, destination, PAGE_SIZE as usize);
         }
-        // GEÇİCİ TEŞHİS: ayrılan özel kopya çerçevesini izle.
-        crate::serial_print("[COW-DBG] copy=");
-        crate::serial::print_hex(copy);
-        crate::serial_print("\n");
         if !self.processes[slot].resources.record_user_frame(copy) {
             pmm.free_frame(copy);
             let _ = crate::mm::vmm::mark_frame_shared(shared_frame);
@@ -1491,11 +1423,7 @@ impl ProcessManager {
                 PAGE_SIZE as usize,
             );
         }
-        let exec_pcid = self.alloc_pcid();
-        let mut new_space = AddressSpace {
-            pml4_phys: root,
-            pcid: exec_pcid,
-        };
+        let mut new_space = AddressSpace { pml4_phys: root };
         if let Err(error) = new_space.clone_kernel_mappings(pmm) {
             pmm.free_frame(root);
             return Err(error);
@@ -1558,7 +1486,6 @@ impl ProcessManager {
             process.context.rip = loaded.entry_point;
             process.context.rsp = loaded.stack_pointer;
             process.context.cr3 = root;
-            process.context.pcid = exec_pcid;
             process.context.kernel_rsp = 0;
             process.has_saved_user_context = false;
             // Yeni imaj: heap/mm bölgeleri sıfırlanır, mmap tabanı yeniden
@@ -1575,11 +1502,7 @@ impl ProcessManager {
         }
         if was_active {
             unsafe {
-                let new_aspace = AddressSpace {
-                    pml4_phys: root,
-                    pcid: exec_pcid,
-                };
-                new_aspace.load_cr3();
+                core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
             }
         }
         old_space.free_user_page_tables(pmm);
@@ -1737,24 +1660,25 @@ impl ProcessManager {
             .find(|p| p.pid == pid && p.state != ProcessState::Unused)
     }
 
-    /// Activate the specified process's address space (switch CR3 with PCID).
+    /// Activate the specified process's address space (switch CR3).
     /// This function should be called during context switch.
-    /// Belirtilen surecin adres uzayını aktif eder (PCID ile CR3 değiştirir).
+    /// Belirtilen surecin adres uzayını aktif eder (CR3 değiştirir).
     /// Bu fonksiyon context switch sırasında çağrılmalıdır.
     pub fn switch_address_space(&self, pid: usize) {
         if let Some(p) = self.get_process(pid) {
             if p.address_space.pml4_phys != 0 {
                 unsafe {
-                    p.address_space.load_cr3();
+                    // CR3'ü yükle (adres uzayını değiştir)
+                    core::arch::asm!("mov cr3, {}", in(reg) p.address_space.pml4_phys, options(nostack, preserves_flags));
                 }
             }
         }
     }
 
     /// Mevcut calisan surecin kayitli baglamini gunceller, yeni surecen CR3
-    /// degerini (`pml4 | pcid`) yukler ve kayitli yaymac durumunu geri yukler
-    /// (tam context switch). PCIDE açıkken `mov cr3` TLB flush üretmediğinden
-    /// her geçişte yazmak güvenli ve ucuzdur.
+    /// degerini yukler ve kayitli yaymac durumunu geri yukler (tam context
+    /// switch). CR3 degisimi her geciste yapilir; ayni PML4'ye donuldugu takdirde
+    /// gereksiz TLB temizleme önlenir.
     ///
     /// # Safety
     /// Donanım kesmesi veya scheduler sinirlari cagrisinda kullanilir.
@@ -1781,12 +1705,19 @@ impl ProcessManager {
             return self.context_switch_locked(0);
         }
 
-        // Adres uzayini ve baglami yeni surec icin hazirla.
-        // CR3 yazımı `ctx.restore()` içinde `cr3 | pcid` olarak yapılır;
-        // PCIDE açıkken `mov cr3` TLB flush üretmediğinden süreç geçişleri
-        // sayfa çevirilerini PCID etiketleriyle korur. Burada ayrıca
-        // `mov cr3` yapmak gereksiz ikinci bir yazım olurdu.
+        // Adres uzayini ve baglami yeni surec icin hazirla
+        let next_pml4 = self
+            .get_process(next_pid)
+            .map(|p| p.address_space.pml4_phys);
         let next_context = self.get_process(next_pid).map(|p| p.context);
+
+        let is_same_space = current_pid == next_pid
+            || next_pml4
+                == Some(
+                    self.get_process(current_pid)
+                        .map(|p| p.address_space.pml4_phys)
+                        .unwrap_or(0),
+                );
 
         // Yeni sürece geç
         if let Some(next_p) = self.processes.iter_mut().find(|p| p.pid == next_pid) {
@@ -1794,8 +1725,18 @@ impl ProcessManager {
             next_p.state = ProcessState::Running;
             next_p.cpu_time_ticks = next_p.cpu_time_ticks.saturating_add(1);
 
+            // CR3 degisimi: adres uzayi degisse PML4'yi yukle (item 4).
+            if let Some(pml4) = next_pml4 {
+                if pml4 != 0 && !is_same_space {
+                    core::arch::asm!(
+                        "mov cr3, {}",
+                        in(reg) pml4,
+                        options(nostack, preserves_flags)
+                    );
+                }
+            }
+
             // Kayitli baglami geri yukle ve sureci devam ettir (item 3).
-            // `restore` CR3'ü de doğru PCID ile yükler.
             if let Some(ctx) = next_context {
                 ctx.restore();
             }
@@ -1813,7 +1754,11 @@ impl ProcessManager {
                 .map(|p| p.address_space.pml4_phys)
             {
                 if pml4 != 0 {
-                    AddressSpace::load_cr3_phys(pml4);
+                    core::arch::asm!(
+                        "mov cr3, {}",
+                        in(reg) pml4,
+                        options(nostack, preserves_flags)
+                    );
                 }
             }
         }

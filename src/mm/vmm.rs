@@ -195,25 +195,11 @@ impl PageTable {
 /// Huge page PD girdilerinin fiziksel adres maskesi (bit 51..21).
 const HUGE_PAGE_BASE_MASK: u64 = 0x000F_FFFF_FFE0_0000;
 
-/// Etkin CR3'ün ham değerini döndürür (PML4 | PCID | bayrak bitleri).
-#[inline(always)]
-pub fn current_cr3() -> u64 {
-    let cr3: u64;
-    unsafe {
-        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
-    }
-    cr3
-}
-
 /// Sanal Bellek Adres Uzayı
 #[derive(Debug, Clone, Copy)]
 pub struct AddressSpace {
     /// PML4 kök tablosunun fiziksel adresi (CR3'e yüklenecek değer)
     pub pml4_phys: u64,
-    /// Process-Context Identifier (PCID). Kernel için 0, user süreçler için atanan
-    /// benzersiz değer. CR3'ün bit 11..0'si.
-    /// TR / EN: Process-Context Identifier. Kernel = 0, user processes get assigned.
-    pub pcid: u16,
 }
 
 impl AddressSpace {
@@ -227,90 +213,6 @@ impl AddressSpace {
         }
         Self {
             pml4_phys: cr3 & 0x000F_FFFF_FFFF_F000,
-            pcid: (cr3 & 0xFFF) as u16,
-        }
-    }
-
-    /// Mevcut CR3 değerini (PML4 + PCID) döner.
-    /// TR / EN: Returns current CR3 value (PML4 + PCID).
-    #[allow(dead_code)]
-    fn current_cr3() -> u64 {
-        let cr3: u64;
-        unsafe {
-            core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
-        }
-        cr3
-    }
-
-    /// CR3'ü PCID ile yükler. PCIDE açık olduğunda aynı PML4'ye
-    /// dönüşte TLB tam temizlenmez (sadece no-invalidation).
-    /// TR / EN: Load CR3 with PCID. With PCIDE enabled, returning to same PML4
-    /// does not fully flush TLB (no-invalidation).
-    ///
-    /// # Safety
-    /// `pml4_phys` geçerli, hizalı bir sayfa tablosu çerçevesine işaret etmelidir.
-    /// TR / EN: `pml4_phys` must point to a valid, aligned page table frame.
-    pub unsafe fn load_cr3(&self) {
-        let cr3 = self.pml4_phys | (self.pcid as u64);
-        if Self::current_cr3() == cr3 {
-            // `mov cr3` her yazımda hedef PCID'nin TLB'sini tamamen boşaltır;
-            // aynı değere tekrar yazmak saf maliyettir.
-            return;
-        }
-        core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack, preserves_flags));
-    }
-
-    /// Ham PML4 fiziksel adresini PCID=0 ile CR3'e yükler; değer zaten
-    /// aynıysa TLB flush'u atlanır. Tüm mevcut CR3 yazma noktaları PCID
-    /// bitlerini kullanmadığından (PCID=0 tek bağlam) bu yardımcı mevcut
-    /// davranışı korur.
-    ///
-    /// # Safety
-    /// `pml4_phys` geçerli, hizalı bir PML4 fiziksel adresi olmalıdır.
-    #[inline]
-    pub unsafe fn load_cr3_phys(pml4_phys: u64) {
-        if Self::current_cr3() == pml4_phys {
-            return;
-        }
-        core::arch::asm!("mov cr3, {}", in(reg) pml4_phys, options(nomem, nostack, preserves_flags));
-    }
-
-    /// Bu adres uzayı şu anda etkin CR3 mü? Etkin değilse sayfa tablosu
-    /// değişiklikleri TLB'de karşılık bulmaz: bir sonraki CR3 yazımı zaten
-    /// TLB'yi tamamen boşalttığından `invlpg` gereksizdir. Süreç kurulum
-    /// yolları (exec, fork, mmap, lazy heap) büyük ölçüde etkin-olmayan
-    /// uzaylara yazdığı için bu kapı sıcak yoldaki `invlpg` maliyetini
-    /// büyük ölçüde kaldırır.
-    #[inline(always)]
-    fn is_active_space(&self) -> bool {
-        self.pml4_phys == (Self::current_cr3() & 0x000F_FFFF_FFFF_F000)
-    }
-
-    /// Sayfa eşlemesi değiştiğinde TLB girdisini geçersiz kılar.
-    ///
-    /// Etkin uzayda `invlpg` yeterlidir. Etkin olmayan uzayda sayfa başına
-    /// `invlpg` işe yaramaz (INVLPG yalnızca geçerli CR3/PCID'yi etkiler);
-    /// PCID'li bağlamlar için tek seferlik `INVPCID` ile o PCID'nin tüm
-    /// çevirileri temizlenir. PCID=0 (kernel) veya INVPCID yoksa eski
-    /// davranış korunur: bir sonraki CR3 yazımı zaten TLB'yi boşaltır.
-    #[inline(always)]
-    fn flush_page_if_active(&self, virt_addr: u64) {
-        if self.is_active_space() {
-            unsafe {
-                core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
-            }
-        } else if self.pcid != 0 {
-            crate::arch::x86_64::invpcid_flush_context(self.pcid);
-        }
-    }
-
-    /// Toplu eşleme/kaldırma sonunda çağrılır: etkin uzayda sayfa başına
-    /// `invlpg` zaten yapıldı; etkin değilse tek `INVPCID` ile PCID'nin
-    /// bayat çevirileri temizlenir (N sayfa × INVPCID yerine 1 kez).
-    #[inline(always)]
-    fn flush_run_if_inactive(&self, touched: bool) {
-        if touched && !self.is_active_space() && self.pcid != 0 {
-            crate::arch::x86_64::invpcid_flush_context(self.pcid);
         }
     }
 
@@ -392,8 +294,8 @@ impl AddressSpace {
             let pt = &mut *Self::table_ptr(pt_phys);
             pt.entries[pt_idx] = (phys_addr & 0x000F_FFFF_FFFF_F000) | flags;
 
-            // TLB Girişini Geçersiz Kıl (Invalpg) — yalnızca etkin uzayda.
-            self.flush_page_if_active(virt_addr);
+            // TLB Girişini Geçersiz Kıl (Invalpg)
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
         }
 
         Ok(())
@@ -476,7 +378,7 @@ impl AddressSpace {
                 return Err("map_big_page: adres araligi zaten eslenmis");
             }
             pd.entries[pd_idx] = (phys_addr & HUGE_PAGE_BASE_MASK) | flags | PageFlags::HUGE_PAGE;
-            self.flush_page_if_active(virt_addr);
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
         }
         Ok(())
     }
@@ -509,7 +411,7 @@ impl AddressSpace {
                 return None;
             }
             pd.entries[pd_idx] = 0;
-            self.flush_page_if_active(virt_addr);
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
             let _ = pmm;
             Some(entry & HUGE_PAGE_BASE_MASK)
         }
@@ -585,7 +487,7 @@ impl AddressSpace {
                 return Err("set_flags: eşlenmemiş adres");
             }
             pt.entries[pt_idx] = (entry & 0x000F_FFFF_FFFF_F000) | flags;
-            self.flush_page_if_active(virt_addr);
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
         }
         Ok(())
     }
@@ -627,7 +529,7 @@ impl AddressSpace {
             }
             pt.entries[pt_idx] =
                 (phys_addr & 0x000F_FFFF_FFFF_F000) | (entry & !0x000F_FFFF_FFFF_F000);
-            self.flush_page_if_active(virt_addr);
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
         }
         Ok(())
     }
@@ -710,214 +612,11 @@ impl AddressSpace {
 
             pt.entries[pt_idx] = 0;
 
-            // TLB flush — yalnızca etkin uzayda gerekli.
-            self.flush_page_if_active(virt_addr);
+            // TLB flush
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
 
             Some(entry & 0x000F_FFFF_FFFF_F000)
         }
-    }
-
-    /// `map_run_inner` için ortak yürüyüş: `start`'tan itibaren `count` adet
-    /// ardışık 4 KiB sayfayı `frame_at(i)` çerçevesiyle eşler. Sayfa tablosu
-    /// zinciri (PML4→PDPT→PD→PT) 2 MiB'lik PT kapsamı değişmedikçe yeniden
-    /// kurulmaz; `map_page`'in sayfa başına dört seviyeli yürüyüş maliyeti
-    /// grup başına bir kez ödenir.
-    ///
-    /// Dönüş: `(eşlenen_sayfa_sayısı, hata)`.
-    /// * `hata == None` → istenen aralığın tamamı eşlendi.
-    /// * `Some("zaten eslenmis")` → mevcut bir eşlemeyle çakışıldı; `mapped`
-    ///   sayfa yazılmıştır.
-    /// * Diğer `Some` → PMM tablo tahsisi başarısız; `mapped` sayfa yazılmıştır.
-    ///
-    /// Erken durmada eşlenen sayfalar yerinde kalır; çağıran `unmap_page`
-    /// /`unmap_range` ile temizlemekle yükümlüdür. TLB invalidasyonu her
-    /// sayfa için `flush_page_if_active` üzerinden yapılır (etkin-olmayan
-    /// uzayda atlanır).
-    fn map_run_inner(
-        &mut self,
-        start: u64,
-        count: usize,
-        flags: u64,
-        pmm: &mut PhysicalMemoryManager,
-        frame_at: impl Fn(usize) -> u64,
-    ) -> (usize, Option<&'static str>) {
-        if count == 0 {
-            return (0, None);
-        }
-        if !start.is_multiple_of(PAGE_SIZE) {
-            return (0, Some("Adres 4KB sayfa sinirina hizali degil"));
-        }
-        let user = (flags & PageFlags::USER) != 0;
-        let active = self.is_active_space();
-        // (pml4, pdpt, pd) → pt_phys önbelleği: 512 sayfalık PT kapsamı.
-        let mut cache: Option<(usize, usize, usize, u64)> = None;
-        let mut mapped = 0usize;
-        for i in 0..count {
-            let va = start + (i as u64) * PAGE_SIZE;
-            let pml4_idx = ((va >> 39) & 0x1FF) as usize;
-            let pdpt_idx = ((va >> 30) & 0x1FF) as usize;
-            let pd_idx = ((va >> 21) & 0x1FF) as usize;
-            let pt_idx = ((va >> 12) & 0x1FF) as usize;
-            let pt_phys = match cache {
-                Some((a, b, c, pt)) if a == pml4_idx && b == pdpt_idx && c == pd_idx => pt,
-                _ => {
-                    let pt = unsafe {
-                        let pml4 = &mut *Self::table_ptr(self.pml4_phys);
-                        let pdpt_phys = match Self::get_or_create_next_level(
-                            &mut pml4.entries[pml4_idx],
-                            pmm,
-                            user,
-                        ) {
-                            Some(p) => p,
-                            None => {
-                                self.flush_run_if_inactive(mapped > 0);
-                                return (
-                                    mapped,
-                                    Some("PMM yetersiz bellek: PDPT tahsis edilemedi"),
-                                );
-                            }
-                        };
-                        let pdpt = &mut *Self::table_ptr(pdpt_phys);
-                        let pd_phys = match Self::get_or_create_next_level(
-                            &mut pdpt.entries[pdpt_idx],
-                            pmm,
-                            user,
-                        ) {
-                            Some(p) => p,
-                            None => {
-                                self.flush_run_if_inactive(mapped > 0);
-                                return (mapped, Some("PMM yetersiz bellek: PD tahsis edilemedi"));
-                            }
-                        };
-                        let pd = &mut *Self::table_ptr(pd_phys);
-                        // PD girdisi 2 MiB huge page ise 4K eşleme çakışır.
-                        if (pd.entries[pd_idx] & PageFlags::PRESENT) != 0
-                            && (pd.entries[pd_idx] & PageFlags::HUGE_PAGE) != 0
-                        {
-                            self.flush_run_if_inactive(mapped > 0);
-                            return (mapped, Some("zaten eslenmis"));
-                        }
-                        match Self::get_or_create_next_level(&mut pd.entries[pd_idx], pmm, user) {
-                            Some(p) => p,
-                            None => {
-                                self.flush_run_if_inactive(mapped > 0);
-                                return (mapped, Some("PMM yetersiz bellek: PT tahsis edilemedi"));
-                            }
-                        }
-                    };
-                    cache = Some((pml4_idx, pdpt_idx, pd_idx, pt));
-                    pt
-                }
-            };
-            let frame = frame_at(i);
-            if !frame.is_multiple_of(PAGE_SIZE) {
-                self.flush_run_if_inactive(mapped > 0);
-                return (mapped, Some("Fiziksel cerceve 4KB sinirina hizali degil"));
-            }
-            unsafe {
-                let pt = &mut *Self::table_ptr(pt_phys);
-                if (pt.entries[pt_idx] & PageFlags::PRESENT) != 0 {
-                    self.flush_run_if_inactive(mapped > 0);
-                    return (mapped, Some("zaten eslenmis"));
-                }
-                pt.entries[pt_idx] = (frame & 0x000F_FFFF_FFFF_F000) | flags;
-                if active {
-                    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
-                }
-            }
-            mapped += 1;
-        }
-        self.flush_run_if_inactive(mapped > 0);
-        (mapped, None)
-    }
-
-    /// `count` adet ardışık 4 KiB sayfayı aynı fiziksel çerçeve (`frame`)
-    /// ve bayraklarla eşler. Temel kullanımı `user_mem::map_lazy_range`'dir:
-    /// tüm sayfalar paylaşılan sıfır sayfasını gösterir.
-    ///
-    /// Dönüş `(eşlenen_sayfa_sayısı, hata)` — ayrıntı `map_run_inner`'da.
-    pub fn map_uniform_pages(
-        &mut self,
-        start: u64,
-        count: usize,
-        frame: u64,
-        flags: u64,
-        pmm: &mut PhysicalMemoryManager,
-    ) -> (usize, Option<&'static str>) {
-        self.map_run_inner(start, count, flags, pmm, |_| frame)
-    }
-
-    /// `frames[i]` çerçevesini `start + i*4096`'ya eşler; `frames.len()`
-    /// kadar sayfa yazılır. Çerçeveler farklıysa (ör. kernel heap büyük
-    /// slotu) kullanılır. Dönüş `(eşlenen_sayfa_sayısı, hata)`.
-    pub fn map_page_run(
-        &mut self,
-        start: u64,
-        frames: &[u64],
-        flags: u64,
-        pmm: &mut PhysicalMemoryManager,
-    ) -> (usize, Option<&'static str>) {
-        self.map_run_inner(start, frames.len(), flags, pmm, |i| frames[i])
-    }
-
-    /// `count` adet ardışık sayfanın eşlemesini kaldırır; kaldırılan fiziksel
-    /// çerçeveleri `out` dilimine sırayla yazar. `out`'un `count`'tan küçük
-    /// olması durumunda yalnızca ilk `out.len()` eşleme temizlenir.
-    ///
-    /// Dönen: temizlenen sayfa sayısı. TLB invalidasyonu yalnızca bu uzay
-    /// etkinse sayfa başına yapılır.
-    pub fn unmap_page_run(&mut self, start: u64, count: usize, out: &mut [u64]) -> usize {
-        if count == 0 || out.is_empty() || !start.is_multiple_of(PAGE_SIZE) {
-            return 0;
-        }
-        let active = self.is_active_space();
-        let mut cleared = 0usize;
-        for i in 0..count.min(out.len()) {
-            let va = start + (i as u64) * PAGE_SIZE;
-            let pml4_idx = ((va >> 39) & 0x1FF) as usize;
-            let pdpt_idx = ((va >> 30) & 0x1FF) as usize;
-            let pd_idx = ((va >> 21) & 0x1FF) as usize;
-            let pt_idx = ((va >> 12) & 0x1FF) as usize;
-            // Yalnızca mevcut tablo zincirini gez; eksik seviyede sayfa
-            // eşlenmemiş sayılır ve atlanır (tablo TAHsis EDİLMEZ).
-            let pt_phys = unsafe {
-                let pml4 = &*Self::table_ptr(self.pml4_phys);
-                if (pml4.entries[pml4_idx] & PageFlags::PRESENT) == 0 {
-                    continue;
-                }
-                let pdpt = &*Self::table_ptr(pml4.entries[pml4_idx] & 0x000F_FFFF_FFFF_F000);
-                if (pdpt.entries[pdpt_idx] & PageFlags::PRESENT) == 0 {
-                    continue;
-                }
-                let pd = &*Self::table_ptr(pdpt.entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000);
-                let pd_entry = pd.entries[pd_idx];
-                if (pd_entry & PageFlags::PRESENT) == 0 {
-                    continue;
-                }
-                if (pd_entry & PageFlags::HUGE_PAGE) != 0 {
-                    // 2 MiB huge page: tek girdide 512 sayfa; bu koşuda
-                    // tek sayfa silinemeyeceğinden bütün huge page'e
-                    // dokunulmaz (çağıranlar 4K eşleme kullanır).
-                    continue;
-                }
-                pd_entry & 0x000F_FFFF_FFFF_F000
-            };
-            unsafe {
-                let pt = &mut *Self::table_ptr(pt_phys);
-                let entry = pt.entries[pt_idx];
-                if entry & PageFlags::PRESENT == 0 {
-                    continue;
-                }
-                pt.entries[pt_idx] = 0;
-                out[cleared] = entry & 0x000F_FFFF_FFFF_F000;
-                cleared += 1;
-                if active {
-                    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
-                }
-            }
-        }
-        self.flush_run_if_inactive(cleared > 0);
-        cleared
     }
 
     /// `unmap_page` + boşalan alt seviye tabloların geri kazanımı.
@@ -1100,56 +799,6 @@ impl AddressSpace {
             }
 
             Some((pt_entry & 0x000F_FFFF_FFFF_F000) + page_offset)
-        }
-    }
-
-    /// `translate_user` ile aynı dört seviyeli yürüyüş; ayrıca son seviye
-    /// (PTE veya huge-page PD) girdi değerini de döndürür. Bayrak denetimi
-    /// gereken çağıranlar (ör. `uaccess` yazma doğrulaması) `read_entry` ile
-    /// ikinci bir tablo turu yapmak zorunda kalmaz.
-    ///
-    /// Dönüş: `(virt_addr`'e karşılık gelen fiziksel adres, yaprak girdi)`.
-    pub fn translate_user_entry(&self, virt_addr: u64) -> Option<(u64, u64)> {
-        if virt_addr >= Self::USER_ADDRESS_END {
-            return None;
-        }
-        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
-        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
-        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
-        let pt_idx = ((virt_addr >> 12) & 0x1FF) as usize;
-        let page_offset = virt_addr & (PAGE_SIZE - 1);
-        let user_present = PageFlags::PRESENT | PageFlags::USER;
-
-        unsafe {
-            let pml4 = &*Self::table_ptr(self.pml4_phys);
-            let pml4_entry = pml4.entries[pml4_idx];
-            if pml4_entry & user_present != user_present {
-                return None;
-            }
-
-            let pdpt = &*Self::table_ptr(pml4_entry & 0x000F_FFFF_FFFF_F000);
-            let pdpt_entry = pdpt.entries[pdpt_idx];
-            if pdpt_entry & user_present != user_present {
-                return None;
-            }
-
-            let pd = &*Self::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
-            let pd_entry = pd.entries[pd_idx];
-            if pd_entry & user_present != user_present {
-                return None;
-            }
-            if (pd_entry & PageFlags::HUGE_PAGE) != 0 {
-                let phys_2mb = pd_entry & 0x000F_FFFF_FFE0_0000;
-                return Some((phys_2mb + (virt_addr & 0x1F_FFFF), pd_entry));
-            }
-
-            let pt = &*Self::table_ptr(pd_entry & 0x000F_FFFF_FFFF_F000);
-            let pt_entry = pt.entries[pt_idx];
-            if pt_entry & user_present != user_present {
-                return None;
-            }
-
-            Some(((pt_entry & 0x000F_FFFF_FFFF_F000) + page_offset, pt_entry))
         }
     }
 

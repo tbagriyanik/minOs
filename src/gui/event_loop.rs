@@ -500,11 +500,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     // efektleri bu bayrağı kullanır (döngü başına sıfırlanır).
     let mut force_render;
 
-    // Saat metni değiştiğinde tüm ekran yerine yalnızca görev çubuğu
-    // saat bölgesi kirletilir; `clock_dirty` kareyi tetikler ama kirli
-    // bölge olarak daraltılmış rect'i korur.
-    let mut clock_dirty;
-
     // Sanal masaüstü değişimi tüm ekranı etkilediği için kirli-bölge
     // hesaplamasını atlayıp tam kare çizmeyi gerektirir.
     let mut last_workspace = compositor.active_workspace;
@@ -727,27 +722,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         let tb_y = l.tb_y;
 
-        // Tıklama (bas/bırak/sağ-tık) kenarı için yapısal anlık görüntü:
-        // işlem sonrası özet değiştiyse tam çizim gerekir; değişmediyse
-        // tıklamanın etki edebileceği pencere/görev çubuğu kirli bölge
-        // olarak işaretlenir. Böylece düğme basma ve seçim tıklamaları
-        // tam ekran yerine pencere ölçeğinde yeniden çizilir.
-        let click_snapshot = if mouse_clicked || mouse_released || right_clicked {
-            Some((
-                gui_click_hash(&compositor),
-                click_window_under(&compositor, mx, my),
-                click_focused_window(&compositor),
-                my >= tb_y,
-            ))
-        } else {
-            None
-        };
-
         // RTC saatini islem dongusu sayisina gore degil, gecen gercek zamana gore yenile.
 
         force_render = false;
-
-        clock_dirty = false;
 
         // USB Hotplug (tak/çıkar) bildirimleri ve donanım envanteri canlı güncellemesi
         while let Some(ev) = drivers::usb_hid::pop_hotplug_event() {
@@ -818,18 +795,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             now = drivers::rtc::DateTime::read_for_region(settings_app.region_offset());
 
-            // Saat değişimi tüm ekranı değil yalnızca tepsi saat
-            // bölgesini etkiler; tam kare + tam VRAM kopyası yerine
-            // daraltılmış kirli bölge yeterlidir.
-            if l.clock.2 > 0 && l.clock.3 > 0 {
-                compositor.dirty_tracker.track(
-                    usize::MAX,
-                    gui::dirty_rect::DirtyRect::new(l.clock.0, tb_y, l.clock.2, gui::taskbar_h()),
-                );
-                clock_dirty = true;
-            } else {
-                force_render = true;
-            }
+            force_render = true;
         }
 
         // Toast bildirim surelerini guncelle
@@ -6645,7 +6611,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // CMD gecmisi: yalnizca cikti panelini kaydir; giris satiri sabit kalir.
 
-            if let Some((term_idx, w)) = focused_window_for_app(&compositor, 10) {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
                 if w.is_open
                     && w.is_focused
                     && !w.is_minimized
@@ -6663,16 +6629,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     let view_lines = w.height.saturating_sub(86) / 13;
 
                     terminal_app.scroll_output(scroll_val as isize, view_lines);
-
-                    compositor.dirty_tracker.track(
-                        term_idx,
-                        gui::dirty_rect::DirtyRect::new(
-                            w.x.saturating_sub(8),
-                            w.y.saturating_sub(8),
-                            w.width.saturating_add(16),
-                            w.height.saturating_add(16),
-                        ),
-                    );
                 }
             }
 
@@ -6744,19 +6700,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
                         }
                     }
-
-                    // Tekerlek kaydırması yalnızca imleç altındaki bu
-                    // pencereyi etkiler; tam kare + tam VRAM kopyası yerine
-                    // pencere bölgesi kirletilir (tuş girdisiyle aynı yol).
-                    compositor.dirty_tracker.track(
-                        idx,
-                        gui::dirty_rect::DirtyRect::new(
-                            w.x.saturating_sub(8),
-                            w.y.saturating_sub(8),
-                            w.width.saturating_add(16),
-                            w.height.saturating_add(16),
-                        ),
-                    );
                 }
 
                 break;
@@ -6764,7 +6707,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // Goruntuleyicide tekerle ile yakinlastirma / uzaklastirma.
 
-            if let Some((iv_idx, w)) = focused_window_for_app(&compositor, 4) {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
                 let (cx, cy, cw, ch) = image_viewer_canvas_rect(&w);
 
                 if gui::in_rect(mx, my, (cx, cy, cw, ch)) {
@@ -6773,32 +6716,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if scroll_val < 0 {
                         imageviewer_app.zoom_out();
                     }
-                    compositor.dirty_tracker.track(
-                        iv_idx,
-                        gui::dirty_rect::DirtyRect::new(
-                            w.x.saturating_sub(8),
-                            w.y.saturating_sub(8),
-                            w.width.saturating_add(16),
-                            w.height.saturating_add(16),
-                        ),
-                    );
                 }
             }
 
             // cizim tuvalinde tekerlek yakinlastirmayi ayarlar.
 
-            if let Some((v3d_idx, w)) = focused_window_for_app(&compositor, 12) {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 12) {
                 if gui::in_rect(mx, my, (w.x, w.y, w.width, w.height)) {
                     viewer3d_app.handle_scroll(scroll_val);
-                    compositor.dirty_tracker.track(
-                        v3d_idx,
-                        gui::dirty_rect::DirtyRect::new(
-                            w.x.saturating_sub(8),
-                            w.y.saturating_sub(8),
-                            w.width.saturating_add(16),
-                            w.height.saturating_add(16),
-                        ),
-                    );
                 }
             }
 
@@ -6814,15 +6739,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         .is_some()
                     {
                         paint.adjust_zoom(scroll_val);
-                        compositor.dirty_tracker.track(
-                            paint_idx,
-                            gui::dirty_rect::DirtyRect::new(
-                                w.x.saturating_sub(8),
-                                w.y.saturating_sub(8),
-                                w.width.saturating_add(16),
-                                w.height.saturating_add(16),
-                            ),
-                        );
                     }
                 }
             }
@@ -8143,14 +8059,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
-        // FPS 3D oyun fare bakışı (yalnızca pencere odaklıyken ve oyun
-        // gerçekten oynanırken). Fare `mouse` değişkeni ile toplandığı için
-        // önceki konum tur başında güncellenmeli; aksi hâlde imleç pencere
-        // kenarına dayanınca bakış durur. Odaksızken her yatay harekette tam
-        // ekran yeniden çizim tetiklenmesi masaüstünü kilitlerdi.
-        if mouse_moved && app_is_focused(&compositor, 16) {
+        // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
+        // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
+        // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
+        if mouse_moved {
             let dx = (mouse.x as f32 - last_mouse_x as f32) * 0.5;
-            if dx.abs() > 0.5 && fps_3d_app.handle_mouse_look(dx) {
+            if dx.abs() > 0.5 {
+                fps_3d_app.handle_mouse_look(dx);
                 force_render = true;
             }
         }
@@ -8842,67 +8757,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         }
         let browser_scrolling = browser_scroll_step || browser_app.scroll_animating;
 
-        // Tıklama kirli-bölge takibi: tıklama sırasında pencere geometrisi,
-        // odak veya katman/popup durumu değiştiyse (hash farkı) tam çizim
-        // garantilenir; aksi halde yalnızca imlecin altındaki ve odak
-        // değiştirebilecek pencereler ile görev çubuğu kirli işaretlenir.
-        // Masaüstü tıklaması (simge seçimi gibi) izlenemediği için tam
-        // çizime düşer. `buttons_changed` `full_redraw`'u tetiklemeye devam
-        // eder; bu blok yalnızca çizim ölçeğini daraltır.
-        if buttons_changed {
-            match click_snapshot {
-                Some((hash0, under, prev_focus, in_taskbar))
-                    if gui_click_hash(&compositor) == hash0 =>
-                {
-                    let mut tracked = false;
-                    for idx in [under, prev_focus].into_iter().flatten() {
-                        if let Some(w) = compositor.windows[idx] {
-                            if w.is_open && !w.is_minimized {
-                                compositor.dirty_tracker.track(
-                                    idx,
-                                    gui::dirty_rect::DirtyRect::new(
-                                        w.x.saturating_sub(8),
-                                        w.y.saturating_sub(8),
-                                        w.width.saturating_add(16),
-                                        w.height.saturating_add(16),
-                                    ),
-                                );
-                                tracked = true;
-                            }
-                        }
-                    }
-                    if in_taskbar {
-                        compositor.dirty_tracker.track(
-                            0,
-                            gui::dirty_rect::DirtyRect::new(
-                                0,
-                                tb_y,
-                                width,
-                                height.saturating_sub(tb_y),
-                            ),
-                        );
-                        tracked = true;
-                    }
-                    if !tracked {
-                        // Pencere/görev çubuğu dışına tıklandı (masaüstü,
-                        // simge seçimi): etki alanı öngörülemez → tam çizim.
-                        force_render = true;
-                    }
-                }
-                // Yapısal değişiklik: mevcut `force_render` noktalarıyla
-                // birlikte tam çizimi garanti et.
-                Some(_) => force_render = true,
-                None => {}
-            }
-        }
-
         let full_redraw = input_update.keyboard
             || buttons_changed
             || scroll_val != 0
             || browser_scrolling
             || browser_scroll_reset
             || force_render
-            || clock_dirty
             || busy_dirty
             || (mouse_moved
                 && (is_interacting
@@ -9200,79 +9060,4 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
     }
-}
-
-/// Tıklama işleminden önce/sonra GUI yapısının (pencere geometrisi,
-/// görünürlük, odak ve katman/popup durumları) değişip değişmediğini
-/// saptamak için 64-bit FNV-1a özeti üretir. Özet değiştiyse tıklama
-/// yapısal bir etki yaratmıştır → tam yeniden çizim; değişmediyse
-/// tıklamanın etki alanı yalnızca imleç altındaki pencere, odak
-/// adayı ve görev çubuğuyla sınırlıdır → kirli bölge çizimi yeterli.
-fn gui_click_hash(c: &gui::MinGuiCompositor) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-    let mut mix = |v: u64| {
-        for b in v.to_le_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    mix(c.active_workspace as u64);
-    mix(c.active_window_idx.map_or(u64::MAX, |i| i as u64));
-    for flag in [
-        c.is_start_menu_open,
-        c.is_context_menu_open,
-        c.is_context_submenu_open,
-        c.is_alt_tab_open,
-        c.is_calendar_open,
-        c.is_volume_popup_open,
-    ] {
-        mix(flag as u64);
-    }
-    mix(c.active_start_group as u64);
-    mix(c.selected_start_item as u64);
-    for slot in &c.windows {
-        match slot {
-            Some(w) => {
-                mix(w.app_id as u64);
-                mix(w.x as u64);
-                mix(w.y as u64);
-                mix(w.width as u64);
-                mix(w.height as u64);
-                mix(w.is_open as u64);
-                mix(w.is_minimized as u64);
-                mix(w.is_maximized as u64);
-                mix(w.is_focused as u64);
-                mix(w.workspace as u64);
-                mix(w.z as u64);
-            }
-            None => mix(u64::MAX),
-        }
-    }
-    h
-}
-
-/// Tıklama anında imlecin altında kalan en üstteki görünür pencereyi
-/// döndürür (sağ-tık vuru testinin sol-tık karşılığı).
-fn click_window_under(c: &gui::MinGuiCompositor, mx: usize, my: usize) -> Option<usize> {
-    let (order, count) = c.draw_order();
-    for k in (0..count).rev() {
-        let idx = order[k];
-        if let Some(win) = c.windows[idx] {
-            if !win.is_open || win.is_minimized {
-                continue;
-            }
-            if mx >= win.x && mx < win.x + win.width && my >= win.y && my < win.y + win.height {
-                return Some(idx);
-            }
-        }
-    }
-    None
-}
-
-/// Tıklama anında odaklı olan pencereyi döndürür; odak değişiminde eski
-/// pencerenin başlık çubuğu da yeniden çizilmelidir.
-fn click_focused_window(c: &gui::MinGuiCompositor) -> Option<usize> {
-    c.windows
-        .iter()
-        .position(|slot| slot.as_ref().is_some_and(|w| w.is_focused && w.is_open))
 }

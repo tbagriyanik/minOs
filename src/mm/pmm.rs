@@ -195,10 +195,6 @@ pub struct PhysicalMemoryManager {
     pub region_count: usize,
     /// Bitmap: 1 = çerçeve kullanımda (tahsis edilmiş), 0 = çerçeve boş
     pub bitmap: [u64; BITMAP_WORDS],
-    /// Bitmap: 1 = çerçeve bir CPU sayfa önbelleğinde bekliyor. `bitmap`'te
-    /// ayrılmış görünen ama henüz iade edilmemiş çerçeveleri O(1) işaretler;
-    /// `is_frame_cached` taramasının 192 önbellek × 16 kare maliyetini kaldırır.
-    cached_bitmap: [u64; BITMAP_WORDS],
     pub total_managed_frames: usize,
     pub next_search_frame: usize,
     /// Kullanım profili: başarılı 4 KiB çerçeve talepleri.
@@ -233,7 +229,6 @@ impl PhysicalMemoryManager {
             usable_regions: [UsableRegion::empty(); MAX_USABLE_REGIONS],
             region_count: 0,
             bitmap: [0; BITMAP_WORDS],
-            cached_bitmap: [0; BITMAP_WORDS],
             total_managed_frames: 0,
             next_search_frame: 0,
             alloc_requests: 0,
@@ -589,9 +584,6 @@ impl PhysicalMemoryManager {
             self.refill_cache_locked(slot, zone);
         }
         let frame = self.page_caches[slot].pop()?;
-        if let Some(frame_idx) = self.address_to_frame_index(frame) {
-            self.set_frame_cached(frame_idx, false);
-        }
         self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
         self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
         self.zone_free_frames[zone.index()] = self.zone_free_frames[zone.index()].saturating_sub(1);
@@ -618,9 +610,6 @@ impl PhysicalMemoryManager {
                 self.zone_free_frames[zone.index()].saturating_add(1);
             if !self.page_caches[slot].push(frame) {
                 break;
-            }
-            if let Some(frame_idx) = self.address_to_frame_index(frame) {
-                self.set_frame_cached(frame_idx, true);
             }
         }
     }
@@ -792,41 +781,17 @@ impl PhysicalMemoryManager {
                 return;
             }
         }
-        self.set_frame_cached(frame_idx, true);
         self.free_memory_bytes = self.free_memory_bytes.saturating_add(PAGE_SIZE);
         self.used_memory_bytes = self.used_memory_bytes.saturating_sub(PAGE_SIZE);
         self.zone_free_frames[zone.index()] = self.zone_free_frames[zone.index()].saturating_add(1);
         self.update_low_watermark();
     }
 
-    /// Çerçevenin bir CPU sayfa önbelleğinde bekleyip beklemediği.
-    /// `cached_bitmap` işareti üzerinden O(1); işaret yalnızca `PMM_LOCK`
-    /// altında güncellendiği için ek senkronizasyon gerektirmez.
-    #[inline(always)]
-    fn frame_cached(&self, frame_idx: usize) -> bool {
-        let word_idx = frame_idx / 64;
-        word_idx < BITMAP_WORDS && (self.cached_bitmap[word_idx] & (1u64 << (frame_idx % 64))) != 0
-    }
-
-    #[inline(always)]
-    fn set_frame_cached(&mut self, frame_idx: usize, cached: bool) {
-        let word_idx = frame_idx / 64;
-        if word_idx >= BITMAP_WORDS {
-            return;
-        }
-        let mask = 1u64 << (frame_idx % 64);
-        if cached {
-            self.cached_bitmap[word_idx] |= mask;
-        } else {
-            self.cached_bitmap[word_idx] &= !mask;
-        }
-    }
-
     /// Bir çerçevenin herhangi bir CPU önbelleğinde bekleyip beklemediği.
     fn is_frame_cached(&self, frame_addr: u64) -> bool {
-        self.address_to_frame_index(frame_addr)
-            .map(|idx| self.frame_cached(idx))
-            .unwrap_or(false)
+        self.page_caches
+            .iter()
+            .any(|cache| (0..cache.len()).any(|i| cache.frames[i] == frame_addr))
     }
 
     /// Önbellekteki çerçeveleri bitmap'e iade eder. Mantıksal muhasebe
@@ -842,7 +807,6 @@ impl PhysicalMemoryManager {
                 let bit_idx = frame_idx % 64;
                 if word_idx < BITMAP_WORDS {
                     self.bitmap[word_idx] &= !(1u64 << bit_idx);
-                    self.set_frame_cached(frame_idx, false);
                     if frame_idx < self.next_search_frame {
                         self.next_search_frame = frame_idx;
                     }
@@ -863,7 +827,6 @@ impl PhysicalMemoryManager {
                 let mask = 1u64 << bit_idx;
                 if (self.bitmap[word_idx] & mask) != 0 {
                     self.bitmap[word_idx] &= !mask;
-                    self.set_frame_cached(frame_idx, false);
                     self.free_memory_bytes = self.free_memory_bytes.saturating_add(PAGE_SIZE);
                     self.used_memory_bytes = self.used_memory_bytes.saturating_sub(PAGE_SIZE);
                     let zone = zone_for_address(frame_addr).index();

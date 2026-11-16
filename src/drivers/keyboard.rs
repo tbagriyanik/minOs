@@ -86,9 +86,6 @@ pub struct KeyboardState {
     action_head: usize,
     action_tail: usize,
     extended_scancode: bool,
-    /// PS/2 Set-2/Set-3 kırılım öneki (0xF0) görüldü; sonraki bayt tuş
-    /// bırakma olayıdır.
-    break_pending: bool,
     prt_scn_state: u8,
     /// Şu an basılı tutulan normal tuşlar (PS/2 set 1 tarama kodu).
     held: [u8; 128],
@@ -114,7 +111,6 @@ impl KeyboardState {
             action_head: 0,
             action_tail: 0,
             extended_scancode: false,
-            break_pending: false,
             prt_scn_state: 0,
             held: [0; 128],
             held_extended: [0; 128],
@@ -178,24 +174,7 @@ impl KeyboardState {
     }
 
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<char> {
-        // PS/2 Set-2/Set-3 kırılım öneki: 0xF0 hiçbir tarama setinde make
-        // kodu olarak kullanılmaz; ardından gelen bayt tuş bırakmadır.
-        // Set-3'te kırılım baytı 0x80 bitini de taşıyabilir (aşağıda maskelenir).
-        // `break_pending` önce denetlenir: Set-3'te 0x70 kodunun kırılımı
-        // "F0 F0" olarak gelir ve ikinci bayt önek sanılmamalıdır.
-        let mut normalized_break = false;
-        let scancode = if self.break_pending {
-            self.break_pending = false;
-            normalized_break = true;
-            0x80 | (scancode & 0x7F)
-        } else if scancode == 0xF0 {
-            self.break_pending = true;
-            return None;
-        } else {
-            scancode
-        };
-
-        if scancode == 0xE0 && !normalized_break {
+        if scancode == 0xE0 {
             self.extended_scancode = true;
             return None;
         }

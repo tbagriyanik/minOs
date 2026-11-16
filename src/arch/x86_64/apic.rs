@@ -23,13 +23,8 @@ static BSP_IDLE_HLT: AtomicBool = AtomicBool::new(false);
 pub const APIC_TIMER_VECTOR: u8 = 0x20;
 pub const SCHEDULER_HZ: u32 = 1000;
 
-/// APIC timer bus frekansı (kalibrasyon sonrası hesaplanır)
-static mut APIC_BUS_FREQ: u64 = 0;
-
 // Local APIC register offset'leri
 const LAPIC_TIMER_DIVIDE: u32 = 0x3E0;
-/// `LAPIC_TIMER_DIVIDE = 0x03` → zamanlayıcı saati 16'ya bölünür.
-const LAPIC_TIMER_DIVIDE_VALUE: u64 = 16;
 const LAPIC_LVT_TIMER: u32 = 0x320;
 const LAPIC_TIMER_INIT_CNT: u32 = 0x380;
 const LAPIC_EOI: u32 = 0x0B0;
@@ -40,6 +35,7 @@ fn lapic_virt() -> *mut u32 {
     (crate::drivers::phys_to_virt(base)) as *mut u32
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 fn lapic_read(reg: u32) -> u32 {
     unsafe { core::ptr::read_volatile(lapic_virt().byte_add(reg as usize)) }
@@ -131,62 +127,6 @@ pub unsafe extern "C" fn apic_timer_entry() {
     );
 }
 
-/// APIC timer bus frekansını kalibre eder. TSC ve known timer (PIT kanal 2)
-/// kullanarak Local APIC bus frekansını ölçer.
-///
-/// # Returns
-/// Kalibre edilmiş bus frekansı (Hz). Başarısız olursa 0 döner.
-///
-/// # TR
-/// APIC timer bus frekansını kalibre eder. TSC ve known timer (PIT kanal 2)
-/// kullanarak Local APIC bus frekansını ölçer.
-fn calibrate_apic_timer() -> u64 {
-    // TSC'nin kalibre edilmiş olduğundan emin ol
-    if !crate::boot::time::is_ready() {
-        return 0;
-    }
-
-    let cycles_per_us = unsafe { crate::boot::time::TSC_CYCLES_PER_US }.max(1);
-
-    // APIC timer'ı one-shot modda başlat (önceki ayarları geçersiz kıl)
-    lapic_write(LAPIC_TIMER_DIVIDE, 0x03); // Divide by 16
-    let lvt_val = APIC_TIMER_VECTOR as u32; // One-shot (bit 17 = 0)
-    lapic_write(LAPIC_LVT_TIMER, lvt_val);
-
-    // Ölçüm süresi: 10 ms (tsc_cycles = 10_000 us)
-    let measure_us = 10_000u64;
-    let measure_cycles = cycles_per_us.saturating_mul(measure_us);
-
-    // İlk sayımı çok yüksek bir değer ile başlat (ölçüm süresinden uzun)
-    lapic_write(LAPIC_TIMER_INIT_CNT, 0xFFFF_FFFF);
-
-    let start_tsc = crate::boot::time::read_cpu_cycles();
-
-    // Timer'ı başlat ve ilk decrement'i bekle
-    let initial_count = lapic_read(LAPIC_TIMER_INIT_CNT);
-
-    // Belirlenen süre boyunca bekle
-    let mut elapsed = 0u64;
-    while elapsed < measure_cycles {
-        elapsed = crate::boot::time::read_cpu_cycles().wrapping_sub(start_tsc);
-        core::hint::spin_loop();
-    }
-
-    let final_count = lapic_read(LAPIC_TIMER_INIT_CNT);
-    let count_delta = initial_count.saturating_sub(final_count);
-
-    if count_delta == 0 {
-        return 0;
-    }
-
-    // Ölçüm ÷16 bölücü açıkken yapıldı; `count_delta / measure_us` sayacın
-    // gerçek düşüş hızıdır (bus_freq / 16). Gerçek bus frekansına çevirmek
-    // için bölücüyle çarpılır — aksi halde `init_timer` aynı 16'yı bir kez
-    // daha böler ve timer ~16 kHz'de çalışır (hedefin 16 katı kesme!).
-    let rate = (count_delta as u64).saturating_mul(1_000_000) / measure_us;
-    rate.saturating_mul(LAPIC_TIMER_DIVIDE_VALUE)
-}
-
 /// APIC Timer'ı başlatır ve IDT vektör 0x20'ye bağlar (yalnızca BSP çağırmalı).
 pub fn init_timer() {
     // 1. IDT vektörüne timer kapısını kur
@@ -196,21 +136,7 @@ pub fn init_timer() {
             .set_handler_dpl(apic_timer_entry as *const () as usize, 0);
     }
 
-    // 2. APIC timer bus frekansını kalibre et
-    let bus_freq = calibrate_apic_timer();
-    if bus_freq == 0 {
-        // Kalibrasyon başarısız oldu, fallback olarak varsayılan değer kullan
-        // Bu değer genellikle 1-100 MHz aralığındadır
-        unsafe {
-            APIC_BUS_FREQ = 1_000_000;
-        } // 1 MHz fallback
-    } else {
-        unsafe {
-            APIC_BUS_FREQ = bus_freq;
-        }
-    }
-
-    // 3. Local APIC Timer yapılandır:
+    // 2. Local APIC Timer yapılandır:
     // Bölücü: Divide by 16 (0x3)
     lapic_write(LAPIC_TIMER_DIVIDE, 0x03);
 
@@ -219,23 +145,8 @@ pub fn init_timer() {
     let lvt_val = (1 << 17) | (APIC_TIMER_VECTOR as u32);
     lapic_write(LAPIC_LVT_TIMER, lvt_val);
 
-    // Başlangıç sayacı (Initial Count): SCHEDULER_HZ'ye göre hesapla
-    // Formül: initial_count = bus_freq / (divide_value * SCHEDULER_HZ)
-    // divide_value = 16 (LAPIC_TIMER_DIVIDE = 0x3)
-    let bus_freq = unsafe { APIC_BUS_FREQ };
-    let divide_value = LAPIC_TIMER_DIVIDE_VALUE;
-    let initial_count = bus_freq / (divide_value * SCHEDULER_HZ as u64);
-    lapic_write(LAPIC_TIMER_INIT_CNT, initial_count as u32);
-
-    // Tanılama için yazdır
-    let actual_hz = bus_freq / divide_value;
-    crate::serial_print("[APIC] Bus frekansı: ");
-    crate::serial_print_dec(actual_hz);
-    crate::serial_print(" Hz, scheduler: ");
-    crate::serial_print_dec(SCHEDULER_HZ as u64);
-    crate::serial_print(" Hz, initial count: ");
-    crate::serial_print_dec(initial_count);
-    crate::serial_print("\n");
+    // Başlangıç sayacı (Initial Count): ~100 Hz veya 10 ms aralık
+    lapic_write(LAPIC_TIMER_INIT_CNT, 0x100000);
 }
 
 /// Tüm CPU'ların toplam tik sayısı (tanılama amaçlı).
@@ -261,7 +172,7 @@ pub fn bsp_idle_hlt_enabled() -> bool {
 /// edildiğini doğrular.
 ///
 /// Başarılıysa `true` döner ve boşta `hlt` güvenlidir: bir sonraki APIC
-/// tikinde (≈1 ms @ 1000 Hz) veya PS/2/USB girdi kesmesinde CPU uyanır. Timer
+/// tikinde (≈10 ms) veya PS/2/USB girdi kesmesinde CPU uyanır. Timer
 /// yönlendirmesi olmayan ortamlarda (ör. bazı hipervizörler) 25 ms içinde tik
 /// gelmezse kesmeler özgün IF durumuna döndürülür ve `false` döner; ana döngü
 /// yoklamalı boşta beklemeye devam eder. Böylece HLT'nin sistemi kilitlemesi
@@ -284,8 +195,8 @@ pub fn enable_bsp_idle() -> bool {
     unsafe {
         core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
     }
-    // APIC timer SCHEDULER_HZ (1000 Hz = 1 ms) çalışabilir; birkaç tikten
-    // biraz fazla (25 ms) bekle.
+    // APIC timer ~100 Hz (10 ms) çalışabilir; 5 ms'lik yoklama yanlış negatif
+    // üretmesin diye iki tikten biraz fazla (25 ms) bekle.
     let timeout = unsafe { crate::boot::time::TSC_CYCLES_PER_US }
         .saturating_mul(25_000)
         .max(1);

@@ -191,10 +191,9 @@ pub fn init() {
             }
         }
 
-        // Örnekleme hızı: 200 örnek/saniye (PS/2 fareler için üst sınır;
-        // hareket granülaritesini iki katına çıkarır, akıcılığı belirgin iyileştirir)
+        // Örnekleme hızı: 100 örnek/saniye (Laptop touchpad ve fare için kararlı akış)
         mouse_write(0xF3);
-        mouse_write(200);
+        mouse_write(100);
 
         // Akış Modunu Etkinleştir (Set Stream Mode - 0xEA)
         mouse_write(0xEA);

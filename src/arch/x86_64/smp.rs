@@ -207,7 +207,6 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     // Kurulum sırasında kesmeler kapalı kalır.
     unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
     super::enable_sse();
-    super::enable_pcid();
     unsafe { gdt::load_for_cpu(cpu) };
     // IDT CPU başına bir yazmaçtır (IDTR); BSP'nin LIDT'si AP'yi kapsamaz.
     // Her AP kendi IDTR'sini yüklemeli, yoksa en ufak kesmede üçlü hata olur.
@@ -486,25 +485,14 @@ pub fn cpu_count() -> usize {
     CPU_COUNT.load(Ordering::Relaxed) as usize
 }
 
-/// LAPIC ID → CPU indeksi doğrudan eşlemesi. `current_cpu_index` sıcak
-/// yolda (zamanlayıcı, PMM önbelleği, gardı) her çağrıda 64 yuvalık atomik
-/// tarama yapıyordu; xAPIC kimlikleri 8 bit olduğundan 256 girdilik tablo
-/// taramayı tamamen kaldırır. İlk çağrıda doldurulur, sonra atomik yük.
-static CPU_BY_LAPIC_ID: [AtomicUsize; 256] = [const { AtomicUsize::new(usize::MAX) }; 256];
-
 pub fn current_cpu_index() -> usize {
-    let id = (lapic_read(0x20) >> 24) as usize;
-    let cached = CPU_BY_LAPIC_ID[id].load(Ordering::Relaxed);
-    if cached != usize::MAX {
-        return cached;
-    }
+    let id = lapic_read(0x20) >> 24;
     // `cpu_count()` AP bekleme zaman aşımında düşürülebilir; o durumda
     // çevrimiçi kalmış yüksek indeksli bir AP bulunamaz ve yanlışlıkla
     // 0 (BSP) dönerdi. LAPIC ID'leri benzersiz olduğundan tüm slotlar
     // taranır — bulunamayan ID için 0 dönmek güvenli varsayılandır.
     for (cpu, slot) in LAPIC_ID.iter().enumerate().take(MAX_CPUS) {
-        if slot.load(Ordering::Relaxed) as usize == id {
-            CPU_BY_LAPIC_ID[id].store(cpu, Ordering::Relaxed);
+        if slot.load(Ordering::Relaxed) == id {
             return cpu;
         }
     }

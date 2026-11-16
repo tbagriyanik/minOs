@@ -65,11 +65,6 @@ fn user_page_of(address: u64) -> u64 {
     address & !(PAGE_SIZE - 1)
 }
 
-/// `addr`'i kapsayan son sayfanın bir sonrası (hariç tutulan aralık sonu).
-fn page_limit_of(end: u64) -> u64 {
-    end.saturating_add(PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
-}
-
 /// Adres + uzunluk aralığını taşma ve kanoniklik açısından doğrular.
 fn checked_user_range(address: u64, len: usize) -> Result<(u64, u64), UserCopyError> {
     if len == 0 {
@@ -85,35 +80,6 @@ fn checked_user_range(address: u64, len: usize) -> Result<(u64, u64), UserCopyEr
         return Err(UserCopyError::OutOfRange);
     }
     Ok((address, end))
-}
-
-/// `[page_start, limit)` aralığındaki her sayfa için tek seferde tablo
-/// yürüyüşü yapar ve `(sayfa_başlangıcına_karşılık_fiziksel_adres,
-/// yaprak_girdi)` çiftlerini döndürür. Doğrulama ve kopya aynı haritayı
-/// kullandığından sayfa başına 2-3 tablo turu yerine yalnızca 1 tur
-/// yapılır.
-fn user_page_map(
-    space: &AddressSpace,
-    page_start: u64,
-    limit: u64,
-    write: bool,
-) -> Result<Vec<(u64, u64)>, UserCopyError> {
-    let count = ((limit - page_start) / PAGE_SIZE) as usize;
-    let mut map = Vec::new();
-    map.try_reserve_exact(count)
-        .map_err(|_| UserCopyError::OutOfMemory)?;
-    let mut page = page_start;
-    while page < limit {
-        let (phys, entry) = space
-            .translate_user_entry(page)
-            .ok_or(UserCopyError::Unmapped)?;
-        if write && (entry & PageFlags::WRITABLE == 0 || entry & PAGE_COW != 0) {
-            return Err(UserCopyError::NotWritable);
-        }
-        map.push((phys, entry));
-        page += PAGE_SIZE;
-    }
-    Ok(map)
 }
 
 /// `[address, address + len)` aralığının tamamının kullanıcı erişimli ve
@@ -132,15 +98,15 @@ pub fn validate_user_range(
         return Ok(());
     }
     let mut page = user_page_of(start);
-    let limit = page_limit_of(end);
-    while page < limit {
-        // `translate_user_entry` tek turda hem USER|PRESENT hem de
-        // (istenirse) WRITABLE/COW bayraklarını doğrular.
-        let (_, entry) = space
-            .translate_user_entry(page)
-            .ok_or(UserCopyError::Unmapped)?;
-        if write && (entry & PageFlags::WRITABLE == 0 || entry & PAGE_COW != 0) {
-            return Err(UserCopyError::NotWritable);
+    while page < end {
+        if space.translate_user(page).is_none() {
+            return Err(UserCopyError::Unmapped);
+        }
+        if write {
+            let entry = space.read_entry(page).ok_or(UserCopyError::Unmapped)?;
+            if entry & PageFlags::WRITABLE == 0 || entry & PAGE_COW != 0 {
+                return Err(UserCopyError::NotWritable);
+            }
         }
         page = page.saturating_add(PAGE_SIZE);
     }
@@ -159,14 +125,12 @@ pub fn copy_from_user(
     if len > MAX_USER_COPY {
         return Err(UserCopyError::TooLarge);
     }
-    let (start, end) = checked_user_range(address, len)?;
+    let (start, _end) = checked_user_range(address, len)?;
     if len == 0 {
         return Ok(Vec::new());
     }
-    // Atomiklik: tüm sayfalar tek geçişte doğrulanır ve fiziksel tabanları
-    // haritaya alınır; kopya döngüsü tabloyu yeniden yürütmez.
-    let page_start = user_page_of(start);
-    let map = user_page_map(space, page_start, page_limit_of(end), false)?;
+    // Atomiklik: tüm sayfaları önce doğrula.
+    validate_user_range(space, start, len, false)?;
 
     let mut bytes = Vec::new();
     bytes
@@ -176,14 +140,13 @@ pub fn copy_from_user(
     let mut copied = 0usize;
     let mut virtual_address = start;
     while copied < len {
-        let page_index = ((virtual_address - page_start) / PAGE_SIZE) as usize;
-        let page_phys = map[page_index].0;
+        let physical = space
+            .translate_user(virtual_address)
+            .ok_or(UserCopyError::Unmapped)?;
         let page_offset = (virtual_address & (PAGE_SIZE - 1)) as usize;
         let chunk = (len - copied).min(PAGE_SIZE as usize - page_offset);
         unsafe {
-            // `page_phys` sayfa başlangıcına karşılık gelir; `page_offset`
-            // sayfa içi konumdur (dev sayfalarda da doğru kalır).
-            let source = crate::drivers::phys_to_virt(page_phys + page_offset as u64) as *const u8;
+            let source = crate::drivers::phys_to_virt(physical) as *const u8;
             bytes.extend_from_slice(core::slice::from_raw_parts(source, chunk));
         }
         virtual_address += chunk as u64;
@@ -200,25 +163,22 @@ pub fn copy_to_user(space: &AddressSpace, address: u64, data: &[u8]) -> Result<(
     if data.len() > MAX_USER_COPY {
         return Err(UserCopyError::TooLarge);
     }
-    let (start, end) = checked_user_range(address, data.len())?;
+    let (start, _end) = checked_user_range(address, data.len())?;
     if data.is_empty() {
         return Ok(());
     }
-    // Atomiklik: tüm sayfalar tek geçişte doğrulanır (USER|PRESENT|WRITABLE,
-    // COW değil); kopya döngüsü tabloyu yeniden yürütmez.
-    let page_start = user_page_of(start);
-    let map = user_page_map(space, page_start, page_limit_of(end), true)?;
+    validate_user_range(space, start, data.len(), true)?;
 
     let mut copied = 0usize;
     let mut virtual_address = start;
     while copied < data.len() {
-        let page_index = ((virtual_address - page_start) / PAGE_SIZE) as usize;
-        let page_phys = map[page_index].0;
+        let physical = space
+            .translate_user(virtual_address)
+            .ok_or(UserCopyError::Unmapped)?;
         let page_offset = (virtual_address & (PAGE_SIZE - 1)) as usize;
         let chunk = (data.len() - copied).min(PAGE_SIZE as usize - page_offset);
         unsafe {
-            let destination =
-                crate::drivers::phys_to_virt(page_phys + page_offset as u64) as *mut u8;
+            let destination = crate::drivers::phys_to_virt(physical) as *mut u8;
             core::ptr::copy_nonoverlapping(data.as_ptr().add(copied), destination, chunk);
         }
         virtual_address += chunk as u64;
@@ -292,10 +252,7 @@ mod tests {
 
     #[test]
     fn zero_length_ranges_are_allowed() {
-        let space = AddressSpace {
-            pml4_phys: 0,
-            pcid: 0,
-        };
+        let space = AddressSpace { pml4_phys: 0 };
         assert!(validate_user_range(&space, 0, 0, false).is_ok());
         assert!(copy_from_user(&space, 0, 0).is_ok());
         assert!(copy_to_user(&space, 0, &[]).is_ok());
@@ -303,10 +260,7 @@ mod tests {
 
     #[test]
     fn null_pointer_is_rejected() {
-        let space = AddressSpace {
-            pml4_phys: 0,
-            pcid: 0,
-        };
+        let space = AddressSpace { pml4_phys: 0 };
         assert_eq!(
             copy_from_user(&space, 0, 4),
             Err(UserCopyError::NullPointer)
@@ -315,10 +269,7 @@ mod tests {
 
     #[test]
     fn kernel_half_is_rejected() {
-        let space = AddressSpace {
-            pml4_phys: 0,
-            pcid: 0,
-        };
+        let space = AddressSpace { pml4_phys: 0 };
         assert_eq!(
             validate_user_range(&space, USER_ADDRESS_END, 4, false),
             Err(UserCopyError::OutOfRange)
@@ -327,10 +278,7 @@ mod tests {
 
     #[test]
     fn oversized_copy_is_rejected() {
-        let space = AddressSpace {
-            pml4_phys: 0,
-            pcid: 0,
-        };
+        let space = AddressSpace { pml4_phys: 0 };
         assert_eq!(
             copy_from_user(&space, 0x1000, MAX_USER_COPY + 1),
             Err(UserCopyError::TooLarge)
@@ -339,10 +287,7 @@ mod tests {
 
     #[test]
     fn overflow_is_rejected() {
-        let space = AddressSpace {
-            pml4_phys: 0,
-            pcid: 0,
-        };
+        let space = AddressSpace { pml4_phys: 0 };
         assert_eq!(
             validate_user_range(&space, u64::MAX - 1, 8, false),
             Err(UserCopyError::Overflow)

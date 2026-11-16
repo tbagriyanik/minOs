@@ -42,8 +42,6 @@ pub fn reset_clock_for_test() {
     }
 }
 
-use core::sync::atomic::{AtomicU64, Ordering};
-
 use crate::arch::x86_64::sync::SpinMutex;
 
 /// Varsayılan watchdog zaman aşımı: 5 saniye.
@@ -321,25 +319,14 @@ pub fn acknowledge_frozen(idx: usize) {
     shared.watchdog.acknowledge_frozen(idx);
 }
 
-/// Son watchdog taramasının zamanı. Zaman aşımı 5 saniye ölçeğinde olduğundan
-/// taramanın ~100 Hz'den hızlı çalışması gereksizdir; her APIC tikinde
-/// (saniyede ~1000 × CPU sayısı) bağlam sorgusu + pencere taraması yapmamak
-/// için en fazla 10 ms'de bir çalıştırılır.
-static LAST_SCAN_MS: AtomicU64 = AtomicU64::new(0);
-
 /// APIC timer interrupt'ından çağrılır. Donanım kesmesi bağlamında çalışır;
 /// burada yalnızca durum güncellenir ve donmuş pencereler kuyruğa alınır.
 /// Sonlandırma kararı ve GUI durumu değişikliği ana döngüye aittir.
 pub fn timer_tick() {
-    let now_ms = now_ms();
-    let last = LAST_SCAN_MS.load(Ordering::Relaxed);
-    if now_ms.wrapping_sub(last) < 10 {
-        return;
-    }
-    LAST_SCAN_MS.store(now_ms, Ordering::Relaxed);
     let Some(mut shared) = SHARED.try_lock() else {
         return;
     };
+    let now_ms = now_ms();
     let (cur_app, cur_win, _) = crate::apps::guard::current_context();
     let frozen = shared.watchdog.tick(now_ms, |idx, app_id, _idle_ms| {
         // Yalnızca o anda korunan uygulama bağlamı dondurma adayı olabilir.

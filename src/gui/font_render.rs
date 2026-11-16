@@ -341,40 +341,6 @@ pub fn visual_order(text: &str) -> Vec<char> {
     out
 }
 
-/// Satırda RTL karakter yoksa görsel sıra mantıksal sırayla aynıdır;
-/// `visual_order`'ın iki `Vec` tahsisini atlayan hızlı yol.
-#[inline]
-fn has_rtl(text: &str) -> bool {
-    text.chars().any(is_rtl)
-}
-
-/// `visual_order` ile aynı öğeleri üreten yineleyici; RTL içermeyen
-/// satırlarda tahsis yapmaz.
-enum VisualChars<'a> {
-    Plain(core::str::Chars<'a>),
-    Ordered(alloc::vec::IntoIter<char>),
-}
-
-impl Iterator for VisualChars<'_> {
-    type Item = char;
-
-    #[inline]
-    fn next(&mut self) -> Option<char> {
-        match self {
-            Self::Plain(chars) => chars.next(),
-            Self::Ordered(chars) => chars.next(),
-        }
-    }
-}
-
-fn visual_chars(line: &str) -> VisualChars<'_> {
-    if has_rtl(line) {
-        VisualChars::Ordered(visual_order(line).into_iter())
-    } else {
-        VisualChars::Plain(line.chars())
-    }
-}
-
 /// Mantıksal sıradaki `harf, hareke...` dizisini, ters çevrildiğinde harekenin
 /// harfin üzerinde kalacağı biçime (`hareke..., harf` → ters çevirme sonrası
 /// `harf, hareke...`) getirir.
@@ -428,7 +394,7 @@ pub fn text_width(face: Face, text: &str, size: f32) -> usize {
     let mut width = 0.0f32;
     for line in text.split('\n') {
         let mut line_width = 0.0f32;
-        for character in visual_chars(line) {
+        for character in visual_order(line) {
             let codepoint = if glyph(face, character).is_some() {
                 character as u32
             } else {
@@ -464,7 +430,7 @@ pub fn draw(
     let mut baseline = y as f32 + ascent * factor;
 
     for line in text.split('\n') {
-        for character in visual_chars(line) {
+        for character in visual_order(line) {
             let record = glyph(face, character).or_else(|| glyph(face, '?'));
             let Some(record) = record else { continue };
             blit_glyph(fb, bitmap, record, pen_x, baseline, color, factor);

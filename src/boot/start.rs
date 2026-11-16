@@ -26,7 +26,6 @@ pub struct BootDisplay {
 /// erken ekran/zaman altyapısını hazırlar.
 pub fn init() -> BootDisplay {
     crate::arch::x86_64::enable_sse();
-    crate::arch::x86_64::enable_pcid();
     crate::arch::x86_64::disable_pic();
 
     // Seri konsolu ilk iş olarak hazırla: sonraki tüm loglar (PMM/VMM/SMP…)

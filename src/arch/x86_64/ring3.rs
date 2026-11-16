@@ -30,31 +30,26 @@ static USER_TICK_STREAK: [AtomicUsize; super::smp::MAX_CPUS] =
 /// Kaç ring3 timer tiki sonra süreç önalınacağı (1000 Hz'te ~4 ms quantum).
 const USER_PREEMPT_QUANTUM: usize = 4;
 
-/// Çekirdek PML4 fiziksel adresi ve PCID (bit 11..0); kullanıcı→çekirdek
-/// trampoline'leri CR3'ü geri yüklemek için kullanır. İlk
-/// `prepare_usermode_stack` çağrısında veya `note_kernel_cr3` ile doldurulur.
-/// TR / EN: Kernel PML4 physical address with PCID in bits 11..0.
+/// Çekirdek PML4 fiziksel adresi; kullanıcı→çekirdek trampoline'leri CR3'ü
+/// geri yüklemek için kullanır. İlk `prepare_usermode_stack` çağrısında
+/// veya `note_kernel_cr3` ile doldurulur.
 static KERNEL_PML4: AtomicU64 = AtomicU64::new(0);
 
-/// Boot sırasında çekirdek CR3'ünü (PML4 + PCID) kaydeder (tekrar çağrı güvenli).
-/// TR / EN: Records kernel CR3 (PML4 + PCID) during boot (idempotent).
+/// Boot sırasında çekirdek CR3'ünü kaydeder (tekrar çağrı güvenli).
 pub fn note_kernel_cr3(pml4_phys: u64) {
     if pml4_phys != 0 {
         KERNEL_PML4.store(pml4_phys, Ordering::Relaxed);
     }
 }
 
-/// Kernel CR3 değerini (PML4 fiziksel adres + PCID) döner.
-/// TR / EN: Returns kernel CR3 value (PML4 physical address + PCID).
 fn kernel_pml4() -> u64 {
     let v = KERNEL_PML4.load(Ordering::Relaxed);
     if v != 0 {
         return v;
     }
-    let cur = crate::mm::vmm::AddressSpace::current();
-    let cr3 = cur.pml4_phys | (cur.pcid as u64);
-    KERNEL_PML4.store(cr3, Ordering::Relaxed);
-    cr3
+    let cur = crate::mm::vmm::AddressSpace::current().pml4_phys;
+    KERNEL_PML4.store(cur, Ordering::Relaxed);
+    cur
 }
 
 // --- IDT kapı kurulumu (idt.rs'deki tabloya) ---------------------------------
@@ -1390,7 +1385,6 @@ unsafe fn frame_to_process_context(frame: *const u64) -> crate::mm::process::Pro
             rflags: core::ptr::read_volatile(frame.add(F_IRIP + 2)),
             ss: core::ptr::read_volatile(frame.add(F_ISS)),
             cr3: crate::mm::vmm::AddressSpace::current().pml4_phys,
-            pcid: crate::mm::vmm::AddressSpace::current().pcid,
             kernel_rsp: frame as u64,
         }
     }
@@ -1871,7 +1865,11 @@ fn read_result_in(aspace: &crate::mm::vmm::AddressSpace) -> u64 {
 }
 
 unsafe fn enter_demo_usermode(aspace: &crate::mm::vmm::AddressSpace, entry: u64, stack_top: u64) {
-    aspace.load_cr3();
+    core::arch::asm!(
+        "mov cr3, {}",
+        in(reg) aspace.pml4_phys,
+        options(nostack, preserves_flags)
+    );
     enter_usermode(entry, stack_top);
 }
 
@@ -1888,7 +1886,6 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
     }
     let mut aspace = crate::mm::vmm::AddressSpace {
         pml4_phys: pml4_frame,
-        pcid: 1, // Demo için test PCID
     };
     if aspace.clone_kernel_mappings(pmm).is_err() {
         pmm.free_frame(pml4_frame);
@@ -2209,7 +2206,7 @@ pub fn execute_process(
         // Kernel adres uzayına geri dön
         if let Some(kernel_p) = proc_mgr.get_process(0) {
             unsafe {
-                kernel_p.address_space.load_cr3();
+                core::arch::asm!("mov cr3, {}", in(reg) kernel_p.address_space.pml4_phys, options(nostack, preserves_flags));
             }
         }
 
@@ -2309,24 +2306,17 @@ pub fn schedule_user_processes() {
     }
     USER_TICK_STREAK[cpu.min(USER_TICK_STREAK.len() - 1)].store(0, Ordering::Relaxed);
 
-    // Dilim sayacı bir kez okunur; hem seyrek tanı çıktısı hem de periyodik
-    // süreç raporu aynı değeri kullanır.
-    let slice = SLICE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-
-    // UART'a her dilimde yazmak sıcak yolda milisaniye düzeyinde maliyet
-    // oluşturur; seyrek örnekleme aynı görünürlüğü çok daha ucuza sağlar.
-    if slice == 1 || slice.is_multiple_of(64) {
-        smp::print_locked("[RING3-SCHED] dilim pid=");
-        smp::print_locked_dec(pid as u64);
-        smp::print_locked(" cr3=");
-        smp::print_locked_hex(ctx.cr3);
-        smp::print_locked("\n");
-    }
+    smp::print_locked("[RING3-SCHED] dilim pid=");
+    smp::print_locked_dec(pid as u64);
+    smp::print_locked(" cr3=");
+    smp::print_locked_hex(ctx.cr3);
+    smp::print_locked("\n");
 
     // Her N dilimde bir süreç/bellek durumu raporu (scheduler yükü altında
     // CR3, ASLR yığını, heap ve COW sayaçlarının canlı izlenmesi). İlk dilim de
     // raporlanır: önyükleme sırasında toplam dilim sayısı rapor aralığından az
     // olabilir ve testler bu ilk anlık görüntüye dayanır.
+    let slice = SLICE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if slice == 1 || slice.is_multiple_of(SCHED_REPORT_INTERVAL) {
         report_process_state();
     }
@@ -2369,9 +2359,7 @@ pub fn schedule_user_processes() {
     let kcr3 = kernel_pml4();
     if kcr3 != 0 {
         unsafe {
-            // Çıkış/fault trampoline'i kernel CR3'ü zaten yükledi; dedup'lı
-            // yazım aynı değer için fazladan tam TLB flush'unu önler.
-            crate::mm::vmm::AddressSpace::load_cr3_phys(kcr3);
+            core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, preserves_flags));
         }
     }
 }

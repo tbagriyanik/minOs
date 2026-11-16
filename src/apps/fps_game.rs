@@ -710,17 +710,18 @@ impl FpsGameApp {
         let w = render_w.min(1024);
 
         // Wolfenstein tarzı net iki bölge: tavan ve zemin birbirinden belirgin
-        // olmalı; çok koyu arka plan duvarları ve perspektifi yutuyordu.
+        // olmalı; renkler yeterli kontrast sağlar ve gri görünümü önler.
         let horizon = render_h / 2;
         for y in 0..horizon {
             if budget.is_expired() {
                 cancelled = true;
                 break;
             }
+            // Maviye doğru gradyan: daha açık ve belirgin mavi-turuncu toni
             let t = y as f32 / horizon.max(1) as f32;
-            let r = (18.0 + 18.0 * t) as u32;
-            let g = (28.0 + 18.0 * t) as u32;
-            let b = (52.0 + 22.0 * t) as u32;
+            let r = (35.0 + 30.0 * t) as u32; // 35..65
+            let g = (55.0 + 15.0 * t) as u32; // 55..70
+            let b = (90.0 + 10.0 * t) as u32; // 90..100
             fb.draw_rect(
                 render_x,
                 render_y + y,
@@ -730,22 +731,24 @@ impl FpsGameApp {
             );
         }
         if !cancelled {
-            // Zemin: açık gri-kahverengi, yatay perspektif bantlarıyla okunaklı.
+            // Zemin: sıcak kahverengi ve açık turuncu gradyan: gri görünümü önler
             for y in horizon..render_h {
                 if budget.is_expired() {
                     cancelled = true;
                     break;
                 }
                 let t = (y - horizon) as f32 / horizon.max(1) as f32;
-                let r = (92.0 - 42.0 * t) as u32;
-                let g = (76.0 - 34.0 * t) as u32;
-                let b = (58.0 - 26.0 * t) as u32;
+                // Sıcak kahverengi: altta yuvarlan, üstte daha açık
+                let r = (180.0 - 80.0 * t) as u32; // 180..100
+                let g = (100.0 - 20.0 * t) as u32; // 100..80
+                let b = (50.0 - 10.0 * t) as u32; // 50..40
                 let color = (r << 16) | (g << 8) | b;
                 fb.draw_rect(render_x, render_y + y, render_w, 1, color);
             }
         }
         if !cancelled {
-            fb.draw_rect(render_x, render_y + horizon, render_w, 3, 0xD0A060);
+            // Perspektif çizgi: açık tur-möjik bant
+            fb.draw_rect(render_x, render_y + horizon, render_w, 3, 0xF0B040);
         }
 
         // Geniş pencerelerde her ikinci sütun aynı duvar geometrisini paylaşır.
@@ -904,10 +907,10 @@ impl FpsGameApp {
                             // ve üst kenarda ışık vurgusu ile net okunur.
                             let row = ty / 4;
                             let brick = match ty % 4 {
-                                0 => 0x6F2A22,
-                                1 => 0xC25443,
-                                2 => 0xA8402F,
-                                _ => 0x8C352A,
+                                0 => 0xD04030, // vivid red brick
+                                1 => 0xE06050, // light red brick
+                                2 => 0xF08060, // bright orange-red
+                                _ => 0xFFB080, // very light red/orange
                             };
                             let joint_x = if row == 0 { 0 } else { 4 };
                             let color = if ty % 4 == 0 || tx == joint_x {
@@ -921,29 +924,28 @@ impl FpsGameApp {
                             if self.door_is_open(map_x, map_y) {
                                 // Açık kapı: koyu geçit + parlak yeşil kasa.
                                 if tx == 0 || tx == 7 || ty == 0 || ty == 7 {
-                                    apply_shade(0x45C766)
+                                    apply_shade(0x60D870) // açık yeşil kahve
                                 } else {
-                                    apply_shade(0x07110E)
+                                    apply_shade(0x20C050) // parlak yeşil
                                 }
                             } else {
-                                // Kapalı kapı: metalik camgöbeği panel,
-                                // sarı tehlike şeritleri ve pirinç kol.
+                                // Kapalı kapı: metalik gray + belirgin tehlike şeritleri
                                 let color = if tx == 0 || tx == 7 || ty == 0 || ty == 7 {
-                                    0x16323A // kasa
+                                    0x404040 // metalik gri
                                 } else if tx == 4 && (ty == 3 || ty == 4) {
-                                    0xFFD24A // kol
+                                    0xFFD24A // sarı kol
                                 } else if (ty == 2 || ty == 4) && (tx == 2 || tx == 5) {
-                                    0xE0A92E // tehlike şeridi
+                                    0xFFFF00 // açık tehlike şeridi
                                 } else if tx % 2 == 0 {
-                                    0x2E6B78
+                                    0x8B7C2E
                                 } else {
-                                    0x377C8B
+                                    0x5B6C2F
                                 };
                                 apply_shade(color)
                             }
                         }
-                        TILE_PICKUP => apply_shade(0x40E040),
-                        _ => apply_shade(0x604040),
+                        TILE_PICKUP => apply_shade(0x60FF40), // can yeşili
+                        _ => apply_shade(0xC06040),           // kamboa kirmizii
                     };
                     // Yan yüzeyi kanal bazlı karart; packed RGB değerini bölmek
                     // renk kanallarını bozuyordu ve duvarı görünmez yapıyordu.

@@ -3,30 +3,54 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::arch::x86_64::sync::SpinMutex;
+use crate::drivers::keyboard::KeyAction;
 use crate::drivers::video::Framebuffer;
 
 /// `write_color` paylaşılan imleç çerçevesi (`CURSOR_*`), framebuffer ve
-/// `BOOT_LOG_*` tamponlarına dokunur; paralel sürücü hatları birden çok
+/// konsol transkriptini (`LOG_LINES`) günceller; paralel sürücü hatları birden çok
 /// CPU'dan aynı anda yazdırabildiği için tüm çıktı bu kilitle serileştirilir.
 static TEXT_LOCK: SpinMutex<()> = SpinMutex::new(());
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static IN_ERROR_PROMPT: AtomicBool = AtomicBool::new(false);
 static mut FB: Option<Framebuffer> = None;
-static mut CURSOR_X: usize = 16;
-static mut CURSOR_Y: usize = 16;
+static mut CURSOR_X: usize = TEXT_LEFT;
+static mut CURSOR_Y: usize = TEXT_TOP;
 static mut SAVED_SCREEN_BUF: [u32; crate::drivers::video::BACKBUFFER_LEN] =
     [0; crate::drivers::video::BACKBUFFER_LEN];
 static mut SAVED_SCREEN_DIM: Option<(usize, usize)> = None;
-static mut BOOT_LOG_BUFFER: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-/// Her baytın yazıldığı renk (BOOT_LOG_BUFFER ile paralel dizi).
-static mut BOOT_LOG_COLORS: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+
+/// Konsol transkripti: her satır (karakter, renk) hücrelerinden oluşur.
+/// Ekran kaydırılsa da metinler bu tamponda saklanmaya devam eder; böylece
+/// PageUp/PageDown ile geçmişe bakılabilir ve log metinleri kaybolmaz.
+#[derive(Clone, Copy)]
+struct Cell {
+    ch: char,
+    color: u32,
+}
+
+static mut LOG_LINES: alloc::vec::Vec<alloc::vec::Vec<Cell>> = alloc::vec::Vec::new();
+/// İmlecin bulunduğu (son) satırdaki sütun.
+static mut LOG_COL: usize = 0;
+/// Transkriptte saklanan toplam hücre sayısı (bellek sınırı için).
+static mut LOG_CELLS: usize = 0;
+/// Görünen en alt satırdan kaç satır yukarıda olunduğu (0 = en altta).
+static mut VIEW_OFFSET: usize = 0;
+
 const LINE_H: usize = 14;
 const CHAR_W: usize = 8; // 8x8 font * 1x scale
+/// Font yüksekliği (satır yüksekliğinden kısa; aradaki boşluk satırları ayırır).
+const GLYPH_H: usize = 8;
 const FONT_SCALE: usize = 1;
-const LOG_LINE_CAPACITY: usize = 4096;
-const MAX_VISIBLE_LINES: usize = 80;
 const LINE_PAUSE_MS: u64 = 15;
+/// Metin alanının sol/sağ kenar boşluğu ve başlık satırının altı.
+const TEXT_LEFT: usize = 16;
+const TEXT_TOP: usize = 40;
+/// Konsol arka planı; karakter hücreleri de bu renkle temizlenir (komşuya taşmaz).
+const CONSOLE_BG: u32 = 0x080D16;
+/// Transkriptte saklanacak en fazla satır ve hücre sayısı (aşarsa en eskiler atılır).
+const LOG_MAX_LINES: usize = 4096;
+const LOG_MAX_CELLS: usize = 262_144;
 
 /// Basit 8x8 font bitmap (ASCII 32-126 için)
 const FONT_8X8: [[u8; 8]; 95] = [
@@ -150,6 +174,131 @@ pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Acquire)
 }
 
+/// Metin alanına sığan sütun sayısı.
+fn text_cols(width: usize) -> usize {
+    let usable = width.saturating_sub(TEXT_LEFT * 2);
+    (usable / CHAR_W).max(8)
+}
+
+/// Metin alanına sığan satır sayısı.
+fn text_rows(height: usize) -> usize {
+    let usable = height.saturating_sub(TEXT_TOP);
+    (usable / LINE_H).max(1)
+}
+
+/// Transkriptteki satırların ekranda kaç satır görüneceğini hesaplar (sarma dahil).
+fn visual_line_count(cols: usize) -> usize {
+    let lines = unsafe { &*core::ptr::addr_of!(LOG_LINES) };
+    let mut total = 0usize;
+    for line in lines.iter() {
+        total += line.len().div_ceil(cols).max(1);
+    }
+    total
+}
+
+/// Transkripte yeni hücre yazar ve imleç sütununu ilerletir.
+fn model_push_cell(ch: char, color: u32) {
+    let lines = unsafe { &mut *core::ptr::addr_of_mut!(LOG_LINES) };
+    if lines.is_empty() {
+        lines.push(alloc::vec::Vec::new());
+    }
+    let col = unsafe { LOG_COL };
+    let line = lines.last_mut().expect("konsol satiri yok");
+    let grew = if col < line.len() {
+        line[col] = Cell { ch, color };
+        0
+    } else {
+        // Aradaki boşluklar boş hücre ile doldurulur (imleç atlama durumu).
+        let fillers = col - line.len();
+        for _ in 0..fillers {
+            line.push(Cell { ch: ' ', color });
+        }
+        line.push(Cell { ch, color });
+        fillers + 1
+    };
+    if grew > 0 {
+        unsafe {
+            LOG_CELLS += grew;
+        }
+    }
+    unsafe {
+        LOG_COL = col + 1;
+    }
+    model_trim();
+}
+
+/// Transkriptte yeni satır açar.
+fn model_newline() {
+    let lines = unsafe { &mut *core::ptr::addr_of_mut!(LOG_LINES) };
+    lines.push(alloc::vec::Vec::new());
+    unsafe {
+        LOG_COL = 0;
+    }
+    model_trim();
+}
+
+/// İmleci bir sütun geri alır ve o hücreyi siler (backspace).
+fn model_backspace() {
+    let col = unsafe { LOG_COL };
+    if col == 0 {
+        return;
+    }
+    let new_col = col - 1;
+    let lines = unsafe { &mut *core::ptr::addr_of_mut!(LOG_LINES) };
+    if let Some(line) = lines.last_mut() {
+        if line.len() > new_col {
+            let removed = line.len() - new_col;
+            line.truncate(new_col);
+            unsafe {
+                LOG_CELLS -= removed;
+            }
+        }
+    }
+    unsafe {
+        LOG_COL = new_col;
+    }
+}
+
+/// Sekme genişliğini doldurarak sütun ilerletir; ilerlenen sütun sayısını
+/// döndürür. Sekme, ekrandaki görünür satırda 4 sütunluk adımlarla ilerler.
+fn model_tab(cols: usize) -> usize {
+    let col = unsafe { LOG_COL };
+    let visual = col % cols.max(1);
+    let mut advance = 4 - (visual % 4);
+    if visual + advance > cols {
+        // Satır sonuna kadar doldur; sonraki karakter yeni satırda başlar.
+        advance = cols.saturating_sub(visual);
+    }
+    for _ in 0..advance {
+        model_push_cell(' ', 0xD8E1EE);
+    }
+    advance
+}
+
+/// İmleç sütununu doğrudan atar (satır sonu / carriage return).
+fn model_set_col(col: usize) {
+    unsafe {
+        LOG_COL = col;
+    }
+}
+
+/// Transkriptin satır/hücre sınırını uygular; en eski satırlar atılır.
+fn model_trim() {
+    let lines = unsafe { &mut *core::ptr::addr_of_mut!(LOG_LINES) };
+    while lines.len() > LOG_MAX_LINES && !lines.is_empty() {
+        let removed = lines.remove(0);
+        unsafe {
+            LOG_CELLS -= removed.len();
+        }
+    }
+    while unsafe { LOG_CELLS } > LOG_MAX_CELLS && !lines.is_empty() {
+        let removed = lines.remove(0);
+        unsafe {
+            LOG_CELLS -= removed.len();
+        }
+    }
+}
+
 /// Mevcut ekran durumunu kaydet (GUI'den boot mesajlarına geçiş için)
 ///
 /// # Safety
@@ -197,6 +346,9 @@ pub unsafe fn restore_screen() {
                         );
                     }
                 }
+                // Arka tamponu da geri yükle: sonraki `flush` boot logunu öne getirmesin.
+                let saved = core::ptr::addr_of!(SAVED_SCREEN_BUF) as *const u32;
+                screen.copy_backbuffer_from_raw(saved, len);
             }
         }
     }
@@ -209,8 +361,8 @@ pub unsafe fn restore_screen() {
 pub unsafe fn update_framebuffer(fb: Framebuffer) {
     FB = Some(fb);
     SAVED_SCREEN_DIM = None;
-    CURSOR_X = 16;
-    CURSOR_Y = 16;
+    CURSOR_X = TEXT_LEFT;
+    CURSOR_Y = TEXT_TOP;
 }
 
 /// Text console'u tekrar aktif hale getir (welcome ekranından boot mesajlarına dönüş için)
@@ -225,63 +377,268 @@ pub unsafe fn toggle_active() {
     }
 }
 
+/// Konsol başlığını çizer (metin alanının üstündeki sabit başlık satırı).
+fn draw_title(screen: &mut Framebuffer) {
+    let title = "minOs UEFI BOOT";
+    let mut tx = TEXT_LEFT;
+    for ch in title.chars() {
+        draw_char(screen, tx, 12, ch, 0x62D6A8);
+        tx += CHAR_W;
+    }
+}
+
+/// Tek bir karakter hücresini çizer. Hücre tam olarak kendi kutusuna
+/// sığdırılır; komşu hücrelerin üzerine taşma olmaz.
+fn draw_cell(screen: &mut Framebuffer, x: usize, y: usize, cell: Cell) {
+    screen.draw_rect(x, y, CHAR_W, GLYPH_H, CONSOLE_BG);
+    draw_char(screen, x, y, cell.ch, cell.color);
+}
+
+/// Kaydırma durumunu gösteren başlık satırı ipucu (görünüm yukarıdayken).
+fn draw_scroll_hint(screen: &mut Framebuffer, offset: usize) {
+    if offset == 0 {
+        return;
+    }
+    let hint = alloc::format!("[{offset} satir yukarida - PageUp/PageDown ile kaydirin]");
+    let width = hint.chars().count() * CHAR_W;
+    let mut tx = screen.width.saturating_sub(width + TEXT_LEFT);
+    let y = 12;
+    // Önce eski ipucunun kaldığı alanı temizle (başlık solda kalır).
+    let clear_x = screen.width / 2;
+    screen.draw_rect(
+        clear_x,
+        y - 1,
+        screen.width - clear_x,
+        GLYPH_H + 2,
+        CONSOLE_BG,
+    );
+    for ch in hint.chars() {
+        draw_char(screen, tx, y, ch, 0x4DABF7);
+        tx += CHAR_W;
+    }
+}
+
+/// Transkriptten görünüm alanını yeniden çizer. Ekranda görünecek satırlar
+/// transkriptin son `text_rows` satırıdır; `VIEW_OFFSET` kadar satır yukarıda
+/// bakılır. Bu sayede kaydırılan log metinleri kaybolmaz.
+///
+/// # Safety
+/// `screen` geçerli bir framebuffer olmalıdır; konsol durumu (`VIEW_OFFSET`,
+/// `CURSOR_*`) bu çağrı sırasında yalnızca konsol kilidi altında değiştirilmelidir.
+unsafe fn repaint_view(screen: &mut Framebuffer) {
+    let cols = text_cols(screen.width);
+    let rows = text_rows(screen.height);
+    let total = visual_line_count(cols);
+    let max_offset = total.saturating_sub(1);
+    if VIEW_OFFSET > max_offset {
+        VIEW_OFFSET = max_offset;
+    }
+    let start = total.saturating_sub(rows.saturating_add(VIEW_OFFSET));
+
+    // Metin alanını temizle.
+    screen.draw_rect(
+        0,
+        TEXT_TOP,
+        screen.width,
+        screen.height.saturating_sub(TEXT_TOP),
+        CONSOLE_BG,
+    );
+
+    let lines = unsafe { &*core::ptr::addr_of!(LOG_LINES) };
+    let mut vidx = 0usize;
+    for line in lines.iter() {
+        let chunks = line.len().div_ceil(cols).max(1);
+        for chunk in 0..chunks {
+            if vidx >= start && vidx < start + rows {
+                let row = vidx - start;
+                let from = chunk * cols;
+                let to = (from + cols).min(line.len());
+                let y = TEXT_TOP + row * LINE_H;
+                for (i, cell) in line[from..to].iter().enumerate() {
+                    draw_cell(screen, TEXT_LEFT + i * CHAR_W, y, *cell);
+                }
+            }
+            vidx += 1;
+        }
+    }
+
+    // İmleci transkriptteki konumuna taşı.
+    let last_len = lines.last().map_or(0, |l| l.len());
+    let last_chunks = last_len.div_ceil(cols).max(1);
+    let before_last = total.saturating_sub(last_chunks);
+    let col = unsafe { LOG_COL };
+    let cursor_vidx = before_last + (col / cols);
+    CURSOR_X = TEXT_LEFT + (col % cols) * CHAR_W;
+    CURSOR_Y = TEXT_TOP + cursor_vidx.saturating_sub(start) * LINE_H;
+
+    draw_scroll_hint(screen, VIEW_OFFSET);
+    screen.flush();
+}
+
+/// Konsol alanını transkriptten yeniden çizer (kaydırma, ekran değişimi veya
+/// üstüne çizilen katman kaldırıldığında kullanılır).
+pub fn repaint() {
+    if !ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+    let _guard = TEXT_LOCK.lock();
+    unsafe {
+        let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
+            return;
+        };
+        repaint_view(screen);
+    }
+}
+
+/// Görünümü `delta` satır kaydırır (negatif: yukarı, pozitif: aşağı).
+pub fn scroll_lines(delta: isize) {
+    let _guard = TEXT_LOCK.lock();
+    unsafe {
+        let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
+            return;
+        };
+        let cols = text_cols(screen.width);
+        let total = visual_line_count(cols);
+        let max_offset = total.saturating_sub(1);
+        let current = VIEW_OFFSET;
+        let target = if delta < 0 {
+            current.saturating_add(delta.unsigned_abs())
+        } else {
+            current.saturating_sub(delta as usize)
+        };
+        let target = target.min(max_offset);
+        if target == current {
+            return;
+        }
+        VIEW_OFFSET = target;
+        repaint_view(screen);
+    }
+}
+
+/// Görünümü bir sayfa (görünür satır sayısı kadar) yukarı kaydırır.
+pub fn page_up() {
+    let page = unsafe {
+        let Some(screen) = (&*core::ptr::addr_of!(FB)).as_ref() else {
+            return;
+        };
+        text_rows(screen.height)
+    };
+    scroll_lines(-(page.max(1) as isize));
+}
+
+/// Görünümü bir sayfa aşağı kaydırır.
+pub fn page_down() {
+    let page = unsafe {
+        let Some(screen) = (&*core::ptr::addr_of!(FB)).as_ref() else {
+            return;
+        };
+        text_rows(screen.height)
+    };
+    scroll_lines(page.max(1) as isize);
+}
+
+/// Görünümü en eski satıra (transkriptin başına) kaydırır.
+pub fn scroll_to_top() {
+    let _guard = TEXT_LOCK.lock();
+    unsafe {
+        let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
+            return;
+        };
+        let cols = text_cols(screen.width);
+        let total = visual_line_count(cols);
+        let target = total.saturating_sub(1);
+        if VIEW_OFFSET == target {
+            return;
+        }
+        VIEW_OFFSET = target;
+        repaint_view(screen);
+    }
+}
+
+/// Görünümü en alt satıra (canlı akış) döndürür.
+pub fn scroll_to_bottom() {
+    let _guard = TEXT_LOCK.lock();
+    unsafe {
+        let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
+            return;
+        };
+        if VIEW_OFFSET == 0 {
+            return;
+        }
+        VIEW_OFFSET = 0;
+        repaint_view(screen);
+    }
+}
+
+/// Klavye eylemlerini konsol kaydırmasına yönlendirir; konsol kaydırmasını
+/// ele alıyorsa `true` döner.
+pub fn handle_key_action(action: KeyAction) -> bool {
+    match action {
+        KeyAction::PageUpKey => {
+            page_up();
+            true
+        }
+        KeyAction::PageDownKey => {
+            page_down();
+            true
+        }
+        KeyAction::ArrowUp => {
+            scroll_lines(-1);
+            true
+        }
+        KeyAction::ArrowDown => {
+            scroll_lines(1);
+            true
+        }
+        KeyAction::HomeKey => {
+            scroll_to_top();
+            true
+        }
+        KeyAction::EndKey => {
+            scroll_to_bottom();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Klavye eylemini global klavye kuyruğuna ekler (doğrudan port yoklaması için).
+fn push_scroll_action(action: KeyAction) {
+    unsafe {
+        let kbd = &mut *core::ptr::addr_of_mut!(crate::GLOBAL_KEYBOARD);
+        kbd.push_action(action);
+    }
+}
+
+/// Klavye kuyruğundaki kaydırma tuşlarını konsola uygular; bir kaydırma
+/// yapıldıysa `true` döner.
+fn poll_scroll_action() -> bool {
+    let mut handled = false;
+    unsafe {
+        let kbd = &mut *core::ptr::addr_of_mut!(crate::GLOBAL_KEYBOARD);
+        while let Some(action) = kbd.take_last_action() {
+            if handle_key_action(action) {
+                handled = true;
+            }
+        }
+    }
+    handled
+}
+
 /// Force the buffered boot transcript onto the framebuffer, including after GUI output.
 ///
 /// # Safety
 /// `FB` geçerli bir framebuffer içermeli veya `None` olmalı; `None` ise fonksiyon
 /// erken döner.
 pub unsafe fn show_boot_log() {
+    let _guard = TEXT_LOCK.lock();
     let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
         return;
     };
-    screen.clear(0x080D16);
-    CURSOR_X = 16;
-    CURSOR_Y = 16;
-    screen.flush();
-
-    let log_slice = &*core::ptr::addr_of!(BOOT_LOG_BUFFER);
-    let log_colors = &*core::ptr::addr_of!(BOOT_LOG_COLORS);
-    let log_text = core::str::from_utf8(log_slice).unwrap_or("");
-    let mut byte_idx = 0usize;
-    for ch in log_text.chars() {
-        let ch_color = log_colors.get(byte_idx).copied().unwrap_or(0xD8E1EE);
-        byte_idx += ch.len_utf8();
-        match ch {
-            '\r' => CURSOR_X = 16,
-            '\n' => {
-                CURSOR_X = 16;
-                CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
-            }
-            '\t' => CURSOR_X = CURSOR_X.saturating_add(CHAR_W * 4),
-            c if !c.is_control() => {
-                screen.draw_rect(
-                    CURSOR_X.saturating_sub(1),
-                    CURSOR_Y.saturating_sub(1),
-                    CHAR_W + 2,
-                    LINE_H,
-                    0x000000,
-                );
-                draw_char(screen, CURSOR_X, CURSOR_Y, c, ch_color);
-                CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
-            }
-            _ => {}
-        }
-        if CURSOR_X + CHAR_W >= screen.width {
-            CURSOR_X = 16;
-            CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
-        }
-        if CURSOR_Y + LINE_H >= screen.height {
-            screen.draw_rect(
-                0,
-                36,
-                screen.width,
-                screen.height.saturating_sub(36),
-                0x080D16,
-            );
-            CURSOR_Y = 40;
-        }
-    }
-    screen.flush();
+    screen.clear(CONSOLE_BG);
+    draw_title(screen);
+    VIEW_OFFSET = 0;
+    repaint_view(screen);
     ACTIVE.store(true, Ordering::Release);
 }
 
@@ -322,63 +679,66 @@ fn draw_char(screen: &mut Framebuffer, x: usize, y: usize, ch: char, color: u32)
 /// `fb` geçerli ve ömrü boyunca mapped kalacak bir framebuffer olmalıdır.
 pub unsafe fn init(fb: Framebuffer) {
     FB = Some(fb);
-    CURSOR_X = 16;
-    CURSOR_Y = 16;
+    CURSOR_X = TEXT_LEFT;
+    CURSOR_Y = TEXT_TOP;
     if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
-        screen.clear(0x080D16);
+        screen.clear(CONSOLE_BG);
         // Basit bitmap font ile başlık çiz
-        let title = "minOs UEFI BOOT";
-        let title_bytes = title.as_bytes();
-        let mut tx = 16;
-        for &b in title_bytes {
-            draw_char(screen, tx, 12, b as char, 0x62D6A8);
-            tx += CHAR_W;
-        }
-        CURSOR_Y = 40;
+        draw_title(screen);
+        CURSOR_Y = TEXT_TOP;
         screen.flush();
         ACTIVE.store(true, Ordering::Release);
     }
 }
 
-/// Buffer'a kaydet ama ekrana çizme (sonsuz döngü önleme)
-fn write_to_buffer(_text: &str) {
-    // Buffer growth and truncation are performed by write_color below.
-}
-
 /// Renkli metin çıktısı verir (hata, uyarı ve komut satırı için).
+///
+/// Metin önce konsol transkriptine yazılır (ekrandan kaybolsa da saklanır),
+/// ardından etkin konsol varsa ekrana çizilir.
 pub fn write_color(text: &str, color: u32) {
     let _guard = TEXT_LOCK.lock();
-    write_to_buffer(text);
     if !ACTIVE.load(Ordering::Acquire) {
         return;
     }
     unsafe {
-        let log = &mut *core::ptr::addr_of_mut!(BOOT_LOG_BUFFER);
-        let colors = &mut *core::ptr::addr_of_mut!(BOOT_LOG_COLORS);
-        if log.len().saturating_add(text.len()) > LOG_LINE_CAPACITY {
-            let drop_len = log.len().saturating_add(text.len()) - LOG_LINE_CAPACITY;
-            let drop_len = log
-                .iter()
-                .enumerate()
-                .skip(drop_len.min(log.len()))
-                .find(|(_, b)| **b == b'\n')
-                .map(|(i, _)| i + 1)
-                .unwrap_or(drop_len.min(log.len()));
-            log.drain(..drop_len);
-            colors.drain(..drop_len.min(colors.len()));
-        }
-        log.extend_from_slice(text.as_bytes());
-        colors.extend(core::iter::repeat_n(color, text.len()));
         let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
             return;
         };
-        for raw_ch in text.chars() {
-            let ch = raw_ch;
-            match ch {
-                '\r' => CURSOR_X = 16,
-                '\n' => {
-                    CURSOR_X = 16;
+        write_color_locked(screen, text, color);
+    }
+}
+
+/// Konsol ekranına yazma (kilit zaten alınmış durumda).
+unsafe fn write_color_locked(screen: &mut Framebuffer, text: &str, color: u32) {
+    let cols = text_cols(screen.width);
+    let right_edge = TEXT_LEFT + cols * CHAR_W;
+    // Görünüm yukarı kaydırılmışsa ekrana dokunulmaz; metin yalnızca
+    // transkripte yazılır, kullanıcı PageDown ile tekrar aşağı gelir.
+    let follow = VIEW_OFFSET == 0;
+
+    // Yeniden çizimden sonra imleç görünüm alanının altında kalmış olabilir;
+    // bu durumda içeriği bir satır yukarı kaydır.
+    if follow && CURSOR_Y + LINE_H > screen.height {
+        scroll_one_line(screen);
+    }
+
+    for ch in text.chars() {
+        match ch {
+            '\r' => {
+                model_set_col(0);
+                if follow {
+                    CURSOR_X = TEXT_LEFT;
+                }
+            }
+            '\n' => {
+                model_newline();
+                if follow {
+                    CURSOR_X = TEXT_LEFT;
                     CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
+                    if CURSOR_Y + LINE_H > screen.height {
+                        // Alt satır doldu: metin alanını bir satır yukarı kaydır.
+                        scroll_one_line(screen);
+                    }
                     screen.flush();
                     if !IN_ERROR_PROMPT.load(Ordering::Relaxed) && crate::boot::time::is_ready() {
                         let started = crate::boot::time::monotonic_ms();
@@ -389,41 +749,46 @@ pub fn write_color(text: &str, color: u32) {
                         }
                     }
                 }
-                '\t' => CURSOR_X = CURSOR_X.saturating_add(CHAR_W * 4),
-                '\x08' => {
-                    // Backspace karakteri: önceki karakteri ekranda temizle
-                    if CURSOR_X >= 16 + CHAR_W {
-                        CURSOR_X -= CHAR_W;
-                        screen.draw_rect(
-                            CURSOR_X.saturating_sub(1),
-                            CURSOR_Y.saturating_sub(1),
-                            CHAR_W + 2,
-                            LINE_H,
-                            0x080D16,
-                        );
+            }
+            '\t' => {
+                let advance = model_tab(cols);
+                if follow {
+                    CURSOR_X = CURSOR_X.saturating_add(advance * CHAR_W);
+                    if CURSOR_X + CHAR_W > right_edge {
+                        CURSOR_X = TEXT_LEFT;
+                        CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
+                        if CURSOR_Y + LINE_H > screen.height {
+                            scroll_one_line(screen);
+                        }
                     }
                 }
-                c if !c.is_control() => {
-                    screen.draw_rect(
-                        CURSOR_X.saturating_sub(1),
-                        CURSOR_Y.saturating_sub(1),
-                        CHAR_W + 2,
-                        LINE_H,
-                        0x000000,
-                    );
-                    draw_char(screen, CURSOR_X, CURSOR_Y, c, color);
-                    CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
+            }
+            '\x08' => {
+                // Backspace karakteri: önceki karakteri ekranda ve transkriptte temizle
+                model_backspace();
+                if follow && CURSOR_X >= TEXT_LEFT + CHAR_W {
+                    CURSOR_X -= CHAR_W;
+                    screen.draw_rect(CURSOR_X, CURSOR_Y, CHAR_W, GLYPH_H, CONSOLE_BG);
                 }
-                _ => {}
             }
-            if CURSOR_X + CHAR_W >= screen.width {
-                CURSOR_X = 16;
-                CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
+            c if !c.is_control() => {
+                model_push_cell(c, color);
+                if follow {
+                    draw_cell(screen, CURSOR_X, CURSOR_Y, Cell { ch: c, color });
+                    CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
+                    if CURSOR_X + CHAR_W > right_edge {
+                        CURSOR_X = TEXT_LEFT;
+                        CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
+                        if CURSOR_Y + LINE_H > screen.height {
+                            scroll_one_line(screen);
+                        }
+                    }
+                }
             }
-            if CURSOR_Y + LINE_H >= screen.height {
-                scroll_one_line(screen);
-            }
+            _ => {}
         }
+    }
+    if follow {
         screen.flush();
     }
 }
@@ -432,24 +797,18 @@ pub fn write(text: &str) {
     write_color(text, 0xD8E1EE);
 }
 
+/// Metin alanını bir satır yukarı kaydırır.
+///
+/// Kaydırma **arka tampon** üzerinde yapılır: ham framebuffer'ı kaydırmak
+/// sonraki `flush()` çağrısında üstüne yazılır ve log kaybolurdu.
 unsafe fn scroll_one_line(screen: &mut Framebuffer) {
-    let row_words = screen.pitch / 4;
-    let max_lines = (screen.height.saturating_sub(40) / LINE_H).min(MAX_VISIBLE_LINES);
-    if max_lines == 0 {
+    let area_h = screen.height.saturating_sub(TEXT_TOP);
+    if area_h <= LINE_H {
         return;
     }
-    let shift = LINE_H.min(screen.height.saturating_sub(40));
-    for y in 40..screen.height.saturating_sub(shift) {
-        for x in 0..row_words {
-            let dst = y * row_words + x;
-            let src = (y + shift) * row_words + x;
-            let value = core::ptr::read_volatile(screen.address.add(src));
-            core::ptr::write_volatile(screen.address.add(dst), value);
-        }
-    }
-    let clear_y = screen.height.saturating_sub(shift);
-    screen.draw_rect(0, clear_y, screen.width, shift, 0x080D16);
-    CURSOR_Y = CURSOR_Y.saturating_sub(shift);
+    screen.scroll_region_up(0, TEXT_TOP, screen.width, area_h, LINE_H, CONSOLE_BG);
+    // İmleç en alt satırda kalır (kaydırma sonrası da aynı satır).
+    CURSOR_Y = TEXT_TOP + (area_h / LINE_H - 1) * LINE_H;
 }
 
 /// Polls for a single character from serial (COM1), GLOBAL_KEYBOARD or PS/2 port 0x60.
@@ -508,6 +867,25 @@ pub fn poll_input_char() -> Option<char> {
             core::arch::asm!("in al, dx", in("dx") 0x60u16, out("al") scancode, options(nomem, nostack, preserves_flags));
             // If bit 5 is 1, it's mouse data, skip it
             if status & 0x20 == 0 && (scancode & 0x80 == 0) {
+                if scancode == 0xE0 {
+                    // Genişletilmiş (E0) önek: sonraki bayt gezinme tuşudur.
+                    let mut status2: u8;
+                    core::arch::asm!("in al, dx", in("dx") 0x64u16, out("al") status2, options(nomem, nostack, preserves_flags));
+                    if status2 & 0x01 != 0 {
+                        let mut ext: u8;
+                        core::arch::asm!("in al, dx", in("dx") 0x60u16, out("al") ext, options(nomem, nostack, preserves_flags));
+                        if ext & 0x80 == 0 {
+                            match ext {
+                                0x48 => push_scroll_action(KeyAction::ArrowUp),
+                                0x50 => push_scroll_action(KeyAction::ArrowDown),
+                                0x49 => push_scroll_action(KeyAction::PageUpKey),
+                                0x51 => push_scroll_action(KeyAction::PageDownKey),
+                                _ => {}
+                            }
+                        }
+                    }
+                    return None;
+                }
                 // Key press make code
                 return match scancode {
                     0x13 => Some('r'),
@@ -669,6 +1047,8 @@ pub fn interactive_error_prompt(message: &str) -> ! {
                 write(s);
             }
         }
+        // PageUp/PageDown ile boot logunun eski satırlarına geri bakılabilir.
+        poll_scroll_action();
         core::hint::spin_loop();
     }
 }

@@ -119,13 +119,20 @@ pub fn run_welcome_screen(
         }
 
         // 5 saniye zaman aşımı: USB klavye veya fare algılanamasa bile sistemi kilitleme, doğrudan masaüstüne geç.
-        if welcome_now.wrapping_sub(welcome_start_time) >= welcome_timeout_ms {
+        // Boot logu incelenirken (konsol açıkken) otomatik geçiş yapılmaz; log okunurken ekran kaybolmamalı.
+        if welcome_now.wrapping_sub(welcome_start_time) >= welcome_timeout_ms
+            && !boot::text_console::is_active()
+        {
             serial_print("[BOOT] Hoş geldin zaman aşımı; otomatik olarak masaüstüne geçiliyor.\n");
             welcome_accepted = true;
         }
 
         let mut enter_requested = false;
         while let Some(action) = keyboard.take_last_action() {
+            // Boot logu açıkken PageUp/PageDown ve ok tuşları logu kaydırır.
+            if boot::text_console::is_active() && boot::text_console::handle_key_action(action) {
+                continue;
+            }
             if matches!(action, drivers::keyboard::KeyAction::EnterKey) {
                 enter_requested = true;
             }

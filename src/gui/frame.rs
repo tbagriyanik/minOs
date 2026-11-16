@@ -8,15 +8,9 @@ use crate::desktop::helpers::{desktop_item_rect, desktop_item_visible, window_co
 use crate::drivers;
 use crate::gui;
 
-/// FPS 3D bütçeli çizimi tamamlanamazsa kısmi kareyi geri almak için
-/// backbuffer ile aynı üst sınıra sahip statik yedek tampon (heap kullanmaz).
-static mut FPS3D_FRAME_BACKUP: [u32; drivers::video::BACKBUFFER_LEN] =
-    [0; drivers::video::BACKBUFFER_LEN];
-
-/// Uygulama çizimi için kare bütçesi (ms).
-// Kare hedefi 16 ms olsa da raycasting render'ı küçük zamanlama sapmalarıyla
-// bunu aşabilir. 16 ms bütçesi aşıldığında içerik geri alındığı için oyun hiç
-// görünmeyebiliyordu; render bütçesine güvenli bir pay bırakıyoruz.
+/// Uygulama çizimi için kare bütçesi (ms). Normal uygulamalar için
+/// 24 ms sınırlaması yeterlidir; FPS 3D raycasting oyunu için (ID=16)
+/// alt satırda özel 80 ms bütçe kullanılır — bkz. render_full_frame.
 const RENDER_BUDGET_MS: u64 = 24;
 
 // Ortak yardımcılar `crate::desktop::helpers` ve `crate::boot::cpu` içinde yaşar.
@@ -353,34 +347,24 @@ pub fn render_full_frame(
                 15 => fps.render_content(fb, win.x, win.y, win.width, win.height),
 
                 16 => {
-                    // Bütçe aşımında kısmi kare görünmesin: etkilenen
-                    // içerik alanını önce yedekle, tamamlanmazsa geri yükle.
-                    let backup_region = fb.clip();
-                    let backup_w = backup_region.x1.saturating_sub(backup_region.x0);
-                    let backup_h = backup_region.y1.saturating_sub(backup_region.y0);
-                    let backup_len = backup_w.saturating_mul(backup_h);
-                    let backup_ptr = core::ptr::addr_of_mut!(FPS3D_FRAME_BACKUP).cast::<u32>();
-                    unsafe {
-                        fb.copy_clip_region_to_packed(backup_ptr, backup_len, backup_region);
-                    }
+                    // FPS 3D raycasting render'ı QEMU/VM gibi yavaş ortamlarda
+                    // 24 ms'lik render bütçesini sık sık aşar; geri alma
+                    // yapılırsa oyun ekranı boş kalır ve sadece 2D moduna
+                    // geçilebilirdi. Bu nedenle 3D oyun için bütçe sınırlamasını
+                    // 80 ms'e çıkarıp tamamlanmayan kareyi geri almadan
+                    // gösteriyoruz (yarım kare, boş ekrandan iyidir).
+                    let fps3d_budget: u64 = 80;
                     let render_completed = fps_3d.render_content_with_budget(
                         fb,
                         win.x,
                         win.y,
                         win.width,
                         win.height,
-                        RENDER_BUDGET_MS,
+                        fps3d_budget,
                     );
                     if render_completed {
                         let frame_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
                         fps_3d.record_completed_frame(frame_ms);
-                    } else {
-                        unsafe {
-                            fb.restore_clip_region_from_packed(
-                                backup_ptr as *const u32,
-                                backup_region,
-                            );
-                        }
                     }
                 }
 

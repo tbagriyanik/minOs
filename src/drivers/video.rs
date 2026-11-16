@@ -737,6 +737,53 @@ impl Framebuffer {
         }
     }
 
+    /// Arka tampon bölgesini `dy` piksel yukarı kaydırır ve altta kalan
+    /// boşluğu `fill` rengiyle doldurur.
+    ///
+    /// Kaydırma **arka tamponda** yapılır: ham framebuffer'ı kaydırmak sonraki
+    /// `flush()` çağrısında üstüne yazılır ve kaydırılan içerik kaybolur.
+    pub fn scroll_region_up(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        dy: usize,
+        fill: u32,
+    ) {
+        if dy == 0 || w == 0 || h == 0 {
+            return;
+        }
+        let x_end = (x + w).min(self.width);
+        let y_end = (y + h).min(self.height);
+        if x >= x_end || y >= y_end {
+            return;
+        }
+        let row_len = x_end - x;
+        let shift = dy.min(y_end - y);
+        if shift == 0 {
+            return;
+        }
+        let c = rgb(fill);
+        let stride = self.width;
+        unsafe {
+            let ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32;
+            // Kaydırma yukarı doğru olduğu için satırlar yukarıdan aşağıya
+            // kopyalanır (kaynak satır hedef satırdan sonra gelir).
+            for row in y..(y_end - shift) {
+                let dst = row * stride + x;
+                let src = (row + shift) * stride + x;
+                core::ptr::copy_nonoverlapping(ptr.add(src), ptr.add(dst), row_len);
+            }
+            for row in (y_end - shift)..y_end {
+                let off = row * stride + x;
+                for i in 0..row_len {
+                    ptr.add(off + i).write(c);
+                }
+            }
+        }
+    }
+
     /// 1px genişliğinde dikey renk dilimi. Kırpma bir kez hesaplanır ve
     /// sütun doğrudan arka tampona yazılır; piksel başına `draw_rect`
     /// çağırmanın kırpma/çağrı maliyeti olmadan raycasting duvarlarını

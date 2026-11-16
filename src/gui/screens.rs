@@ -484,9 +484,9 @@ pub fn render_welcome_screen(
 
     // 3. Alt Kısım: Bilgi İpucu (Zaman Aşımı Göstergesi) & Başla Düğmesi
     let hint_text = if english {
-        "Tab: select  Enter: confirm  Esc: cancel"
+        "Tab: select  Enter: confirm  Esc: cancel  E: boot log"
     } else {
-        "Tab: sec  Enter: onayla  Esc: vazgec"
+        "Tab: sec  Enter: onayla  Esc: vazgec  E: boot logu"
     };
     MinGuiCompositor::draw_string(
         fb,

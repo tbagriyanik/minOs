@@ -103,6 +103,9 @@ pub fn with_busy_progress<T>(
     if let Some(rect) = fb.restore_cursor_background() {
         fb.flush_rect(rect);
     }
+    // Konsol ekrandaysa altta kalan log metinlerini geri çiz (log kaybolmamalı).
+    crate::boot::text_console::repaint();
+    let fb = unsafe { &mut *state.fb };
     gui::draw_busy_overlay(fb, mx, my, message, 100);
     // Panel bir sonraki tam yeniden çizimde kalksın.
     unsafe {

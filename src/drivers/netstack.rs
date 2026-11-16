@@ -276,20 +276,14 @@ pub fn arp_insert(ip: Ipv4Address, mac: MacAddress) {
                 return;
             }
         }
-        // Dolu ise Gateway olmayan bir girişi değiştir
-        let mut found = false;
+        // Dolu ise Gateway olmayan bir girişi değiştir. Tüm girişler
+        // Gateway/DNS ise ARP_TABLE[0]'a dokunulmaz.
         for e in ARP_TABLE.iter_mut() {
             if e.ip != GATEWAY_IP && e.ip != DNS_SERVER {
                 e.ip = ip;
                 e.mac = mac;
-                found = true;
                 break;
             }
-        }
-        // Eğer tüm girişler Gateway/DNS ise, en eski girişi (ARP_TABLE[0])'yi değiştirmeyin;
-        // farklı bir giriş yapamayızsa hata durumunu yönetin.
-        if !found {
-            return;
         }
     }
 }

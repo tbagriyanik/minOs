@@ -846,6 +846,10 @@ pub fn resolve_host(host: &str) -> Result<Ipv4Address, i32> {
     if let Some(ip) = netstack::parse_ipv4(host) {
         return Ok(ip);
     }
+    // IPv6 literal'ı için A sorgusu anlamsızdır; DNS beklemesini atla.
+    if netstack::parse_ipv6(host).is_some() {
+        return Err(E_INVAL);
+    }
     if !e1000::is_ready() {
         return Err(E_NOTCONN);
     }
@@ -876,6 +880,10 @@ pub fn resolve_host_aaaa(host: &str) -> Result<Ipv6Address, i32> {
     }
     if let Some(ip) = netstack::parse_ipv6(host) {
         return Ok(ip);
+    }
+    // IPv4 literal'ı için AAAA sorgusu anlamsızdır; DNS beklemesini atla.
+    if netstack::parse_ipv4(host).is_some() {
+        return Err(E_INVAL);
     }
     if !e1000::is_ready() {
         return Err(E_NOTCONN);

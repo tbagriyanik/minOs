@@ -1142,15 +1142,17 @@ pub(crate) fn http_get_impl(
         let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
         let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
 
-        // IPv6 (AAAA) öncelikli, IPv4 (A) fallback — dual-stack destek
-        let use_v6 = socket::resolve_host_aaaa(host_str).is_ok();
+        // IPv6 (AAAA) öncelikli, IPv4 (A) fallback — dual-stack destek.
+        // Sonuç bir kez çözülür; çift DNS sorgusu engellenir.
+        let v6_addr = socket::resolve_host_aaaa(host_str).ok();
+        let use_v6 = v6_addr.is_some();
         let config = HttpClientConfig::default();
 
         if use_v6 {
             // IPv6 yolu: connect_v6 ile bağlantı. Bağlantı kurulduktan sonra
             // oluşan TCP/TLS/HTTP hatalarında IPv4 yoluna otomatik geri düşülür
             // (dual-stack fallback); bu yüzden deneme bir closure içine alınır.
-            if let Ok(v6) = socket::resolve_host_aaaa(host_str) {
+            if let Some(v6) = v6_addr {
                 let v6_result = (|| -> Result<(u16, usize, usize), i32> {
                     let fd =
                         socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {

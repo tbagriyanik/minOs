@@ -1643,11 +1643,16 @@ pub fn run_network_self_test() -> bool {
 /// testi yalnızca gerçek çekirdek derlemesinde anlamlıdır.
 #[cfg(not(test))]
 pub fn run_live_server_tests() -> bool {
-    use crate::boot::limine::{cmdline_has_token, limine_boot_cmdline};
+    use crate::boot::limine::limine_boot_cmdline;
     let Some(cmdline) = limine_boot_cmdline() else {
         return false;
     };
-    if !cmdline_has_token(cmdline, "livetest") {
+    // Token'lar `livetest=<url>` / `livetest_tls=<url>` biçimindedir;
+    // `cmdline_has_token` tam eşitlik aradığı için önek denetimi yapılır.
+    let has_livetest = cmdline.split_whitespace().any(|tok| {
+        tok == "livetest" || tok.starts_with("livetest=") || tok.starts_with("livetest_tls=")
+    });
+    if !has_livetest {
         return false;
     }
     let mut url = "http://10.0.2.2:8000/";

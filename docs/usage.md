@@ -164,8 +164,8 @@ minos/
 > Son güncelleme: 15 Kasım 2026 (v2.4.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 206 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | 154.957 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 209 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | 159.881 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Birim Testleri (`test_host.ps1`)** | 295 test (0 hata, %100 başarılı) |

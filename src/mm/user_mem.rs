@@ -194,6 +194,10 @@ pub fn map_zeroed_range(
 
 /// `[start, end)` aralığındaki sayfaları kaldırır, çerçeveleri iade eder.
 /// COW paylaşımlı çerçeveler yalnızca defterden referans bırakır.
+///
+/// `unmap_page_reclaim` kullanılır: yaprak girdi temizlendikten sonra
+/// tamamen boşalan PT/PD/PDPT çerçeveleri de PMM'e iade edilir; böylece
+/// tekrarlı `munmap`/`brk` daraltmaları sayfa tablosu çerçevesi sızdırmaz.
 pub fn unmap_range(
     process: &mut Process,
     start: u64,
@@ -204,7 +208,7 @@ pub fn unmap_range(
     let limit = page_up(end);
     let mut freed = 0usize;
     while address < limit {
-        let Some(frame) = process.address_space.unmap_page(address) else {
+        let Some(frame) = process.address_space.unmap_page_reclaim(address, pmm) else {
             address += PAGE_SIZE;
             continue;
         };
@@ -214,7 +218,11 @@ pub fn unmap_range(
             address += PAGE_SIZE;
             continue;
         }
+        // Çerçeve iki defterde de izlenebilir: kullanıcı sayfaları
+        // `record_user_frame` ile ikisine birden, fork'ta paylaşılan COW
+        // çerçeveleri ise yalnız `allocated_frames`'e işlenir.
         let _ = process.resources.take_user_frame(frame);
+        let _ = process.resources.take_frame(frame);
         match crate::mm::vmm::release_frame_shared(frame) {
             Some(false) => {}
             _ => pmm.free_frame(frame),
@@ -512,8 +520,9 @@ pub fn release_shared_region(addr: u64, len: u64) {
             region.refs = region.refs.saturating_sub(1);
             if region.refs == 0 {
                 *region = SharedRegion::empty();
-                // VMM shared frame referansını da bırak.
-                let _ = vmm::release_frame_shared(addr);
+                // Çerçeve bazlı paylaşım referansları `unmap_range`/kaynak
+                // defteri geçişinde zaten bırakılmıştır; burada ek VMM
+                // işlemi yapılmaz (sanalsal adres fiziksel çerçeve sanılmaz).
             }
             return;
         }
@@ -703,12 +712,7 @@ pub fn mmap(
 /// (`PAGE_SHARED`) bölgeler sıfır-kopya yeniden kullanım defteri tam
 /// `(addr, len)` çiftiyle anahtarlandığından yalnızca tamamen
 /// kaldırılabilir.
-pub fn munmap(
-    process: &mut Process,
-    addr: u64,
-    len: u64,
-    _pmm: &mut PhysicalMemoryManager,
-) -> bool {
+pub fn munmap(process: &mut Process, addr: u64, len: u64, pmm: &mut PhysicalMemoryManager) -> bool {
     if len == 0 {
         return false;
     }
@@ -741,42 +745,58 @@ pub fn munmap(
     }
     let head = unmap_start > start;
     let tail = unmap_end < end;
+    // Ortadan bölme kalan iki parça için ek bir bölge kaydı ister. Boş
+    // kayıt yoksa istek hiçbir eşleme kaldırılmadan reddedilir.
+    let tail_slot = if head && tail {
+        match process.mmap_regions.iter().position(|region| !region.used) {
+            Some(free_slot) => free_slot,
+            None => return false,
+        }
+    } else {
+        usize::MAX
+    };
+    // Gerçek sayfa kaldırma: `[unmap_start, unmap_end)` aralığındaki
+    // sayfalar eşlemeden çıkarılır; gerçekleşmiş çerçeveler kaynak
+    // defterinden düşülüp PMM'e iade edilir, boşalan sayfa tabloları da
+    // geri kazanılır. Tembel sayfalar yalnız sıfır sayfasını gösterdiği
+    // için fiziksel bellek harcamaz.
+    unmap_range(process, unmap_start, unmap_end, pmm);
     if head && tail {
-        // Ortadan kaldırma: mevcut kayıt başı korur, kuyruk boş bir
-        // kayda taşınır.
-        let tail_region = MmapRegion {
-            addr: unmap_end,
-            len: end - unmap_end,
-            used: true,
-        };
-        let free_slot = process
-            .mmap_regions
-            .iter()
-            .position(|region| !region.used)
-            .unwrap_or(slot);
+        // Ortadan kaldırma: mevcut kayıt başı korur, kuyruk boş kayda taşınır.
         process.mmap_regions[slot] = MmapRegion {
             addr: start,
             len: unmap_start - start,
             used: true,
         };
-        process.mmap_regions[free_slot] = tail_region;
-    } else if head {
-        // Baştan kaldırma: region başı unmap_end'e kadar kalar, geri kısım başa alın.
-        process.mmap_regions[slot] = MmapRegion {
+        process.mmap_regions[tail_slot] = MmapRegion {
             addr: unmap_end,
             len: end - unmap_end,
+            used: true,
+        };
+    } else if head {
+        // Kuyruktan kaldırma: `[unmap_start, end)` gitti; baş kalan
+        // `[start, unmap_start)` kaydı korunur.
+        process.mmap_regions[slot] = MmapRegion {
+            addr: start,
+            len: unmap_start - start,
             used: true,
         };
     } else if tail {
-        // Sondan kaldırma: region sonu unmap_start'ten kalar, baş kısım korumalı kalır.
+        // Baştan kaldırma: `[start, unmap_end)` gitti; kuyruk kalan
+        // `[unmap_end, end)` kayda alınır.
         process.mmap_regions[slot] = MmapRegion {
-            addr: start,
-            len: unmap_start - start,
+            addr: unmap_end,
+            len: end - unmap_end,
             used: true,
         };
     } else {
         // Bölge tamamen kaldırılıyor (addr == region start && addr+len == region end).
         process.mmap_regions[slot] = MmapRegion::default();
+        if shared {
+            // Paylaşımlı bölge kaydının referansını da bırak; son sahipse
+            // kayıt silinir ve diğer süreçler zero-copy yeniden kullanamaz.
+            release_shared_region(region.addr, region.len);
+        }
     }
     // Mmap tabanı ASLR için değişmez; serbest bölgeler yeniden kullanılmaz
     // (adres alanı yalıtımı ve deterministik davranış için).

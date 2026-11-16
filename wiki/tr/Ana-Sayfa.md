@@ -28,8 +28,9 @@ minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.102.0-nightly |
-| **Toplam Kod Satırı (ham)** | 154.957 satır (Rust: `src/` + `tests/` + `build.rs`) |
-| **Birim Testleri** | 295 geçti / 0 hata |
+| **Toplam Kod Satırı (ham)** | 159.881 satır (Rust: `src/` + `tests/` + `build.rs`) |
+| **P0/P1 Tamamlanma** | 13/23 görev tamamlandı (%57) — P0 bellek-kaldırma grubu bitti |
+| **Kritik Düzeltmeler** | Fork/COW delimiter, munmap gerçek sayfa kaldırma + PT/PD/PDPT iadesi, SHARED refcount, ARP table |
 | **Güvenilen Kök CA** | 51 sertifika |
 | **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Başlat Menüsü |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |
@@ -38,6 +39,7 @@ minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 ## Özellik Özetleri
 
+- **Bellek Yönetimi:** `munmap` gerçek sayfa kaldırma yapar — gerçekleşmiş çerçeveler kaynak defteri üzerinden PMM'e iade edilir, boşalan PT/PD/PDPT sayfa tablosu çerçeveleri geri kazanılır, tembel sayfalar fiziksel bellek harcamaz ve 16 kayıtlı bölge tablosu doluyken ortadan bölme atomik olarak reddedilir. Süreç çıkışı ve fork hata yolları COW/paylaşımlı çerçeve referanslarını doğru bırakır (bayat kayıt ve erken iade yok).
 - **TLS 1.3 HTTPS:** Tarayıcı `https://` bağlantılarını tamamlar; yaprak ve ara sertifika süreleri, CA BasicConstraints/pathLen ve varsa KeyUsage/EKU uzantıları doğrulanır. Host TLS testlerinde doğrulama kestirmesi kaldırılmıştır.
 - **Tarayıcı Motoru:** Progresif (SOF2) JPEG çözme, `@font-face` kural ayrıştırma ve `@keyframes` renk/opaklık animasyonu.
 - **minJs JavaScript Çalışma Zamanı:** Yerleşik `no_std` JavaScript motoru **closure** (fonksiyon ifadeleri, ok fonksiyonları, kapsam yakalama), **`setTimeout`/`setInterval`** zamanlayıcılarının `clearTimeout`/`clearInterval` ile iptali, **`Object.keys()`/`Object.values()`/`Object.entries()`** ve dizi geri çağırmalı metotları (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`) ile genişletildi. Fonksiyon değerleri değişkene/nesne özelliğine atanıp `obj.method()` biçiminde çağrılabilir.

@@ -2,7 +2,7 @@
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 
-> Son senkron: 13 Kasım 2026 — v2.4.0: Watchdog ana döngüden bağımsız çalışıyor, FPS 3D Oyun gerçek `fps`/`min_fps`/`frame_ms` ölçümleri üretiyor, render bütçesi aşımında kısmi kare geri yükleniyor ve `TimeBudget`/`OperationGuard` için deterministik host testleri eklendi. TLS 1.3 (ECDHE secp256r1 + HKDF) el sıkışması tamamlandı; RFC 8446 AAD/`Finished`/`close_notify` düzeltmeleriyle `https://` bağlantıları yanıt gövdesini işleyebiliyor. X.509 zaman/hostname/zincir doğrulaması ve kök CA deposu aktiftir.
+> Son senkron: 16 Kasım 2026 — v2.4.0: TLS 1.3 PSK session resumption (1-RTT), çoklu `key_share` (X25519 + secp256r1) ve OCSP stapling fail-closed doğrulaması tamamlandı; `gzip`/`deflate`/`br` içerik kodlaması ve HTTP/2 tarayıcı entegrasyonu aktif. Önceki: 13 Kasım 2026 — Watchdog ana döngüden bağımsız, FPS 3D Oyun gerçek ölçümler üretiyor, `TimeBudget`/`OperationGuard` host testleri eklendi. TLS 1.3 (ECDHE secp256r1 + HKDF) el sıkışması tamamlandı; RFC 8446 AAD/`Finished`/`close_notify` düzeltmeleriyle `https://` bağlantıları yanıt gövdesini işleyebiliyor. X.509 zaman/hostname/zincir doğrulaması ve kök CA deposu aktiftir.
 
 ---
 
@@ -167,16 +167,17 @@ P1 süreç, Ring 3 ve CI hedefleri mevcut kod ve QEMU boot testleriyle doğrulan
 - [x] **CSS `grid-template-areas`** — `src/apps/browser/css.rs` (ayrıştırıcı + isimli alan haritası) ve `html.rs` (yerleşim)
 - [x] **CSS Cascade / Specificity** — `css.rs` içinde `specificity` (id, class, tag) üçlüsü ve kaynak sırası
 - [x] **Media queries (`@media`)** — `css.rs` içinde `@media` bloğu + `min-width`/`max-width`/`orientation` çözümü
-- [ ] TLS PSK session resumption ve 0-RTT/1-RTT akışı — `pre_shared_key` uzantısı **yok**
+- [x] **TLS PSK session resumption (1-RTT)** — `pre_shared_key` uzantısı (binder dahil, daima son uzantı), `NewSessionTicket` ayrıştırma/önbellek (`session_cache`), sunucu kabul işlemesi (`psk_accepted`) ve reddedilen host'un tekrar teklif edilmemesi tamam (`src/drivers/tls.rs`, testler mevcut). **0-RTT early-data desteklenmiyor** — ayrı kalan iş aşağıda.
 - [x] **TLS ALPN (RFC 7301)** — `tls::build_client_hello_with_alpn`, tarayıcı `h2` negoşiasyonu (`browser/mod.rs`)
-- [ ] TLS çoklu `key_share` grubu — X25519 **yok**, yalnızca secp256r1
-- [ ] OCSP stapling ve fail-closed doğrulama
+- [x] **TLS çoklu `key_share` grubu** — ClientHello'da X25519 + secp256r1 `key_share` gönderiliyor; sunucunun seçtiği grup `key_share`/`supported_groups` uzantılarından çözülüyor (`tls.rs`, `crypto/x25519.rs`)
+- [x] **OCSP stapling ve fail-closed doğrulama** — `status_request` (0x0005) gönderiliyor; stapled yanıt `CertificateStatus`/TLS 1.3 uzantısından ayrıştırılıp `revocation_core::check_ocsp` ile imza/tazelik doğrulanıyor; `revoked` veya doğrulanamayan yanıt bağlantıyı reddediyor (`apply_stapled_ocsp`). Must-staple zorlama yok (sunucu staplemese de bağlantı sürer).
 - [x] **HTTP/2 tarayıcıya bağlandı** — `http::http2_get` + ALPN h2 (`browser/mod.rs` `[H2]` yolu)
 - [x] **`gzip`/`deflate` içerik kodlaması** — `src/drivers/` HTTP yolu (`Content-Encoding` çözümü)
 - [ ] Çok çekirdekli scheduler uzun süreli stres ve **fiziksel donanımda** doğrulama (QEMU tarafı tamam; `test_stress_24h.ps1` soak harness'i eklendi)
 - [x] **Clippy uyarılarının temizlenmesi** — `cargo clean` sonrası `cargo clippy --release`: 0 uyarı, 0 hata (39.7s tam derleme)
-- [ ] TLS istemci random'ı için CSPRNG kullanılması — `http2::make_client_random` hâlâ `monotonic_ms` tabanlı xorshift; `RDRAND`/`RDSEED` veya tohumlanmış ChaCha20 gerekli
-- [ ] CRL/OCSP yanıtlarının otomatik ağ üzerinden alınması
+- [ ] TLS 0-RTT early-data — PSK resumption'ın 1-RTT akışı tamam; `early_data` uzantısı ve 0-RTT uygulama verisi gönderimi yok
+- [ ] TLS istemci random'ı için CSPRNG — `random::fill_bytes` (RDRAND/RDSEED, yoksa xorshift64*) eklendi ve `http.rs`'in bir TLS yolunda kullanılıyor; ancak `http2::make_client_random`, `browser/mod.rs` ve `http.rs`'in diğer TLS yolları hâlâ `monotonic_ms` tabanlı xorshift kullanıyor, PRNG fallback'i ChaCha20 değil
+- [ ] CRL/OCSP yanıtlarının otomatik ağ üzerinden alınması — `crypto/revocation_fetch.rs` hazır (HTTP GET, CRL DP + OCSP AIA GET şablonu, imza doğrulamalı OCSP) ancak TLS el sıkışmasına henüz bağlanmadı
 
 ### Faz 9: Kriptografi ve TLS 1.2 / 1.3 ✅
 - **Kripto İlkelleri (`src/drivers/crypto/`, `no_std`, bağımlılıksız):** SHA-256 (`sha256.rs`), HMAC-SHA256 (`hmac.rs`), AES-128/256 (`aes.rs`), GCM (`gcm.rs`), RSA + PKCS#1 v1.5 (`rsa.rs`), minimal X.509 sertifika ayrıştırıcı (`x509.rs`).
@@ -201,9 +202,9 @@ Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu art
 #### Durum Analizi
 | Özellik | Durum | Açıklama |
 | :--- | :---: | :--- |
-| `grid-template-areas` (isimli alan sözdizimi) | ❌ Eksik | CSS Grid Level 1'in önemli parçası; `src/apps/browser/css.rs` ve `html.rs`'de yok |
-| CSS Cascade / Specificity (id > class > tag) | ⚠️ Basitleştirilmiş | `match_css_style` sıralı kurallarla eşleştirir; tam W3C özgüllük algoritması yok |
-| Media queries (`@media`) | ❌ Eksik | Responsive tasarımın temeli; `@media` bloğu yok |
+| `grid-template-areas` (isimli alan sözdizimi) | ✅ Var | `src/apps/browser/css.rs` ayrıştırıcı + isimli alan haritası, `html.rs` yerleşimi |
+| CSS Cascade / Specificity (id > class > tag) | ✅ Var | `css.rs` içinde `specificity` (id, class, tag) üçlüsü ve kaynak sırası |
+| Media queries (`@media`) | ✅ Var | `css.rs` içinde `@media` bloğu + `min-width`/`max-width`/`orientation` çözümü |
 
 #### Planlanan Geliştirmeler
 
@@ -235,10 +236,10 @@ Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu art
 #### Durum Analizi
 | Özellik | Durum | Açıklama |
 | :--- | :---: | :--- |
-| PSK (Pre-Shared Key) resumption | ❌ Eksik | RFC 8446 §2.2; 0-RTT / session resumption yok; her bağlantı tam el sıkışma |
-| ALPN (RFC 7301) | ❌ Eksik | HTTP/2 negotiation için gerekli; şu an sadece HTTP/1.1'e sabit |
-| `key_share` grupları | ⚠️ Kısım | Sadece P-256/X25519'dan biri; RFC 8446 istemcinin birden fazla grup önermesini önerir |
-| OCSP stapling (RFC 6066) | ⚠️ Kısım | Ayrı OCSP sorgusu yapılıyor; OCSP must-staple / gizlilik standardına uygun değil |
+| PSK (Pre-Shared Key) resumption | ✅ Var (1-RTT) | RFC 8446 §4.2.11; `pre_shared_key` + binder + `NewSessionTicket` önbelleği aktif; 0-RTT/early-data yok |
+| ALPN (RFC 7301) | ✅ Var | `build_client_hello_with_alpn`, tarayıcı `h2` negoşiasyonu |
+| `key_share` grupları | ✅ Var | X25519 + secp256r1 çoklu `key_share`; sunucu seçimi çözülüyor (`crypto/x25519.rs`) |
+| OCSP stapling (RFC 6066) | ✅ Var | `status_request` gönderiliyor; stapled yanıt imza/tazelik doğrulaması + fail-closed (`apply_stapled_ocsp`); must-staple yok |
 
 #### Planlanan Geliştirmeler
 
@@ -277,8 +278,8 @@ Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu art
 #### Durum Analizi
 | Özellik | Durum | Açıklama |
 | :--- | :---: | :--- |
-| HTTP/2 (RFC 9113) | ⚠️ Kısım | `http.rs` içinde `h2` çerçeve katmanı, HPACK başlık kodlayıcısı ve `Http2Connection` (akış yönetimi, SETTINGS/PING/WINDOW_UPDATE) hazır; TLS kaydı şifrelemesi, ALPN ve HPACK çözümlemesi (dinamik tablo) eksik — tarayıcıya bağlanmadı |
-| `gzip` / `br` içerik kodlaması | ❌ Eksik | `Transfer-Encoding: chunked` dışında içerik kodlaması yok; RFC 9110 §8.4 |
+| HTTP/2 (RFC 9113) | ✅ Var | `http2.rs`: çerçeve katmanı, HPACK (statik + dinamik tablo çözücü), `Http2Connection` akış yönetimi; ALPN `h2` ile tarayıcıya bağlı |
+| `gzip` / `br` içerik kodlaması | ✅ Var | `compression.rs` + `brotli.rs`: `Accept-Encoding: gzip, deflate, br` gönderiliyor, `Content-Encoding` gövdeleri çözülüyor |
 | Yönlendirme, çerez, POST | ✅ Var | Temel RFC 9110 uygunluğu sağlanmış |
 
 #### Planlanan Geliştirmeler
@@ -286,9 +287,9 @@ Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu art
 **A. HTTP/2 (RFC 9113)**
 - **Dosyalar:** `src/drivers/http.rs` (yeni `http2.rs` modülü), `src/drivers/tls.rs` (ALPN entegrasyonu)
 - **Aşama 1 — HTTP/2 çerçeve katmanı:** ✅ `h2` modülü (`build_frame`, `parse_frame_header`, `build_window_update`; HEADERS, DATA, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE), 9 baytlık başlık + payload.
-- **Aşama 2 — HPACK sıkıştırması:** ⚠️ İsteğe (`encode_get_headers`) statik tablo kodlaması hazır; yanıt başlıkları için statik + dinamik tablo **çözücüsü** yok (yalnızca `:status 200` sezgisel bulunuyor).
+- **Aşama 2 — HPACK sıkıştırması:** ✅ `h2::HpackDecoder` — statik + dinamik tablo, Huffman kod çözümü ve `decode_block` yanıt başlıklarını çözüyor.
 - **Aşama 3 — Akış (stream) yönetimi:** ✅ `Http2Connection` içinde tek sayılı akış ID'leri, akış haritası ve durum makinesi (`HalfClosedLocal` / `Closed`).
-- **Aşama 4 — ALPN entegrasyonu:** ❌ Bekliyor; ayrıca HTTPS yolunda çerçevelerin TLS kaydıyla şifrelenmesi (`Http2Connection::get` şu an düz gönderim yapıyor) tamamlanmalı.
+- **Aşama 4 — ALPN entegrasyonu:** ✅ Tamam; HTTPS yolunda çerçeveler TLS kaydı üzerinden şifreli gönderiliyor, ALPN `h2` ile tarayıcıya bağlı.
 - **Aşama 5 — Test:** HTTP/2 sunucusu ile çoklu eşzamanlı istek; HEADERS/DATA çerçevesi doğrulaması.
 
 **B. `gzip` / `br` İçerik Kodlaması (RFC 9110 §8.4)**

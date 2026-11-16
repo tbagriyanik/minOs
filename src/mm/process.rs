@@ -681,9 +681,12 @@ impl ProcessManager {
             }
             // Her çerçeve için tek referans bırakılır. Çerçeve hâlâ başka bir
             // adres uzayı tarafından paylaşılıyorsa (`Some(false)`) fiziksel
-            // bellek serbest bırakılmaz.
-            // Direct PMM free
-            pmm.free_frame(frame);
+            // bellek serbest bırakılmaz; aksi halde paylaşılan çerçeve
+            // defterinde bayat kayıt kalır ve sayfa yeniden kullanıldığında
+            // çift iade/çift sahiplik oluşur.
+            if !matches!(crate::mm::vmm::release_frame_shared(frame), Some(false)) {
+                pmm.free_frame(frame);
+            }
         }
         p.resources.frame_count = 0;
         p.resources.user_frame_count = 0;
@@ -1041,8 +1044,12 @@ impl ProcessManager {
             .iter()
             .take(child.resources.frame_count)
         {
-            // Direct PMM free
-            pmm.free_frame(frame);
+            // Paylaşımlı dosya sayfaları (`PAGE_SHARED`) çocuk defterine
+            // `record_user_frame` ile işlenir; fiziksel çerçeve başka
+            // eşlemeler varken serbest bırakılmaz, yalnız referans düşülür.
+            if !matches!(crate::mm::vmm::release_frame_shared(frame), Some(false)) {
+                pmm.free_frame(frame);
+            }
         }
     }
 
@@ -4127,7 +4134,32 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
 
     // 3b. Kısmi munmap: `len` bölgenin yalnızca istenen alt aralığını
     //     kaldırır; ortadan bölme kalan parçaları iki bölge kaydına ayırır.
+    //     Doğrulama gerçek sayfa tablosu ve PMM sayaçlarıyladır: üç sayfa
+    //     gerçekleştirilip işaretlenir, ortadaki kaldırılınca tam 1 çerçeve
+    //     iade edilir ve komşu sayfaların içeriği korunur.
     let partial = syscall_dispatch(sys_nos::SYS_MMAP, 3 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let partial_frames_before = proc_mgr
+        .get_process(pid)
+        .map(|p| p.resources.user_frame_count)
+        .unwrap_or(0);
+    for i in 0..3u64 {
+        if partial != 0 {
+            let _ = proc_mgr.handle_lazy_fault(pid, partial + i * PAGE_SIZE, pmm);
+        }
+    }
+    for i in 0..3u64 {
+        if let Some(p) = proc_mgr.get_process(pid) {
+            if let Some(phys) = p.address_space.translate_user(partial + i * PAGE_SIZE) {
+                unsafe {
+                    core::ptr::write_volatile(
+                        crate::drivers::phys_to_virt(phys) as *mut u64,
+                        0xBEEF_0000 + i,
+                    );
+                }
+            }
+        }
+    }
+    let free_before_partial = pmm.free_memory_bytes;
     let partial_unmap = if partial != 0 {
         syscall_dispatch(
             sys_nos::SYS_MUNMAP,
@@ -4140,15 +4172,44 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
     } else {
         u64::MAX
     };
+    let free_after_partial = pmm.free_memory_bytes;
     let partial_ok = partial != 0
         && partial_unmap == 0
         && proc_mgr.get_process(pid).is_some_and(|p| {
             p.address_space.translate(partial).is_some()
+                && p.address_space.read_entry(partial + PAGE_SIZE).is_none()
                 && p.address_space.translate(partial + PAGE_SIZE).is_none()
                 && p.address_space.translate(partial + 2 * PAGE_SIZE).is_some()
                 && p.address_space.translate(second).is_some()
                 && p.mmap_regions.iter().filter(|region| region.used).count() == 3
-        });
+                && (0..3u64).all(|i| {
+                    if i == 1 {
+                        return true;
+                    }
+                    let address = partial + i * PAGE_SIZE;
+                    p.address_space
+                        .translate_user(address)
+                        .and_then(|phys| {
+                            p.address_space.read_entry(address).map(|entry| (phys, entry))
+                        })
+                        .is_some_and(|(phys, entry)| {
+                            entry & PageFlags::WRITABLE != 0
+                                && entry & PAGE_LAZY == 0
+                                && unsafe {
+                                    core::ptr::read_volatile(
+                                        crate::drivers::phys_to_virt(phys) as *const u64
+                                    ) == 0xBEEF_0000 + i
+                                }
+                        })
+                })
+        })
+        // PMM: tam olarak 1 gerçekleşmiş çerçeve iade edildi; bölgenin
+        // sayfaları `second` ile aynı PT'yi paylaştığından tablo çerçevesi
+        // düşmez. Kullanıcı çerçevesi sayısı 3 gerçekleşme - 1 iade = +2.
+        && free_after_partial == free_before_partial + PAGE_SIZE
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| p.resources.user_frame_count == partial_frames_before + 2);
     if partial != 0 {
         // Kalan iki parçayı da kaldır: sonraki MEMINFO/sızıntı kontrolleri
         // temiz kalsın.
@@ -4161,6 +4222,90 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
             proc_mgr,
             pmm,
         );
+    }
+
+    // 3c. Bölge tablosu doluyken ortadan bölme reddedilir: kalan iki parça
+    //     için boş kayıt gerekmesinden istek hiçbir sayfa kaldırmadan
+    //     `u64::MAX` döner. Aynı dolulukta kenar (tek taraflı) kaldırma ve
+    //     tam kaldırma ek kayıt istemediğinden başarılı olmalıdır.
+    let mut split_ok = false;
+    let split = syscall_dispatch(sys_nos::SYS_MMAP, 4 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    if split != 0 {
+        for i in 0..4u64 {
+            let _ = proc_mgr.handle_lazy_fault(pid, split + i * PAGE_SIZE, pmm);
+        }
+        // Kalan bölge kayıtlarını doldur; tembel eşleme fiziksel maliyet
+        // getirmez (yalnız sıfır sayfası ve sayfa tabloları).
+        let mut fillers = alloc::vec::Vec::new();
+        loop {
+            let used = proc_mgr
+                .get_process(pid)
+                .map(|p| p.mmap_regions.iter().filter(|r| r.used).count())
+                .unwrap_or(0);
+            if used >= crate::mm::user_mem::MAX_MMAP_REGIONS {
+                break;
+            }
+            let filler = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            if filler == 0 {
+                break;
+            }
+            fillers.push(filler);
+        }
+        let table_full = proc_mgr.get_process(pid).is_some_and(|p| {
+            p.mmap_regions.iter().filter(|r| r.used).count()
+                == crate::mm::user_mem::MAX_MMAP_REGIONS
+        });
+        let free_before_reject = pmm.free_memory_bytes;
+        // Ortadan bölme: boş slot yok → reddedilmeli, hiçbir şey kalkmamalı.
+        let mid_unmap = syscall_dispatch(
+            sys_nos::SYS_MUNMAP,
+            split + PAGE_SIZE,
+            PAGE_SIZE,
+            0,
+            proc_mgr,
+            pmm,
+        );
+        // Baştan (tek taraflı) kaldırma: ek slot gerekmez → başarılı olmalı
+        // ve bölge kaydı kalan 3 sayfalık kuyruğa dönüşmelidir.
+        let edge_unmap = syscall_dispatch(sys_nos::SYS_MUNMAP, split, PAGE_SIZE, 0, proc_mgr, pmm);
+        split_ok = table_full
+            && mid_unmap == u64::MAX
+            && edge_unmap == 0
+            && pmm.free_memory_bytes == free_before_reject + PAGE_SIZE
+            && proc_mgr.get_process(pid).is_some_and(|p| {
+                p.address_space.translate(split).is_none()
+                    && (1..4u64).all(|i| p.address_space.translate(split + i * PAGE_SIZE).is_some())
+                    && p.mmap_regions
+                        .iter()
+                        .any(|r| r.used && r.addr == split + PAGE_SIZE && r.len == 3 * PAGE_SIZE)
+                    && p.mmap_regions.iter().filter(|r| r.used).count()
+                        == crate::mm::user_mem::MAX_MMAP_REGIONS
+            });
+        // Kalan 3 sayfalık bölgede ortadan bölme hâlâ reddedilmeli.
+        if split_ok {
+            let mid_again = syscall_dispatch(
+                sys_nos::SYS_MUNMAP,
+                split + 2 * PAGE_SIZE,
+                PAGE_SIZE,
+                0,
+                proc_mgr,
+                pmm,
+            );
+            split_ok = mid_again == u64::MAX;
+        }
+        // Temizlik: kalan bölgeyi tümüyle kaldır (ek slot gerekmez), sonra
+        // doldurucuları tek tek kaldır.
+        let _ = syscall_dispatch(
+            sys_nos::SYS_MUNMAP,
+            split + PAGE_SIZE,
+            3 * PAGE_SIZE,
+            0,
+            proc_mgr,
+            pmm,
+        );
+        for filler in fillers {
+            let _ = syscall_dispatch(sys_nos::SYS_MUNMAP, filler, PAGE_SIZE, 0, proc_mgr, pmm);
+        }
     }
     // `second` tembel sayfasını da gerçekleştir: genişletilmiş MEMINFO'daki
     // kullanıcı çerçevesi sayısı heap (2) + bu sayfa (1) = 3 olur.
@@ -4342,6 +4487,7 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         && shrink_ok
         && mmap_ok
         && partial_ok
+        && split_ok
         && meminfo_ok
         && meminfo_ext_ok
         && shared_frame_matched
@@ -4362,6 +4508,7 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         crate::serial_print(if region_pages { "region " } else { "region! " });
         crate::serial_print(if mmap_ok { "mmap " } else { "mmap! " });
         crate::serial_print(if partial_ok { "partial " } else { "partial! " });
+        crate::serial_print(if split_ok { "split " } else { "split! " });
         crate::serial_print(if second_ok { "2nd " } else { "2nd! " });
         crate::serial_print(if unmap_ok { "unmap " } else { "unmap! " });
         crate::serial_print(if meminfo_ok { "meminfo " } else { "meminfo! " });

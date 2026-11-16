@@ -28,16 +28,19 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Raw Rust Lines** | 154,957 lines (`src/` + `tests/` + `build.rs`) |
+| **Total Raw Rust Lines** | 159,881 lines (`src/` + `tests/` + `build.rs`) |
 | **Unit Tests** | 295 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
+| **P0/P1 Completion** | 13/23 tasks completed (57%) — P0 memory-teardown group done |
+| **Critical Fixes** | Fork/COW delimiter, munmap real page teardown + PT/PD/PDPT reclaim, SHARED refcount, ARP table |
 
 ---
 
 ## Feature Highlights
 
+- **Memory Management:** `munmap` performs real page teardown — realized frames return to the PMM via the resource ledger, emptied PT/PD/PDPT page-table frames are reclaimed, lazy pages cost no physical memory, and middle splits are rejected atomically when the 16-entry region table is full. Process exit and fork-failure paths release COW/shared-frame references correctly (no stale entries or premature frees).
 - **TLS 1.3 HTTPS:** Browser validates leaf and intermediate certificate validity, CA BasicConstraints/pathLen and any KeyUsage/EKU extensions; host TLS tests exercise the same validation path.
 - **Browser Engine:** Progressive (SOF2) JPEG decoding, `@font-face` rule parsing and `@keyframes` color/opacity animation.
 - **minJs JavaScript Runtime:** Built-in `no_std` JavaScript engine expanded with **closures** (function expressions, arrow functions, scope capture), **`setTimeout`/`setInterval`** timers with `clearTimeout`/`clearInterval`, **`Object.keys()`/`Object.values()`/`Object.entries()`**, and array callback methods (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`). Function values can be assigned to variables/object properties and invoked as `obj.method()`.

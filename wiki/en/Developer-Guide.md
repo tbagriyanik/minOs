@@ -69,8 +69,8 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 | Metric | Value |
 | :--- | :--- |
-| **Total Rust Source Files** | 206 files (`src/` + `tests/` + `build.rs`) |
-| **Total Raw Rust Lines** | 154,957 lines |
+| **Total Rust Source Files** | 209 files (`src/` + `tests/` + `build.rs`) |
+| **Total Raw Rust Lines** | 159,881 lines |
 | **Language** | Rust (Nightly, `no_std`) |
 | **Build Target** | `x86_64-minos` (custom bare-metal) |
 | **Unit Tests** | 295 tests (0 failed, 100% passing) |

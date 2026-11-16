@@ -8,7 +8,7 @@
 //!   polling ile kontrol edilir. Çekirdek veri yarışını önlemek için paylaşılan durum yalnızca atomikler ve
 //!   [`crate::arch::x86_64::sync`] kilitleri üzerinden erişilir.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use super::gdt;
 use super::sync::SpinMutex;
@@ -80,6 +80,9 @@ static HEARTBEAT: [PaddedCounter; MAX_CPUS] =
     [const { PaddedCounter(AtomicU64::new(0)) }; MAX_CPUS];
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
 static LAPIC_ID: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
+/// LAPIC ID → CPU indeksi doğrudan eşlemesi. `current_cpu_index` her
+/// çağrıda 64 yuvalık atomik tarama yapmaz; O(1) tablo sorgusu kullanır.
+static LAPIC_TO_CPU: [AtomicU8; 256] = [const { AtomicU8::new(0xFF) }; 256];
 
 static PRINT_LOCK: super::sync::Spinlock = super::sync::Spinlock::new();
 
@@ -216,6 +219,11 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     super::apic::init_timer();
     unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
     LAPIC_ID[cpu].store(lapic_read(0x20) >> 24, Ordering::Relaxed);
+    // Doğrudan eşlemeyi güncelle: LAPIC ID (0..255) → CPU indeksi.
+    let lapic_id = (lapic_read(0x20) >> 24) as usize;
+    if lapic_id < 256 {
+        LAPIC_TO_CPU[lapic_id].store(cpu as u8, Ordering::Relaxed);
+    }
     AP_ONLINE[cpu].store(true, Ordering::Release);
     // Timer artık güvenli biçimde kuruldu; AP scheduler tick alabilir.
     unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)) };
@@ -486,13 +494,18 @@ pub fn cpu_count() -> usize {
 }
 
 pub fn current_cpu_index() -> usize {
-    let id = lapic_read(0x20) >> 24;
-    // `cpu_count()` AP bekleme zaman aşımında düşürülebilir; o durumda
-    // çevrimiçi kalmış yüksek indeksli bir AP bulunamaz ve yanlışlıkla
-    // 0 (BSP) dönerdi. LAPIC ID'leri benzersiz olduğundan tüm slotlar
-    // taranır — bulunamayan ID için 0 dönmek güvenli varsayılandır.
+    let id = (lapic_read(0x20) >> 24) as usize;
+    if id < 256 {
+        let cpu = LAPIC_TO_CPU[id].load(Ordering::Relaxed);
+        if cpu != 0xFF {
+            return cpu as usize;
+        }
+    }
+    // Fallback: doğrudan eşleme yoksa (ör. yeni CPU henüz kaydedilmemiş)
+    // tüm slotları tara. LAPIC ID'leri benzersiz olduğundan bulunamayan
+    // ID için 0 dönmek güvenli varsayılandır.
     for (cpu, slot) in LAPIC_ID.iter().enumerate().take(MAX_CPUS) {
-        if slot.load(Ordering::Relaxed) == id {
+        if slot.load(Ordering::Relaxed) as usize == id {
             return cpu;
         }
     }
@@ -521,6 +534,11 @@ pub fn init() -> usize {
     // dönüşlerden ÖNCE yapılmalı; yoksa ilk `lapic_write` çekirdek #PF
     // (vektör 14) üretir ve sistem siyah ekranda durur.
     LAPIC_ID[0].store(lapic_init(), Ordering::Relaxed);
+    // BSP'nin LAPIC ID'sini doğrudan eşlemeye kaydet.
+    let bsp_lapic_id = (lapic_read(0x20) >> 24) as usize;
+    if bsp_lapic_id < 256 {
+        LAPIC_TO_CPU[bsp_lapic_id].store(0, Ordering::Relaxed);
+    }
 
     let resp = match limine_response() {
         Some(r) => r,

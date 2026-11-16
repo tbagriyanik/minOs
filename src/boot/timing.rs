@@ -42,7 +42,7 @@ pub fn begin() {
     BOOT_ORIGIN_MS.store(now, Ordering::Release);
     LAST_MARK_MS.store(now, Ordering::Release);
     TIMING_ENABLED.store(1, Ordering::Release);
-    serial_print("[BOOT-TIME] Zamanlama basladi.\n");
+    serial_print("[BOOT-TIME] Timing started.\n");
 }
 
 /// Açılıştan bu yana geçen süre (ms). Ölçüm başlamadıysa `0`.
@@ -79,7 +79,7 @@ impl PhaseTimer {
         serial_print_dec(now);
         serial_print("ms\n");
         if delta >= SLOW_PHASE_MS {
-            serial_print("[BOOT-TIME] UYARI yavas faz: ");
+            serial_print("[BOOT-TIME] WARNING slow phase: ");
             serial_print(label);
             serial_print("=");
             serial_print_dec(delta);

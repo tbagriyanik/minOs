@@ -58,9 +58,7 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 lto = true
-# `z` kod boyutunu küçültür ama yazılım tabanlı çizim/imleç yollarını
-# yavaşlatır; masaüstü akıcılığı için hız odaklı seviye kullanılır.
-opt-level = 3
+opt-level = "z"
 codegen-units = 1
 overflow-checks = false
 strip = true

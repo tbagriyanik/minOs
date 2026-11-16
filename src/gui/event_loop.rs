@@ -46,7 +46,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     // 6. MinGUI Pencere Yoneticisi ve Tum Uygulamalar
 
-    serial_print("[BOOT] Pencere yöneticisi ve uygulamalar hazırlanıyor...\n");
+    serial_print("[BOOT] Preparing window manager and applications...\n");
     let mut boot_timer = crate::boot::timing::PhaseTimer::new();
 
     // Kurulum `Box` döner; içerikler ayrılan (heap) yerde açıldığı için
@@ -122,7 +122,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     gui::setup::register_default_windows(&mut compositor, width, height);
     // Kurulu sistemse welcome ekranini atla, live ortam ise goster.
 
-    serial_print("[BOOT] Hoş geldin ekranı hazırlanıyor; grafik öz denetimleri çalıştırılıyor.\n");
+    serial_print("[BOOT] Preparing welcome screen; running graphics self-checks.\n");
 
     // Widget/Component agaci mimarisini (yerlesim, Tab odagi, olaylar) dogrula.
 
@@ -138,7 +138,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     boot::text_console::disable();
 
     if installed {
-        serial_print("[BOOT] Kurulu sistem tespit edildi; masaüstü hazırlanıyor...\n");
+        serial_print("[BOOT] Installed system detected; preparing desktop...\n");
 
         for phase in 0..4 {
             // PNG duvar kağıdı küçük resimlerini önyükleme sırasında tek seferlik
@@ -202,7 +202,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             &mut fs_mgr,
             memory_mgr,
         );
-        serial_print("[BOOT] Hoş geldin kabul edildi; masaüstüne geçiliyor.\n");
+        serial_print("[BOOT] Welcome screen accepted; switching to desktop.\n");
         boot_timer.mark("hos-geldin");
     }
 
@@ -509,7 +509,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
-    serial_print("[BOOT] Masaüstü döngüsü başladı.\n");
+    serial_print("[BOOT] Desktop loop started.\n");
     // Açılış süresi özeti: Limine'den devralmadan masaüstüne kadar geçen süre.
     boot_timer.mark("masaustu");
     crate::boot::timing::report_total();
@@ -518,9 +518,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     // gerçekten teslim edildiğini doğrula. Doğrulanırsa ana döngü boşta
     // `hlt` ile uyur (CPU ~%0); aksi halde yoklamalı bekleme korunur.
     if arch::x86_64::apic::enable_bsp_idle() {
-        serial_print("[IDLE] BSP timer kesmesi doğrulandı; boşta HLT etkin.\n");
+        serial_print("[IDLE] BSP timer interrupt verified; idle HLT enabled.\n");
     } else {
-        serial_print("[IDLE] UYARI: BSP timer kesmesi yok; boşta yoklama modu.\n");
+        serial_print("[IDLE] WARNING: BSP timer interrupt unavailable; idle polling mode.\n");
     }
 
     loop {
@@ -795,7 +795,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             now = drivers::rtc::DateTime::read_for_region(settings_app.region_offset());
 
-            force_render = true;
+            // Saat güncellemesi tam ekran yerine yalnızca görev çubuğu
+            // saat bölgesini kirli işaretler; force_render devre dışı.
+            // Clock update marks only the taskbar clock rect dirty instead
+            // of forcing a full-screen redraw.
+            let clock_rect =
+                gui::dirty_rect::DirtyRect::new(l.clock.0, l.clock.1, l.clock.2, l.clock.3);
+            compositor.dirty_tracker.track(0, clock_rect);
         }
 
         // Toast bildirim surelerini guncelle
@@ -8062,7 +8068,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
         // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
         // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
-        if mouse_moved {
+        // Mouse look only when FPS-3D window is focused; avoids unnecessary
+        // redraws when another window has focus.
+        if mouse_moved && app_is_focused(&compositor, 16) {
             let dx = (mouse.x as f32 - last_mouse_x as f32) * 0.5;
             if dx.abs() > 0.5 {
                 fps_3d_app.handle_mouse_look(dx);
@@ -8764,6 +8772,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             || browser_scroll_reset
             || force_render
             || busy_dirty
+            || !compositor.dirty_tracker.is_empty()
             || (mouse_moved
                 && (is_interacting
                     || night_light_active

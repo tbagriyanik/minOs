@@ -41,11 +41,19 @@ pub fn print(message: &str) {
     }
 }
 
+const MAX_LOG_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
+
 #[allow(static_mut_refs)]
 fn append_log(bytes: &[u8]) {
     unsafe {
         // Log storage grows with the transcript; no fixed 4 KiB/16 KiB cap.
         // try_reserve keeps logging failure from recursively panicking.
+        // 4 MiB üst sınır: uzun oturumlarda bellek şişmesini önler.
+        if LOG_BYTES.len() + bytes.len() > MAX_LOG_BYTES {
+            // En eski %25'i at: halka tampon benzeri davranış.
+            let drop = LOG_BYTES.len() / 4;
+            LOG_BYTES.drain(..drop);
+        }
         if LOG_BYTES.try_reserve(bytes.len()).is_ok() {
             LOG_BYTES.extend_from_slice(bytes);
         }

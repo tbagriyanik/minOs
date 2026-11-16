@@ -34,9 +34,9 @@ pub fn init() -> BootDisplay {
 
     // PKU/PKRU: kullanıcı sayfa koruma anahtarı altyapısı (varsa).
     if crate::arch::x86_64::pku::init() {
-        crate::serial_print("[PKU] Koruma anahtarlari etkin (CR4.PKE, PKRU=0).\n");
+        crate::serial_print("[PKU] Protection keys enabled (CR4.PKE, PKRU=0).\n");
     } else {
-        crate::serial_print("[PKU] CPU PKU desteklemiyor; PKRU devre disi.\n");
+        crate::serial_print("[PKU] CPU does not support PKU; PKRU disabled.\n");
     }
 
     crate::kernel::heap::init();
@@ -106,13 +106,13 @@ pub fn early_init() -> BootDisplay {
         crate::boot::text_console::init(Framebuffer::new(fb_ptr, width, height, pitch, bpp));
     }
 
-    serial_print("[BOOT] UEFI metin konsolu etkin; donanım ve bellek hazırlanıyor.\n");
+    serial_print("[BOOT] UEFI text console enabled; preparing hardware and memory.\n");
 
-    serial_print("[BOOT] PIT/TSC zaman tabanı başlatılıyor...\n");
+    serial_print("[BOOT] Starting PIT/TSC time base...\n");
     if init_timebase() {
-        serial_print("[BOOT] PIT/TSC zaman tabanı hazır.\n");
+        serial_print("[BOOT] PIT/TSC time base ready.\n");
     } else {
-        serial_print("[BOOT] UYARI: PIT yanıt vermedi; CPUID TSC tahmini kullanılıyor.\n");
+        serial_print("[BOOT] WARNING: PIT did not respond; using CPUID TSC estimate.\n");
     }
 
     // Zaman tabanı hazır: açılış süresi ölçümünü buradan başlat.
@@ -130,7 +130,7 @@ pub fn early_init() -> BootDisplay {
     serial_print("[minOs] Çekirdek _start noktasına ulaştı.\n");
 
     #[cfg(minos_boot_log)]
-    serial_print("[minOs] SSE etkinleştirildi, PIC kesmeleri maskelendi.\n");
+    serial_print("[minOs] SSE enabled; PIC interrupts masked.\n");
 
     // HHDM ofsetini al (fiziksel MMIO ve sayfa tablosu sanal erisimi icin).
     let hhdm_offset = unsafe {
@@ -151,7 +151,7 @@ pub fn early_init() -> BootDisplay {
             }
         }
     };
-    serial_print("[BOOT] HHDM offset / ofset: ");
+    serial_print("[BOOT] HHDM offset: ");
     crate::boot::console::serial_print_hex(hhdm_offset);
     serial_print("\n");
     drivers::set_hhdm_offset(hhdm_offset);
@@ -165,23 +165,25 @@ pub fn early_init() -> BootDisplay {
         crate::boot::console::serial_print_hex(kphys);
         serial_print(" sanal=");
         crate::boot::console::serial_print_hex(kvirt);
-        serial_print(" kayma=");
+        serial_print(" slide=");
         crate::boot::console::serial_print_hex(slide);
-        serial_print(" hizalama=");
+        serial_print(" alignment=");
         if aligned {
             serial_print("ok");
         } else {
-            serial_print("HATA");
+            serial_print("FAIL");
         }
         serial_print(" durum=");
         if slide != 0 {
-            serial_print("etkin");
+            serial_print("enabled");
         } else {
-            serial_print("kapali");
+            serial_print("disabled");
         }
         serial_print("\n");
         if !aligned {
-            serial_print("[KASLR] UYARI: kayma sayfa hizali degil; adres varsayimlari riskli.\n");
+            serial_print(
+                "[KASLR] WARNING: slide is not page-aligned; address assumptions are risky.\n",
+            );
         }
     } else {
         serial_print("[KASLR] Kernel adres yaniti yok; KASLR kapali olabilir.\n");

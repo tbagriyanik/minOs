@@ -390,14 +390,24 @@ pub fn render_full_frame(
             app_render_time_ms[idx].set(render_elapsed_ms);
 
             // Render workload budget enforcement: uyarı logla
+            // Render budget warning: log at most once per second per window
+            // to avoid serial port flooding during sustained overload.
             if render_elapsed_ms > RENDER_BUDGET_MS && idx < gui::MAX_WINDOWS {
-                crate::serial_print("[RENDER] Uyarı: render bütçesi aştı: ID=");
-                crate::serial_print_dec(idx as u64);
-                crate::serial_print(" (");
-                crate::serial_print_dec(render_elapsed_ms);
-                crate::serial_print(" ms > ");
-                crate::serial_print_dec(RENDER_BUDGET_MS);
-                crate::serial_print(" ms)\n");
+                static mut LAST_WARN_MS: [u64; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
+                let now_ms = crate::monotonic_ms();
+                let last = unsafe { LAST_WARN_MS[idx] };
+                if now_ms.wrapping_sub(last) >= 1_000 {
+                    unsafe {
+                        LAST_WARN_MS[idx] = now_ms;
+                    }
+                    crate::serial_print("[RENDER] Uyarı: render bütçesi aştı: ID=");
+                    crate::serial_print_dec(idx as u64);
+                    crate::serial_print(" (");
+                    crate::serial_print_dec(render_elapsed_ms);
+                    crate::serial_print(" ms > ");
+                    crate::serial_print_dec(RENDER_BUDGET_MS);
+                    crate::serial_print(" ms)\n");
+                }
             }
 
             // Kirpmayi kaldir ve kaydirma cubuklarini pencerenin icinde ciz.

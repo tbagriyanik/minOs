@@ -86,6 +86,7 @@ pub struct KeyboardState {
     action_head: usize,
     action_tail: usize,
     extended_scancode: bool,
+    break_scancode: bool,
     prt_scn_state: u8,
     /// Şu an basılı tutulan normal tuşlar (PS/2 set 1 tarama kodu).
     held: [u8; 128],
@@ -111,6 +112,7 @@ impl KeyboardState {
             action_head: 0,
             action_tail: 0,
             extended_scancode: false,
+            break_scancode: false,
             prt_scn_state: 0,
             held: [0; 128],
             held_extended: [0; 128],
@@ -174,8 +176,40 @@ impl KeyboardState {
     }
 
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<char> {
+        // Set-2/Set-3 break prefix: 0xF0, ardından break kodu gelir.
+        if scancode == 0xF0 {
+            self.break_scancode = true;
+            return None;
+        }
+
         if scancode == 0xE0 {
             self.extended_scancode = true;
+            return None;
+        }
+
+        // Set-2/Set-3 break kodu: 0xF0 sonrası gelen kod, tuş bırakma olayıdır.
+        if self.break_scancode {
+            self.break_scancode = false;
+            let released = scancode & 0x7F;
+            self.held[released as usize] = 0;
+            if released == 0x2A || released == 0x36 {
+                self.shift = false;
+            }
+            if released == 0x1D {
+                self.ctrl = false;
+            }
+            if released == 0x38 {
+                self.alt = false;
+                self.alt_gr = false;
+            }
+            if released == 0x5B || released == 0x5C {
+                self.super_key = false;
+                if !self.super_key_combo {
+                    self.push_action(KeyAction::ToggleStartMenu);
+                }
+                self.super_key_combo = false;
+                return None;
+            }
             return None;
         }
 

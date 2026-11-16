@@ -394,14 +394,33 @@ pub fn text_width(face: Face, text: &str, size: f32) -> usize {
     let mut width = 0.0f32;
     for line in text.split('\n') {
         let mut line_width = 0.0f32;
-        for character in visual_order(line) {
-            let codepoint = if glyph(face, character).is_some() {
-                character as u32
-            } else {
-                b'?' as u32
-            };
-            if let Ok(index) = glyphs.binary_search_by_key(&codepoint, |record| record.codepoint) {
-                line_width += glyphs[index].advance * factor;
+        // RTL yoksa tahsisatsız hızlı yol; aksi halde görsel sıra gerekir.
+        // Fast path without allocation when no RTL; visual order otherwise.
+        if line.chars().any(is_rtl) {
+            for character in visual_order(line) {
+                let codepoint = if glyph(face, character).is_some() {
+                    character as u32
+                } else {
+                    b'?' as u32
+                };
+                if let Ok(index) =
+                    glyphs.binary_search_by_key(&codepoint, |record| record.codepoint)
+                {
+                    line_width += glyphs[index].advance * factor;
+                }
+            }
+        } else {
+            for character in line.chars() {
+                let codepoint = if glyph(face, character).is_some() {
+                    character as u32
+                } else {
+                    b'?' as u32
+                };
+                if let Ok(index) =
+                    glyphs.binary_search_by_key(&codepoint, |record| record.codepoint)
+                {
+                    line_width += glyphs[index].advance * factor;
+                }
             }
         }
         width = width.max(line_width);
@@ -430,11 +449,22 @@ pub fn draw(
     let mut baseline = y as f32 + ascent * factor;
 
     for line in text.split('\n') {
-        for character in visual_order(line) {
-            let record = glyph(face, character).or_else(|| glyph(face, '?'));
-            let Some(record) = record else { continue };
-            blit_glyph(fb, bitmap, record, pen_x, baseline, color, factor);
-            pen_x += record.advance * factor;
+        // RTL yoksa tahsisatsız hızlı yol; aksi halde görsel sıra gerekir.
+        // Fast path without allocation when no RTL; visual order otherwise.
+        if line.chars().any(is_rtl) {
+            for character in visual_order(line) {
+                let record = glyph(face, character).or_else(|| glyph(face, '?'));
+                let Some(record) = record else { continue };
+                blit_glyph(fb, bitmap, record, pen_x, baseline, color, factor);
+                pen_x += record.advance * factor;
+            }
+        } else {
+            for character in line.chars() {
+                let record = glyph(face, character).or_else(|| glyph(face, '?'));
+                let Some(record) = record else { continue };
+                blit_glyph(fb, bitmap, record, pen_x, baseline, color, factor);
+                pen_x += record.advance * factor;
+            }
         }
         pen_x = origin_x;
         baseline += line_height * factor;

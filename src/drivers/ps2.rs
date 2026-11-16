@@ -191,9 +191,9 @@ pub fn init() {
             }
         }
 
-        // Örnekleme hızı: 100 örnek/saniye (Laptop touchpad ve fare için kararlı akış)
+        // Örnekleme hızı: 200 örnek/saniye (daha akıcı fare hareketi)
         mouse_write(0xF3);
-        mouse_write(100);
+        mouse_write(200);
 
         // Akış Modunu Etkinleştir (Set Stream Mode - 0xEA)
         mouse_write(0xEA);

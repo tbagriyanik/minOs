@@ -57,7 +57,9 @@ pub fn run_welcome_screen(
 
     loop {
         if !welcome_announced {
-            serial_print("[BOOT] Hoş geldin döngüsü: Enter/ESC/tıklama bekleniyor (5 sn zaman aşımı etkin).\n");
+            serial_print(
+                "[BOOT] Welcome loop: waiting for Enter/ESC/click (5s timeout enabled).\n",
+            );
             welcome_announced = true;
         }
 
@@ -123,7 +125,7 @@ pub fn run_welcome_screen(
         if welcome_now.wrapping_sub(welcome_start_time) >= welcome_timeout_ms
             && !boot::text_console::is_active()
         {
-            serial_print("[BOOT] Hoş geldin zaman aşımı; otomatik olarak masaüstüne geçiliyor.\n");
+            serial_print("[BOOT] Welcome timeout; switching to desktop automatically.\n");
             welcome_accepted = true;
         }
 

@@ -33,14 +33,14 @@ pub fn init_subsystems(
     let mut timer = crate::boot::timing::PhaseTimer::new();
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
-    serial_print("[BOOT] Sanal dosya sistemi başlatılıyor...\n");
+    serial_print("[BOOT] Starting virtual file system...\n");
     let mut fs_mgr = fs::FileSystemManager::new();
     let boot_log = Vec::with_capacity(4096);
     boot::console::save_boot_log(&mut fs_mgr.vfs);
     timer.mark("vfs");
 
     // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
-    serial_print("[BOOT] Donanım kesmeleri ve bellek yöneticisi başlatılıyor...\n");
+    serial_print("[BOOT] Starting hardware interrupts and memory manager...\n");
     arch::x86_64::init_interrupts(0);
 
     unsafe {
@@ -99,11 +99,11 @@ pub fn init_subsystems(
         }
     }
 
-    serial_print("[PMM] Fiziksel bellek yöneticisi başlatıldı.\n");
+    serial_print("[PMM] Physical memory manager started.\n");
     if memory_mgr.pmm.zone_self_test() {
         serial_print("[PMM-ZONE] DMA/Normal bolgeleri ve CPU sayfa onbellegi dogrulandi.\n");
     } else {
-        serial_print("[PMM-ZONE] UYARI: bolge/onbellek oz-testi basarisiz.\n");
+        serial_print("[PMM-ZONE] WARNING: zone/cache self-test failed.\n");
     }
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
     timer.mark("pmm");
@@ -140,7 +140,7 @@ pub fn init_subsystems(
     }
 
     // VMM ve Güvenli Uygulama Yükleyicisi Doğrulaması
-    serial_print("[BOOT] Sanal bellek yöneticisi test ediliyor...\n");
+    serial_print("[BOOT] Testing virtual memory manager...\n");
     let mut address_space = memory_mgr.kernel_address_space();
     let test_vaddr = mm::loader::USER_CODE_BASE;
     if let Some(frame) = memory_mgr.pmm.allocate_frame() {
@@ -178,7 +178,7 @@ pub fn init_subsystems(
     timer.mark("vmm");
 
     // Süreç Yöneticisi ve Sistem Çağrılarının (syscalls) Başlatımı
-    serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
+    serial_print("[BOOT] Starting process manager...\n");
     memory_mgr.proc_mgr.init_kernel_process();
     // Syscall fd katmanı için VFS dosyalarını önbellekle (açılış anlık görüntüsü).
     let cached_files = memory_mgr.proc_mgr.files.cache_vfs(&fs_mgr.vfs);
@@ -229,17 +229,17 @@ pub fn init_subsystems(
     // tek seferlik kaynağı süreç testi ölçümlerine "sızıntı" olarak yansımasın.
     mm::user_mem::ensure_zero_page(&mut memory_mgr.pmm);
 
-    serial_print("[BOOT] Bellek testleri çalıştırılıyor...\n");
+    serial_print("[BOOT] Running memory tests...\n");
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
     mm::allocator::test_allocator_subsystem();
-    serial_print("[BOOT] Büyük sayfa ve sıkıştırma testleri çalıştırılıyor...\n");
+    serial_print("[BOOT] Running large-page and compression tests...\n");
     mm::memory::run_boot_tests(&mut memory_mgr.pmm);
     crate::kernel::heap::test_heap_growth();
     crate::kernel::heap::test_tiered_alloc();
     mm::memory::profile::report_boot_summary();
     timer.mark("bellek-testleri");
 
-    serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");
+    serial_print("[BOOT] Running process tests...\n");
     mm::process::test_process_lifecycle_and_fault_recovery(
         &mut memory_mgr.proc_mgr,
         &mut memory_mgr.pmm,
@@ -269,8 +269,8 @@ pub fn init_subsystems(
     }
     timer.mark("ring3-testleri");
 
-    serial_print("[BOOT] SMP başlatılıyor...\n");
-    serial_print("[SMP] BSP GDT yükleniyor...\n");
+    serial_print("[BOOT] Starting SMP...\n");
+    serial_print("[SMP] Loading BSP GDT...\n");
     unsafe { arch::x86_64::gdt::load_for_cpu(0) };
     let requested_cpus = arch::x86_64::smp::init();
     let online_cpus = arch::x86_64::smp::wait_for_aps(5_000_000);
@@ -280,7 +280,7 @@ pub fn init_subsystems(
     crate::serial::print_dec(requested_cpus as u64);
     serial_print("; per-CPU run queue etkin.\n");
 
-    serial_print("[BOOT] APIC zamanlayıcısı başlatılıyor...\n");
+    serial_print("[BOOT] Starting APIC timer...\n");
     // Local APIC MMIO sayfasını eşlemeden ilk lapic_write çekirdek #PF (vektor 14)
     // üretir ve sistemi siyah ekranda durdurur. lapic_init() önce MMIO sayfasını
     // map'ler, ardından apic::init_timer() timer kayıtlarına güvenle yazabilir.
@@ -337,7 +337,7 @@ pub fn init_subsystems(
 
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
     timer.mark("smp");
-    serial_print("[BOOT] Donanım sürücüleri başlatılıyor...\n");
+    serial_print("[BOOT] Starting hardware drivers...\n");
     let cmdline = limine_boot_cmdline().unwrap_or("");
     let driver_profile = if cmdline_has_token(cmdline, "full") {
         "full"
@@ -414,13 +414,13 @@ pub fn init_subsystems(
         "full" => &lanes[0..4],
         _ => &[],
     };
-    serial_print("[BOOT] Sürücü hatları paralel başlatılıyor (hat sayısı: ");
+    serial_print("[BOOT] Starting parallel driver lanes (lane count: ");
     crate::serial::print_dec(tasks.len() as u64);
     serial_print(", CPU: ");
     crate::serial::print_dec(arch::x86_64::smp::cpu_count() as u64);
     serial_print(")\n");
     arch::x86_64::smp::parallel_run(tasks);
-    serial_print("[DRIVERS] Paralel sürücü hatları tamamlandı.\n");
+    serial_print("[DRIVERS] Parallel driver lanes completed.\n");
 
     let _socket_timeout_task = task::spawn("socket-timeouts", task::TaskPriority::Normal, || {
         drivers::socket::poll_timeouts();
@@ -432,7 +432,7 @@ pub fn init_subsystems(
     let mut audio_dev = drivers::audio::AudioDevice::new();
     audio_dev.test_audio_subsystem();
 
-    serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
+    serial_print("[DRIVERS] All drivers ready.\n");
     timer.mark("suruculer");
     serial_print("[NET] smoltcp protokolleri etkin: ");
     serial_print(crate::net_smoltcp::Protocols::summary());
@@ -461,7 +461,7 @@ pub fn init_subsystems(
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
     drivers::ps2::init();
     if drivers::ps2::present() {
-        serial_print("[BOOT] PS/2 hazır.\n");
+        serial_print("[BOOT] PS/2 ready.\n");
     } else {
         serial_print("[BOOT] PS/2 denetleyicisi yok; girdi yalnızca USB HID üzerinden.\n");
     }
@@ -476,7 +476,7 @@ pub fn init_subsystems(
 
     // 5b. Tema motorunu başlat
     crate::gui::theme::init();
-    serial_print("[BOOT] Tema hazır.\n");
+    serial_print("[BOOT] Theme ready.\n");
     timer.mark("tema");
 
     // 5c. önyükleme modu denetimi:
@@ -512,7 +512,7 @@ pub fn init_subsystems(
     serial_print("[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n");
     timer.mark("surucu-kesfi");
 
-    serial_print("[BOOT] Tüm kritik alt sistemler başlatıldı. GUI ve uygulamalar yükleniyor...\n");
+    serial_print("[BOOT] All critical subsystems started. Loading GUI and applications...\n");
     timer.mark("alt-sistemler");
     crate::boot::timing::report_total();
 
@@ -553,9 +553,9 @@ unsafe fn driver_lane_audio(arg: *mut u8) {
     let Some(dma) = (unsafe { &*(arg as *const DriverLaneArgs) }).hda_dma else {
         return;
     };
-    serial_print("[DRIVER] HDA ses sürücüsü başlatılıyor...\n");
+    serial_print("[DRIVER] Starting HDA audio driver...\n");
     drivers::hda::init(Some(dma));
-    serial_print("[DRIVER] HDA ses sürücüsü hazır.\n");
+    serial_print("[DRIVER] HDA audio driver ready.\n");
 }
 
 /// Hat 1 — PCI/ISA ağ kartı + protokol yığını (yalnızca `hardware`/`full`).
@@ -595,12 +595,12 @@ unsafe fn driver_lane_usb(arg: *mut u8) {
     {
         return;
     }
-    serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
+    serial_print("[DRIVER] Starting USB driver...\n");
     drivers::usb::init();
     drivers::usb::test_usb_subsystems();
-    serial_print("[DRIVER] Wi-Fi (802.11) alt sistemi başlatılıyor...\n");
+    serial_print("[DRIVER] Starting Wi-Fi (802.11) subsystem...\n");
     drivers::wifi::init();
-    serial_print("[DRIVER] USB sürücüsü hazır.\n");
+    serial_print("[DRIVER] USB driver ready.\n");
 }
 
 /// Hat 3 — xHCI HID (klavye/fare/dokunmatik) taraması; PMM'e tek erişen hat.
@@ -610,7 +610,7 @@ unsafe fn driver_lane_hid(arg: *mut u8) {
     if args.e1000_dma.is_none() {
         return;
     }
-    serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
+    serial_print("[DRIVER] Starting USB HID (xHCI) driver...\n");
     // SAFETY: `args->pmm` `parallel_run` çağrısı süresince tek erişimlidir;
     // PMM metodları iç kilitle korunur.
     drivers::usb_hid::init(unsafe { &mut *args.pmm });
@@ -624,5 +624,5 @@ unsafe fn driver_lane_hid(arg: *mut u8) {
         }
         serial_print(").\n");
     }
-    serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
+    serial_print("[DRIVER] USB HID driver ready.\n");
 }

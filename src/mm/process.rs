@@ -1223,7 +1223,14 @@ impl ProcessManager {
             return false;
         }
         let shared_frame = entry & 0x000F_FFFF_FFFF_F000;
-        let private_flags = (entry & !PAGE_COW) | PageFlags::WRITABLE;
+        // private_flags yalnızca bayrak bitlerini içermeli; fiziksel adres
+        // bitleri set_flags tarafından maskelenir. Eski girişin adres
+        // bitlerini taşımak, remap sonrası eski çerçevenin geri gelmesine
+        // yol açar (COW split hatası).
+        // private_flags must contain only flag bits; physical address bits
+        // are masked by set_flags. Carrying old address bits causes the
+        // old frame to reappear after remap (COW split bug).
+        let private_flags = (entry & !0x000F_FFFF_FFFF_F000 & !PAGE_COW) | PageFlags::WRITABLE;
 
         // Paylaşım tek eldeyse kopya gerekmez: çerçeveyi yerinde yazılabilir yap.
         let copy_needed = !matches!(
@@ -1263,7 +1270,9 @@ impl ProcessManager {
             return false;
         }
         let resources = &mut self.processes[slot].resources;
-        if !resources.take_user_frame(shared_frame) && !resources.take_frame(shared_frame) {
+        let user_taken = resources.take_user_frame(shared_frame);
+        let frame_taken = resources.take_frame(shared_frame);
+        if !user_taken && !frame_taken {
             return false;
         }
         // Yeni çerçeve özel; paylaşım kaydından çıkartıldı.

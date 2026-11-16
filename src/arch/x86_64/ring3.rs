@@ -2306,18 +2306,20 @@ pub fn schedule_user_processes() {
     }
     USER_TICK_STREAK[cpu.min(USER_TICK_STREAK.len() - 1)].store(0, Ordering::Relaxed);
 
-    smp::print_locked("[RING3-SCHED] dilim pid=");
-    smp::print_locked_dec(pid as u64);
-    smp::print_locked(" cr3=");
-    smp::print_locked_hex(ctx.cr3);
-    smp::print_locked("\n");
-
     // Her N dilimde bir süreç/bellek durumu raporu (scheduler yükü altında
     // CR3, ASLR yığını, heap ve COW sayaçlarının canlı izlenmesi). İlk dilim de
     // raporlanır: önyükleme sırasında toplam dilim sayısı rapor aralığından az
     // olabilir ve testler bu ilk anlık görüntüye dayanır.
     let slice = SLICE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    // `[RING3-SCHED] dilim` satırını seyrekleştir: her dilimde seri porta
+    // yazmak timer interrupt yolunu yavaşlatır. Sadece ilk dilim ve her 64.
+    // dilimde yaz; SCHED-STAT raporu zaten her 64 dilimde basılıyor.
     if slice == 1 || slice.is_multiple_of(SCHED_REPORT_INTERVAL) {
+        smp::print_locked("[RING3-SCHED] dilim pid=");
+        smp::print_locked_dec(pid as u64);
+        smp::print_locked(" cr3=");
+        smp::print_locked_hex(ctx.cr3);
+        smp::print_locked("\n");
         report_process_state();
     }
 

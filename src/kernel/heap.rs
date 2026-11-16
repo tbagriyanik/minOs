@@ -151,8 +151,11 @@ const SLAB_THRESHOLD: usize = 64;
 const SLAB_CLASSES: [usize; 3] = [16, 32, 64];
 /// Sınıf başına en fazla sayfa (4 KiB × 256 = 1 MiB/sınıf üst sınırı).
 const MAX_SLAB_PAGES_PER_CLASS: usize = 256;
-/// Slab sayfa tablosu kapasitesi (sınıf başına sayfa üst sınırı toplamı).
-const SLAB_PAGE_TABLE_SIZE: usize = SLAB_CLASSES.len() * MAX_SLAB_PAGES_PER_CLASS;
+/// Slab sayfa tablosu kapasitesi. `slab_hash` maske (`size - 1`) kullandığı
+/// için 2'nin kuvveti olmalı; 768 girdi için 1024 seçildi — daha düşük doluluk
+/// oranı `slab_page_class` sondasını kısaltır (önceki 768'lik boyut maskesi
+/// yüzünden 256..511 arası yuvalar hiç kullanılmıyordu).
+const SLAB_PAGE_TABLE_SIZE: usize = 1024;
 
 /// Sayfa ayırıcıya giren asgari istek boyu (bayt).
 const LARGE_THRESHOLD: usize = 64 * 1024;

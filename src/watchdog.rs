@@ -322,11 +322,24 @@ pub fn acknowledge_frozen(idx: usize) {
 /// APIC timer interrupt'ından çağrılır. Donanım kesmesi bağlamında çalışır;
 /// burada yalnızca durum güncellenir ve donmuş pencereler kuyruğa alınır.
 /// Sonlandırma kararı ve GUI durumu değişikliği ana döngüye aittir.
+///
+/// Watchdog taraması her timer tikinde (1 ms) yapılmaz; 10 ms'de bir
+/// yeterlidir çünkü timeout 5 sn'dir. Bu, timer interrupt yolundaki
+/// gereksiz taramayı azaltır.
 pub fn timer_tick() {
+    static mut LAST_TICK_MS: u64 = 0;
+    let now_ms = now_ms();
+    unsafe {
+        // 10 ms'de bir tarama; ilk çağrıda hemen çalış.
+        if LAST_TICK_MS != 0 && now_ms.saturating_sub(LAST_TICK_MS) < 10 {
+            return;
+        }
+        LAST_TICK_MS = now_ms;
+    }
+
     let Some(mut shared) = SHARED.try_lock() else {
         return;
     };
-    let now_ms = now_ms();
     let (cur_app, cur_win, _) = crate::apps::guard::current_context();
     let frozen = shared.watchdog.tick(now_ms, |idx, app_id, _idle_ms| {
         // Yalnızca o anda korunan uygulama bağlamı dondurma adayı olabilir.

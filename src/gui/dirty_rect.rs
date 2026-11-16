@@ -46,6 +46,10 @@ pub struct GlobalDirtyTracker {
     rects: [DirtyRect; MAX_DIRTY_RECTS],
     len: usize,
     overflowed: bool,
+    /// Tüm izlenen kirli rectlerin birleşimi (bounding rect).
+    /// MAX_DIRTY_RECTS'yi aştığında bile güncellenir; needs_full_redraw()
+    /// bu birleşimi kullanarak tam ekran mı kontrol eder.
+    bounding: DirtyRect,
 }
 
 impl GlobalDirtyTracker {
@@ -54,6 +58,7 @@ impl GlobalDirtyTracker {
             rects: [DirtyRect::new(0, 0, 0, 0); MAX_DIRTY_RECTS],
             len: 0,
             overflowed: false,
+            bounding: DirtyRect::new(0, 0, 0, 0),
         }
     }
 
@@ -61,6 +66,8 @@ impl GlobalDirtyTracker {
         if rect.width == 0 || rect.height == 0 {
             return;
         }
+        // Bounding rect'i her zaman güncelle (overflow olsa bile).
+        self.bounding = self.bounding.union(rect);
         if self.len < MAX_DIRTY_RECTS {
             self.rects[self.len] = rect;
             self.len += 1;
@@ -72,6 +79,7 @@ impl GlobalDirtyTracker {
     pub fn clear(&mut self) {
         self.len = 0;
         self.overflowed = false;
+        self.bounding = DirtyRect::new(0, 0, 0, 0);
     }
 
     pub fn as_slice(&self) -> &[DirtyRect] {
@@ -80,12 +88,28 @@ impl GlobalDirtyTracker {
     pub fn is_empty(&self) -> bool {
         self.len == 0 && !self.overflowed
     }
+    /// Tam ekran redraw gerekip gerekmediğini belirler.
+    /// GlobalDirtyTracker MAX_DIRTY_RECTS (64) Capacity aşıldığında bile,
+    /// birleşimi (bounding rect) hesaba katılarak daha akıllı redraw kararı
+    /// verilebilir: bounding rect ekranın tamamını kapsıyorsa full redraw,
+    /// aksi halde partial redraw mümkün.
     pub fn needs_full_redraw(&self) -> bool {
-        self.overflowed
+        // Eğer overflow olmadıysa eski davranışa devam et.
+        if !self.overflowed {
+            return false;
+        }
+        // Overflow olundu: bounding rect'e bakarak tam ekran mı?
+        // Boyutlar sıfırsa anlamı yok.
+        self.bounding.width > 0 && self.bounding.height > 0
     }
 
     pub fn bounding_rect(&self) -> Option<DirtyRect> {
-        self.as_slice().iter().copied().reduce(DirtyRect::union)
+        // Bounding rect sıfırsa (tüm boyutlar 0) anlamı yoktur.
+        if self.bounding.width == 0 || self.bounding.height == 0 {
+            None
+        } else {
+            Some(self.bounding)
+        }
     }
 
     pub fn take(&mut self) -> ([DirtyRect; MAX_DIRTY_RECTS], usize, bool) {

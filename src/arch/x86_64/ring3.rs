@@ -1459,6 +1459,7 @@ pub unsafe extern "C" fn ring3_fault_exit_trampoline() {
         "mov rax, [rip + {kcr3}]",
         "test rax, rax",
         "jz 1f",
+        "or rax, 0x8000000000000000",
         "mov cr3, rax",
         "1:",
         "mov rax, [rip + {saved_fx}]",
@@ -1495,6 +1496,7 @@ pub unsafe extern "C" fn ring3_exit_trampoline() {
         "mov rax, [rip + {kcr3}]",
         "test rax, rax",
         "jz 1f",
+        "or rax, 0x8000000000000000",
         "mov cr3, rax",
         "1:",
         "mov rax, [rip + {saved_fx}]",
@@ -1865,9 +1867,12 @@ fn read_result_in(aspace: &crate::mm::vmm::AddressSpace) -> u64 {
 }
 
 unsafe fn enter_demo_usermode(aspace: &crate::mm::vmm::AddressSpace, entry: u64, stack_top: u64) {
+    // CR3'ü PCID'yi setli olarak yükle: TLB'yi tam temizlemeden (INVPCID kullanılmadan)
+    // sadece ilgili sayfa tablosu girişleri yoksayarak temizler. CR4.PCIDE aktif olmalı.
+    let cr3_with_pcide = aspace.pml4_phys | 1 << 63;
     core::arch::asm!(
         "mov cr3, {}",
-        in(reg) aspace.pml4_phys,
+        in(reg) cr3_with_pcide,
         options(nostack, preserves_flags)
     );
     enter_usermode(entry, stack_top);
@@ -2206,7 +2211,8 @@ pub fn execute_process(
         // Kernel adres uzayına geri dön
         if let Some(kernel_p) = proc_mgr.get_process(0) {
             unsafe {
-                core::arch::asm!("mov cr3, {}", in(reg) kernel_p.address_space.pml4_phys, options(nostack, preserves_flags));
+                let cr3_with_pcide = kernel_p.address_space.pml4_phys | 1 << 63;
+                core::arch::asm!("mov cr3, {}", in(reg) cr3_with_pcide, options(nostack, preserves_flags));
             }
         }
 
@@ -2361,7 +2367,8 @@ pub fn schedule_user_processes() {
     let kcr3 = kernel_pml4();
     if kcr3 != 0 {
         unsafe {
-            core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, preserves_flags));
+            let cr3_with_pcide = kcr3 | 1 << 63;
+            core::arch::asm!("mov cr3, {}", in(reg) cr3_with_pcide, options(nostack, preserves_flags));
         }
     }
 }

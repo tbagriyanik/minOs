@@ -524,6 +524,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     }
 
     loop {
+        // APIC timer doğrulaması başarılıysa HLT ile CPU'yu uyutun;
+        // aksi halde spin poll yap.
+        arch::x86_64::apic::idle_pause();
         // Bir onceki turda yakalanan uygulama hatasini raporla ve yalnizca
         // hatali uygulamayi kapat; masaustu ve diger uygulamalar yasamaya
         // devam eder.

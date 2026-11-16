@@ -1,0 +1,18 @@
+   Compiling minos-kernel v2.4.0 (D:\minos)
+error: invalid operand for instruction
+    |
+note: instantiated into assembly here
+   --> <inline asm>:614:1
+    |
+614 | or rax, 0x8000000000000000
+    | ^
+
+error: invalid operand for instruction
+    |
+note: instantiated into assembly here
+   --> <inline asm>:641:1
+    |
+641 | or rax, 0x8000000000000000
+    | ^
+
+error: could not compile `minos-kernel` (bin "minos-kernel") due to 2 previous errors

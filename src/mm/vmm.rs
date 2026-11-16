@@ -47,19 +47,14 @@ impl SharedFrameTable {
 
 static SHARED_FRAMES: SpinMutex<SharedFrameTable> = SpinMutex::new(SharedFrameTable::new());
 
-/// Fiziksel CR3'ü Yükler (PCID destekli).
+/// Fiziksel CR3'ü Yükler.
 ///
-/// `mov cr3` komutunu çalıştırır ve isteğe PCID bitini (bit 63)ayarır.
-/// Bu, adres uzayı arasında geçiş yaparken TLB'yi tamamen temizlemeden
-/// (INVPCID kullanılmadan) sadece ilgili girişleri yoksayarak temizler.
-/// PCID'yi etkin kullanmak için CR4.PCIDE ayarlı olmalıdır.
+/// `mov cr3` komutunu çalıştırır. CR4.PCIDE etkin değilken bit 63 set'li
+/// CR3 değeri #GP ürettiği için PCID biti eklenmez; TLB tamamen temizlenir.
 #[inline(always)]
 pub fn load_cr3_phys(phys: u64) {
-    // PCID bitini (bit 63) setli CR3 değeri ile yükle.
-    // CR4.PCIDE aktif olmalı; aksi halde plain mov cr3 davranışı olur.
-    let cr3_with_pcide = phys | 1 << 63;
     unsafe {
-        core::arch::asm!("mov cr3, {}", in(reg) cr3_with_pcide, options(nostack, preserves_flags));
+        core::arch::asm!("mov cr3, {}", in(reg) phys, options(nostack, preserves_flags));
     }
 }
 

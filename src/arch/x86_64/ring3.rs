@@ -36,12 +36,9 @@ const USER_PREEMPT_QUANTUM: usize = 4;
 static KERNEL_PML4: AtomicU64 = AtomicU64::new(0);
 
 /// Boot sırasında çekirdek CR3'ünü kaydeder (tekrar çağrı güvenli).
-/// `pml4_phys` PCID bitini (bit 63) içerir; trampolineler bu bit kullanarak
-/// CR3'ü PCID'li olarak yükler, TLB'yi tam temizlemeden (INVPCID kullanılmadan)
-/// ilgili girişleri yoksayarak temizler.
 pub fn note_kernel_cr3(pml4_phys: u64) {
     if pml4_phys != 0 {
-        KERNEL_PML4.store(pml4_phys | 1 << 63, Ordering::Relaxed);
+        KERNEL_PML4.store(pml4_phys, Ordering::Relaxed);
     }
 }
 
@@ -1868,12 +1865,9 @@ fn read_result_in(aspace: &crate::mm::vmm::AddressSpace) -> u64 {
 }
 
 unsafe fn enter_demo_usermode(aspace: &crate::mm::vmm::AddressSpace, entry: u64, stack_top: u64) {
-    // CR3'ü PCID'yi setli olarak yükle: TLB'yi tam temizlemeden (INVPCID kullanılmadan)
-    // sadece ilgili sayfa tablosu girişleri yoksayarak temizler. CR4.PCIDE aktif olmalı.
-    let cr3_with_pcide = aspace.pml4_phys | 1 << 63;
     core::arch::asm!(
         "mov cr3, {}",
-        in(reg) cr3_with_pcide,
+        in(reg) aspace.pml4_phys,
         options(nostack, preserves_flags)
     );
     enter_usermode(entry, stack_top);
@@ -2212,8 +2206,7 @@ pub fn execute_process(
         // Kernel adres uzayına geri dön
         if let Some(kernel_p) = proc_mgr.get_process(0) {
             unsafe {
-                let cr3_with_pcide = kernel_p.address_space.pml4_phys | 1 << 63;
-                core::arch::asm!("mov cr3, {}", in(reg) cr3_with_pcide, options(nostack, preserves_flags));
+                core::arch::asm!("mov cr3, {}", in(reg) kernel_p.address_space.pml4_phys, options(nostack, preserves_flags));
             }
         }
 
@@ -2368,8 +2361,7 @@ pub fn schedule_user_processes() {
     let kcr3 = kernel_pml4();
     if kcr3 != 0 {
         unsafe {
-            let cr3_with_pcide = kcr3 | 1 << 63;
-            core::arch::asm!("mov cr3, {}", in(reg) cr3_with_pcide, options(nostack, preserves_flags));
+            core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, preserves_flags));
         }
     }
 }

@@ -58,13 +58,8 @@ if (Test-Path "boot\limine\BOOTX64.EFI") {
     Copy-Item -Force "boot\limine\BOOTX64.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTX64.EFI"
     Write-Host "UEFI x86_64 ikilisi: EFI\BOOT\BOOTX64.EFI" -ForegroundColor Cyan
 }
-if (Test-Path "boot\limine\BOOTIA32.EFI") {
-    Copy-Item -Force "boot\limine\BOOTIA32.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTIA32.EFI"
-}
 
-# Copy every test asset from public/media. Keep it in both locations: the
-# user-visible VFS folder (/root/Media) and the ISO's /media directory
-# (accessible at /media/cdrom/media after boot).
+# Copy every test asset from public/media.
 $mediaFiles = @(Get-ChildItem -File "public\media" -ErrorAction SilentlyContinue)
 $mediaDestDir = Join-Path $OutputDir "root\Media"
 $isoMediaDestDir = Join-Path $OutputDir "media"

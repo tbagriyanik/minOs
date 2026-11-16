@@ -151,9 +151,16 @@ if ($DiskImage) {
         Write-Host "[BILGI] Bos ve formatsiz disk imaji olusturuluyor: $DiskImage (256MB)..." -ForegroundColor Yellow
         $qemuImgCandidates = @(
             "C:\Program Files\qemu\qemu-img.exe",
-            (Join-Path (Split-Path $qemuExe -Parent) "qemu-img.exe"),
             "qemu-img.exe"
         )
+        $qemuImgDir = Split-Path $qemuExe -Parent
+        if ($qemuImgDir) {
+            $qemuImgCandidates = @(
+                "C:\Program Files\qemu\qemu-img.exe",
+                (Join-Path $qemuImgDir "qemu-img.exe"),
+                "qemu-img.exe"
+            )
+        }
         $qemuImgExe = $null
         foreach ($p in $qemuImgCandidates) {
             if (Test-Path $p) { $qemuImgExe = $p; break }

@@ -54,7 +54,8 @@ fn fast_sqrt(x: f32) -> f32 {
         return 0.0;
     }
     let mut g = if x >= 1.0 { x * 0.5 + 0.5 } else { 1.0 };
-    for _ in 0..20 {
+    // Ekran ölçeğinde altı iterasyon yeterli doğruluk sağlar.
+    for _ in 0..6 {
         g = 0.5 * (g + x / g);
     }
     g
@@ -115,7 +116,9 @@ const MAX_DEPTH: f32 = 16.0;
 const MOVE_SPEED: f32 = 0.14;
 const ROT_SPEED: f32 = 0.10;
 // Ana döngü fare delta'sını yarım ölçekle gönderiyor; bu değer 1:1'e yakın,
-const ENEMIES_PER_FRAME: usize = 4;
+// Tüm düşmanları her karede çizmek, sprite'ların kareler arasında kaybolmasını
+// önler. Sayı düşük tutulduğu için raycast maliyeti değişmez.
+const ENEMIES_PER_FRAME: usize = MAX_ENEMIES;
 // daha kontrollü bir FPS dönüşü için ayarlandı.
 const MOUSE_SENS: f32 = 0.0045;
 const PLAYER_RADIUS: f32 = 0.25;
@@ -1053,7 +1056,12 @@ impl FpsGameApp {
                         }
                         for xx in 0..sw {
                             let px = cx.saturating_sub(sw / 2) + xx;
-                            if px < render_x + w {
+                            // Sprite'ın yalnızca merkez sütununu değil, her
+                            // sütununu duvar z-buffer'ına göre kes. Aksi halde
+                            // duvarın arkasındaki düşman billboard'u duvarın
+                            // kenarlarından görünüyordu.
+                            let local_x = px.saturating_sub(render_x);
+                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
                                 let rel_y = yy.saturating_sub(cy0) as f32
                                     / (cy1.saturating_sub(cy0).max(1)) as f32;
                                 let is_head = rel_y < 0.28;

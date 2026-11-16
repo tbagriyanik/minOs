@@ -508,7 +508,10 @@ impl CityDriveApp {
         }
 
         // Basılı tutulan fizik tuşları (W/A/S/D, ok tuşları, Space).
-        let instant = self.key_mask;
+        // Tuş yalnızca basılı tutulduğu sürece etkilidir; tek basışla
+        // hızlanıp sürekli ilerlemeye devam etmemesi için `key_mask`
+        // her karede sıfırlanır ve sadece şu an basılı olan tuşlardan
+        // yeniden oluşturulur.
         self.key_mask = 0;
         if kbd.is_held(SCAN_W) || kbd.is_held_extended(SCAN_UP) {
             self.key_mask |= KEY_UP;
@@ -525,7 +528,6 @@ impl CityDriveApp {
         if kbd.is_held(SCAN_SPACE) {
             self.key_mask |= KEY_HAND;
         }
-        self.key_mask |= instant;
 
         let throttle =
             (self.key_mask & KEY_UP != 0) as i32 - (self.key_mask & KEY_DOWN != 0) as i32;
@@ -554,7 +556,7 @@ impl CityDriveApp {
         let steer =
             (self.key_mask & KEY_RIGHT != 0) as i32 - (self.key_mask & KEY_LEFT != 0) as i32;
         if steer != 0 {
-            let factor = (absf(self.speed) / MAX_SPEED).min(1.0);
+            let factor = ((absf(self.speed) + 0.10) / MAX_SPEED).min(1.0);
             let dir = if self.speed < 0.0 { -1.0 } else { 1.0 };
             self.heading += steer as f32 * TURN_RATE * factor * dir * dt;
             if self.heading > core::f32::consts::PI {
@@ -789,9 +791,11 @@ impl CityDriveApp {
         }
 
         // 3) Binalar: raycasting duvar sütunları.
-        let mut zbuf = [MAX_VIEW; 512];
+        // Geniş pencerelerde sprite derinlik testi de tam görünürlük alanını
+        // kapsasın; 512 sütunluk tampon yüksek çözünürlükte araçları kırpıyordu.
+        let mut zbuf = [MAX_VIEW; 1024];
         let col_step = if win_w >= 900 { 2 } else { 1 };
-        for col in (0..win_w.min(512)).step_by(col_step) {
+        for col in (0..win_w.min(1024)).step_by(col_step) {
             if budget.is_expired() {
                 return false;
             }
@@ -858,7 +862,7 @@ impl CityDriveApp {
             if perp > MAX_VIEW {
                 continue;
             }
-            for slot in zbuf[col..(col + col_step).min(win_w.min(512))].iter_mut() {
+            for slot in zbuf[col..(col + col_step).min(win_w.min(1024))].iter_mut() {
                 *slot = perp;
             }
 
@@ -868,7 +872,11 @@ impl CityDriveApp {
             let scale = focal / perp;
             let y_bottom = horizon as f32 + CAM_H * scale;
             let y_top = horizon as f32 - (wall_h - CAM_H) * scale;
-            if y_bottom <= 0.0 || y_top >= win_h as f32 {
+            // Dünya projeksiyonu mutlak ekran koordinatındadır. Burada
+            // `win_h` yerine görünüm alanının [top, top + view_h) sınırlarını
+            // kullanmak, başlık çubuğu altındaki duvarların yanlışlıkla
+            // tamamen atlanmasını ve yarım çizilmesini önler.
+            if y_bottom <= top as f32 || y_top >= (top + view_h) as f32 {
                 continue;
             }
 
@@ -890,6 +898,9 @@ impl CityDriveApp {
 
             let row_start = (y_top.max(top as f32) as usize).min(top + view_h);
             let row_end = (y_bottom.max(top as f32) as usize).min(top + view_h);
+            if row_start >= row_end {
+                continue;
+            }
             for row in row_start..row_end {
                 let z = CAM_H + (horizon as f32 - row as f32) / scale;
                 let storey_f = fractf(z / STOREY_H);
@@ -951,9 +962,6 @@ impl CityDriveApp {
             T_PARK => PARK_COLOR,
             _ => ROAD_COLOR,
         };
-        if kind != T_ROAD {
-            return shade(base, shade_f);
-        }
         // Yol şeridi: koridorun ortasında kesikli sarı çizgi.
         let lx = modf(fx, ROAD_PERIOD as f32);
         let ly = modf(fy, ROAD_PERIOD as f32);
@@ -965,7 +973,13 @@ impl CityDriveApp {
         if lx < ROAD_HALF as f32 && absf(lx - 1.0) < 0.16 && dashed_y {
             return shade(LANE_COLOR, shade_f);
         }
-        shade(base, shade_f)
+        // Hücreye bağlı az karartma: düz zemini parçalı bir doku gibi gösterir,
+        // ek çizim maliyeti yok.
+        let mut color = shade(base, shade_f);
+        if (cx + cy) & 1 == 0 {
+            color = shade(color, 0.88);
+        }
+        color
     }
 
     /// Dünya koordinatındaki bir nesneyi ekrana bilboard olarak çizer.
@@ -977,7 +991,7 @@ impl CityDriveApp {
         win_w: usize,
         horizon: usize,
         focal: f32,
-        zbuf: &[f32; 512],
+        zbuf: &[f32; 1024],
         world_x: f32,
         world_y: f32,
         world_h: f32,
@@ -1000,7 +1014,7 @@ impl CityDriveApp {
             return;
         }
         let screen_x = ((cam_x + 1.0) * 0.5 * win_w as f32) as i32;
-        if screen_x < 0 || screen_x as usize >= win_w.min(512) {
+        if screen_x < 0 || screen_x as usize >= win_w.min(1024) {
             return;
         }
         let depth = depth.min(MAX_VIEW);

@@ -350,12 +350,9 @@ pub fn render_full_frame(
 
                 16 => {
                     // FPS 3D raycasting render'ı QEMU/VM gibi yavaş ortamlarda
-                    // 24 ms'lik render bütçesini sık sık aşar; geri alma
-                    // yapılırsa oyun ekranı boş kalır ve sadece 2D moduna
-                    // geçilebilirdi. Bu nedenle 3D oyun için bütçe sınırlamasını
-                    // 80 ms'e çıkarıp tamamlanmayan kareyi geri almadan
-                    // gösteriyoruz (yarım kare, boş ekrandan iyidir).
-                    let fps3d_budget: u64 = 80;
+                    // Duvar raycast'inin ortasında kesilmesi yarım duvar
+                    // bırakabildiği için 3D sahneye geniş bir bütçe verilir.
+                    let fps3d_budget: u64 = 160;
                     let render_completed = fps_3d.render_content_with_budget(
                         fb,
                         win.x,

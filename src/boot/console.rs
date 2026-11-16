@@ -19,9 +19,20 @@ pub fn serial_print(s: &str) {
         || contains_str(s, "FAIL")
         || contains_str(s, "error")
         || contains_str(s, "ERROR")
-        || contains_str(s, "not found");
+        || contains_str(s, "not found")
+        || contains_str(s, "başarılı")
+        || contains_str(s, "basarili")
+        || contains_str(s, "BAŞARILI")
+        || contains_str(s, "BASARILI");
 
-    let color = if is_alert {
+    // "başarılı" / "basarili" / "BAŞARILI" / "BASARILI" metinleri yeşil renkle
+    let is_success = contains_str(s, "başarılı")
+        || contains_str(s, "basarili")
+        || contains_str(s, "BAŞARILI")
+        || contains_str(s, "BASARILI");
+    let color = if is_success {
+        0x6BFF6B // Yeşil (Green)
+    } else if is_alert {
         0xFF6B6B // Kirmizi (Red)
     } else {
         0xD8E1EE // Varsayilan acik mavi/gri

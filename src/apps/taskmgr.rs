@@ -463,6 +463,7 @@ impl TaskManagerApp {
             14 => 0, // Kontrol Paneli durumu global (sabit bellek kullanmaz)
             15 => core::mem::size_of::<crate::apps::game::GameApp>(),
             16 => core::mem::size_of::<crate::apps::fps_game::FpsGameApp>(),
+            17 => core::mem::size_of::<crate::apps::city_drive::CityDriveApp>(),
             _ => 0,
         }
     }

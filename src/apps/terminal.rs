@@ -119,6 +119,8 @@ const COMPLETION_APPS: &[&str] = &[
     "3d",
     "pkgmgr",
     "games",
+    "fps3d",
+    "city",
 ];
 
 fn app_index(name: &str) -> Option<usize> {
@@ -139,6 +141,8 @@ fn app_index(name: &str) -> Option<usize> {
         "pkgmgr" | "packagemgr" | "packages" | "paket" => Some(13),
         "panel" | "controlpanel" | "control" | "kontrol" => Some(14),
         "games" | "game" | "oyun" | "oyunlar" | "dama" | "checkers" | "solitaire" => Some(15),
+        "fps3d" | "fps" | "fps3doyun" => Some(16),
+        "city" | "sehir" | "surus" | "sehirsurusu" | "driving" => Some(17),
         _ => None,
     }
 }
@@ -162,6 +166,7 @@ fn app_name(index: usize) -> &'static str {
         (14, false) => "Kontrol Paneli",
         (15, false) => "Oyunlar",
         (16, false) => "FPS 3D Oyun",
+        (17, false) => "Şehir Sürüşü",
         (0, true) => "File Manager",
         (1, true) => "Settings",
         (2, true) => "Notepad",
@@ -179,6 +184,7 @@ fn app_name(index: usize) -> &'static str {
         (14, true) => "Control Panel",
         (15, true) => "Games",
         (16, true) => "FPS 3D Game",
+        (17, true) => "City Drive",
         _ => "Package Manager",
     }
 }

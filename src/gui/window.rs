@@ -533,9 +533,9 @@ pub const MENU_ITEM_STEP: usize = 20;
 pub const MENU_GROUPS: [(&str, usize, usize); 5] = [
     ("Sistem", 0, 7),
     ("Üretkenlik", 7, 3),
-    ("Medya", 10, 7),
-    ("Kurulu", 17, 9),
-    ("Güç", 26, 2),
+    ("Medya", 10, 8),
+    ("Kurulu", 18, 9),
+    ("Güç", 27, 2),
 ];
 
 impl MinGuiCompositor {
@@ -582,6 +582,7 @@ impl MinGuiCompositor {
             14 => 4, // Control Panel -> Gear
             15 => 2, // Games -> Game board
             16 => 2, // FPS 3D Game -> Game board
+            17 => 2, // City Drive -> Game board
             _ => 0,
         }
     }
@@ -614,6 +615,7 @@ impl MinGuiCompositor {
                 14 => "Control Panel",
                 15 => "Games",
                 16 => "FPS 3D Game",
+                17 => "City Drive",
                 _ => "Window",
             }
         } else {
@@ -635,6 +637,7 @@ impl MinGuiCompositor {
                 14 => "Kontrol Paneli",
                 15 => "Oyunlar",
                 16 => "FPS 3D Oyun",
+                17 => "Şehir Sürüşü",
                 _ => "Pencere",
             }
         }

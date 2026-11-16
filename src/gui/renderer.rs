@@ -104,6 +104,7 @@ pub fn render_window_content(
     pkg: &apps::pkgmgr::PackageManagerApp,
     fps: &apps::game::GameApp,
     fps_3d: &apps::fps_game::FpsGameApp,
+    city: &apps::city_drive::CityDriveApp,
     settings: &apps::settings::SystemSettings,
     kbd_layout: drivers::keyboard::KeyboardLayout,
     now: &drivers::rtc::DateTime,
@@ -202,6 +203,7 @@ pub fn render_window_content(
         ),
         15 => fps.render_content(fb, win.x, win.y, win.width, win.height),
         16 => fps_3d.render_content(fb, win.x, win.y, win.width, win.height),
+        17 => city.render_content(fb, win.x, win.y, win.width, win.height),
         _ => {}
     }
 

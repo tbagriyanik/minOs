@@ -23,6 +23,7 @@ pub fn app_process_name(app_id: usize) -> &'static str {
         14 => "kontrol_paneli",
         15 => "oyunlar",
         16 => "fps_3d_oyun",
+        17 => "sehir_surusu",
         _ => "uygulama",
     }
 }
@@ -72,6 +73,9 @@ pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
         compositor.focus_window(idx);
         if app_id == 16 {
             crate::boot::console::serial_print("[FPS3D] Uygulama açıldı / Application opened\n");
+        }
+        if app_id == 17 {
+            crate::boot::console::serial_print("[CITY] Uygulama açıldı / Application opened\n");
         }
     }
 }
@@ -210,6 +214,7 @@ pub fn terminate_app(
     pkgmgr: &mut apps::pkgmgr::PackageManagerApp,
     fps: &mut apps::game::GameApp,
     fps_3d: &mut apps::fps_game::FpsGameApp,
+    city: &mut apps::city_drive::CityDriveApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     crate::watchdog::unwatch(idx);
@@ -258,6 +263,12 @@ pub fn terminate_app(
             14 => apps::controlpanel::reset(),
             15 => *fps = apps::game::GameApp::new(),
             16 => *fps_3d = apps::fps_game::FpsGameApp::new(),
+            17 => {
+                *city = apps::city_drive::CityDriveApp::new();
+                // Motor sesi kalsin diye PC speaker susturulur.
+                let mut audio = drivers::audio::AudioDevice::new();
+                audio.set_pc_speaker_tone(0);
+            }
             _ => return,
         }
     }

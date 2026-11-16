@@ -22,6 +22,7 @@ pub struct AppInstances {
     pub pkgmgr_app: apps::pkgmgr::PackageManagerApp,
     pub fps_game_app: apps::game::GameApp,
     pub fps_3d_app: apps::fps_game::FpsGameApp,
+    pub city_drive_app: apps::city_drive::CityDriveApp,
 }
 
 /// Kurulum çıktısı: tüm uygulama örnekleri ve pencere yöneticisi.
@@ -65,6 +66,7 @@ pub fn init_apps(
             pkgmgr_app: apps::pkgmgr::PackageManagerApp::new(),
             fps_game_app: apps::game::GameApp::new(),
             fps_3d_app: apps::fps_game::FpsGameApp::new(),
+            city_drive_app: apps::city_drive::CityDriveApp::new(),
         },
         compositor: gui::MinGuiCompositor::new(),
     });
@@ -91,6 +93,7 @@ pub fn init_apps(
         (14, "Kontrol"),
         (15, "Oyun"),
         (16, "FPS3D"),
+        (17, "Sehir"),
     ] {
         compositor.app_registry.register_builtin(id, name);
     }
@@ -347,6 +350,21 @@ pub fn register_default_windows(
         height.saturating_sub(fps3d_h + gui::taskbar_h()) / 2,
         fps3d_w,
         fps3d_h,
+        false,
+    ));
+
+    // 17: City Drive (3D sehir surusu)
+    let city_w = 760.min(width.saturating_sub(20)).max(320);
+    let city_h = 520
+        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .max(220);
+    compositor.add_window(gui::Window::new(
+        "Sehir Surusu",
+        "Sehir",
+        width.saturating_sub(city_w) / 2,
+        height.saturating_sub(city_h + gui::taskbar_h()) / 2,
+        city_w,
+        city_h,
         false,
     ));
 

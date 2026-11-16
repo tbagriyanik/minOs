@@ -623,9 +623,9 @@ $checks = @(
         Description = "2MB hizali tahsis, PD seviyesinde HUGE_PAGE esleme ve sizintisiz iade"
     },
     @{
-        Name = "Bellek Sikistirma (Swap'siz MZRAM)";
+        Name = "Bellek sıkıstirma (Swap'siz MZRAM)";
         Pattern = "\[MZRAM\].*BASARILI";
-        Description = "Sifir sayfa RLE, desen eslesmesi, geri acma ve sikistirilamaz veri reddi"
+        Description = "Sifir sayfa RLE, desen eslesmesi, geri acma ve sıkıstirilamaz veri reddi"
     },
     @{
         Name = "Kernel Heap Buyutme ve Tembel Doldurma";

@@ -102,7 +102,7 @@ impl MinGuiCompositor {
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
-        const APP_IDX: [usize; 17] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12, 15, 16];
+        const APP_IDX: [usize; 18] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12, 15, 16, 17];
         APP_IDX.get(index).copied()
     }
     /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
@@ -143,7 +143,7 @@ impl MinGuiCompositor {
         if query.is_empty() {
             return 0;
         }
-        const NAMES: [[&str; 2]; 17] = [
+        const NAMES: [[&str; 2]; 18] = [
             ["Dosya Yöneticisi", "File Manager"],
             ["Sistem Ayarları", "Settings"],
             ["Not Defteri", "Notepad"],
@@ -161,6 +161,7 @@ impl MinGuiCompositor {
             ["Kontrol Paneli", "Control Panel"],
             ["Oyunlar", "Games"],
             ["FPS 3D Oyun", "FPS 3D Game"],
+            ["Şehir Sürüşü", "City Drive"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
         let mut scored: [(usize, u8); 32] = [(0, 0); 32];
@@ -716,6 +717,7 @@ impl MinGuiCompositor {
                 "Kontrol Paneli",
                 "Oyunlar",
                 "FPS 3D Oyun",
+                "Şehir Sürüşü",
             ];
             let en_names = [
                 "File Manager",
@@ -735,6 +737,7 @@ impl MinGuiCompositor {
                 "Control Panel",
                 "Games",
                 "FPS 3D Game",
+                "City Drive",
             ];
             if count == 0 {
                 Self::draw_string(
@@ -963,7 +966,7 @@ impl MinGuiCompositor {
             return;
         }
 
-        let menu_items: [(&str, u32, usize); 17] = if english {
+        let menu_items: [(&str, u32, usize); 18] = if english {
             [
                 ("File Manager", Color::ACCENT_YELLOW, 0),
                 ("Settings", Color::ACCENT_BLUE, 1usize),
@@ -982,6 +985,7 @@ impl MinGuiCompositor {
                 ("3D Viewer", Color::ACCENT_BLUE, 12),
                 ("Games", Color::ACCENT_YELLOW, 15),
                 ("FPS 3D Game", Color::ACCENT_YELLOW, 16),
+                ("City Drive", Color::ACCENT_BLUE, 17),
             ]
         } else {
             [
@@ -1002,6 +1006,7 @@ impl MinGuiCompositor {
                 ("3D Gösterici", Color::ACCENT_BLUE, 12),
                 ("Oyunlar", Color::ACCENT_YELLOW, 15),
                 ("FPS 3D Oyun", Color::ACCENT_YELLOW, 16),
+                ("Şehir Sürüşü", Color::ACCENT_BLUE, 17),
             ]
         };
 

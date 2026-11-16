@@ -431,7 +431,7 @@ pub fn self_test() -> bool {
     let zero_len = match compress(&zeros, &mut buffer) {
         Ok(len) => len,
         Err(_) => {
-            serial_print("[MZRAM] Sifir sayfa sikistirma: BASARISIZ\n");
+            serial_print("[MZRAM] Sifir sayfa sıkıstirma: BASARISIZ\n");
             return false;
         }
     };
@@ -445,7 +445,7 @@ pub fn self_test() -> bool {
     let pattern_len = match compress(&pattern, &mut buffer) {
         Ok(len) => len,
         Err(_) => {
-            serial_print("[MZRAM] Desen sikistirma: BASARISIZ\n");
+            serial_print("[MZRAM] Desen sıkıstirma: BASARISIZ\n");
             return false;
         }
     };
@@ -472,7 +472,7 @@ pub fn self_test() -> bool {
 
     let ok = zero_ok && pattern_ok && noise_rejected && pool_ok;
 
-    serial_print("[MZRAM] Sikistirma (sifir=");
+    serial_print("[MZRAM] sıkıstirma (sifir=");
     serial_print_dec(zero_len as u64);
     serial_print(" B, desen=");
     serial_print_dec(pattern_len as u64);
@@ -489,7 +489,7 @@ mod tests {
 
     fn roundtrip(data: &[u8]) -> usize {
         let mut packed = [0u8; MAX_COMPRESSED_BUFFER];
-        let len = compress(data, &mut packed).expect("sikistirma basarili olmali");
+        let len = compress(data, &mut packed).expect("sıkıstirma basarili olmali");
         assert!(len < data.len(), "cikti girdiden kucuk olmali");
         let mut opened = [0u8; MAX_COMPRESSED_BUFFER];
         let opened_len = decompress(&packed[..len], &mut opened).expect("acilabilmeli");

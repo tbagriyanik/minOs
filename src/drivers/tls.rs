@@ -1045,7 +1045,7 @@ impl TlsSession {
         let inner = gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr).map_err(|_| {
             serial_print("[TLS] GCM şifre çözme hatası\n");
         })?;
-        // Ic duz metinden el sikisma icerigini ve icerik turunu ayir.
+        // Ic duz metinden el sıkısma icerigini ve icerik turunu ayir.
         let (content, content_type) = Self::tls13_strip_inner_plaintext(&inner)?;
         if content_type != TLS_RECORD_HANDSHAKE {
             serial_print("[TLS] Yanlış içerik türü: ");
@@ -1225,7 +1225,7 @@ impl TlsSession {
             | TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 => {
                 self.tls13_mode = false;
             }
-            // Desteklenmeyen paket: sessizce bozuk bir el sikisma kurmak yerine
+            // Desteklenmeyen paket: sessizce bozuk bir el sıkısma kurmak yerine
             // hata dondur.
             _ => return Err(()),
         }
@@ -2131,7 +2131,7 @@ impl TlsSession {
         let iv: [u8; 12] = iv.try_into().ok()?;
 
         let gcm = Gcm::new(&key).ok()?;
-        // Ic duz metin: Finished || 0x16 (el sikisma) || dolgu
+        // Ic duz metin: Finished || 0x16 (el sıkısma) || dolgu
         let inner = Self::tls13_inner_plaintext(&finished, TLS_RECORD_HANDSHAKE);
         let nonce = Self::tls13_nonce(&iv, 0);
         let aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, inner.len() + GCM_TAG_LEN);
@@ -3160,7 +3160,7 @@ mod tests {
         let rec_len = u16::from_be_bytes([out[3], out[4]]) as usize;
         assert_eq!(rec_len, out.len() - 5);
 
-        // El sikisma mesaji
+        // El sıkısma mesaji
         let hs = &out[5..];
         assert_eq!(hs[0], HANDSHAKE_CLIENT_HELLO);
         assert_eq!(u16::from_be_bytes([hs[4], hs[5]]), TLS_VERSION_1_2);
@@ -3689,7 +3689,7 @@ mod tests {
         transcript: Sha256,
         handshake_secret: Option<[u8; 32]>,
         master_secret: Option<[u8; 32]>,
-        /// ServerHello aninda turetilen el sikisma trafik sirlari.
+        /// ServerHello aninda turetilen el sıkısma trafik sirlari.
         server_hs_secret: Option<[u8; 32]>,
         client_hs_secret: Option<[u8; 32]>,
         server_hs_key: Option<[u8; 16]>,
@@ -3900,7 +3900,7 @@ mod tests {
         m
     }
 
-    /// TLS 1.3 el sikismasinin uctan uca dogrulanmasi.
+    /// TLS 1.3 el sıkısmasinin uctan uca dogrulanmasi.
     #[test]
     fn tls13_handshake_loopback() {
         let client_random = [0x11u8; 32];
@@ -4557,7 +4557,7 @@ mod tests {
         with_psk.derive_tls13_handshake_keys(&shared).unwrap();
         assert_ne!(
             plain.tls13_handshake_secret, with_psk.tls13_handshake_secret,
-            "PSK early secret'i el sikisma sirlarini degistirmeli"
+            "PSK early secret'i el sıkısma sirlarini degistirmeli"
         );
     }
 

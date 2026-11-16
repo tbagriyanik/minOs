@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod calc_core;
 pub mod calculator;
+pub mod city_drive;
 pub mod controlpanel;
 pub mod filemanager;
 pub mod fps_game;

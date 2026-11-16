@@ -87,6 +87,10 @@ pub struct KeyboardState {
     action_tail: usize,
     extended_scancode: bool,
     prt_scn_state: u8,
+    /// Şu an basılı tutulan normal tuşlar (PS/2 set 1 tarama kodu).
+    held: [u8; 128],
+    /// Şu an basılı tutulan E0 ön ekli tuşlar (ok/Home/End/PageUp/PageDown).
+    held_extended: [u8; 128],
 }
 
 impl KeyboardState {
@@ -108,6 +112,8 @@ impl KeyboardState {
             action_tail: 0,
             extended_scancode: false,
             prt_scn_state: 0,
+            held: [0; 128],
+            held_extended: [0; 128],
         }
     }
 
@@ -154,6 +160,19 @@ impl KeyboardState {
         }
     }
 
+    /// Normal (E0 ön ekli olmayan) bir tuşun şu an basılı olup olmadığı.
+    ///
+    /// Basılı tutma gerektiren uygulamalar (ör. araç sürüş oyunu) tuş
+    /// bırakma olayını kaçırmamak için bu maskeyi kullanır.
+    pub fn is_held(&self, scancode: u8) -> bool {
+        self.held[(scancode & 0x7F) as usize] != 0
+    }
+
+    /// E0 ön ekli (ok tuşları, Home/End, PageUp/PageDown) tuş basılı mı?
+    pub fn is_held_extended(&self, scancode: u8) -> bool {
+        self.held_extended[(scancode & 0x7F) as usize] != 0
+    }
+
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<char> {
         if scancode == 0xE0 {
             self.extended_scancode = true;
@@ -189,6 +208,7 @@ impl KeyboardState {
         // Tuş bırakma (Release / Break code) kontrolü
         if scancode & 0x80 != 0 {
             let released = scancode & 0x7F;
+            self.held[released as usize] = 0;
             if released == 0x2A || released == 0x36 {
                 self.shift = false;
             }
@@ -209,6 +229,9 @@ impl KeyboardState {
             }
             return None;
         }
+
+        // Make (tuş basıldı): basılı tutma maskesini güncelle.
+        self.held[(scancode & 0x7F) as usize] = 1;
 
         // Fare tuşları (MouseKeys) modu: tuş takımı fare imlecini sürer.
         // NumLock durumundan bağımsız olarak sayısal tuşlar fare eylemi üretir;
@@ -561,6 +584,7 @@ impl KeyboardState {
     fn handle_extended_scancode(&mut self, scancode: u8) -> Option<char> {
         if scancode & 0x80 != 0 {
             let released = scancode & 0x7F;
+            self.held_extended[released as usize] = 0;
             if released == 0x1D {
                 self.ctrl = false;
             }
@@ -577,6 +601,9 @@ impl KeyboardState {
             }
             return None;
         }
+
+        // Make (E0 ön ekli tuş basıldı): basılı tutma maskesini güncelle.
+        self.held_extended[(scancode & 0x7F) as usize] = 1;
 
         // Fare tuşları modunda tuş takımı Enter'ı sol tıklamadır.
         if self.mouse_keys && scancode == 0x1C {

@@ -19,7 +19,7 @@
 | Sayfa Tablosu Geri Kazanimi (PT/PD/PDPT) | ✅ GEÇTİ | Unmap sonrasi bosalan alt seviye tablo cercevelerinin PMM'e iadesi (sizintisiz) |
 | Gelismis Allocator (Bump & FSB) | ✅ GEÇTİ | Tasma korumali align_up, bump LIFO ve FSB free-list yeniden kullanimi |
 | Buyuk Sayfa (2MB Huge Page) | ✅ GEÇTİ | 2MB hizali tahsis, PD seviyesinde HUGE_PAGE esleme ve sizintisiz iade |
-| Bellek Sikistirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sikistirilamaz veri reddi |
+| Bellek sıkıstirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sıkıstirilamaz veri reddi |
 | Kernel Heap Buyutme ve Tembel Doldurma | ✅ GEÇTİ | Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi |
 | Bellek Kullanim Profili | ✅ GEÇTİ | PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari |
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |

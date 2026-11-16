@@ -72,6 +72,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 mut pkgmgr_app,
                 mut fps_game_app,
                 mut fps_3d_app,
+                mut city_drive_app,
             },
         mut compositor,
     } = *gui::setup::init_apps(&mut fs_mgr, width, height);
@@ -340,6 +341,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     const FPS3D_FPS_LIMIT_MS: u64 = 16;
     let mut last_game_tick_ms: u64 = monotonic_ms();
     let mut last_fps3d_tick_ms: u64 = monotonic_ms();
+    let mut last_city_tick_ms: u64 = monotonic_ms();
 
     // Bağımsız watchdog APIC zamanlayıcısından ilerler; ana döngü yalnızca
     // etkinlik bildirir ve ertelenmiş dondurma olaylarını tüketir.
@@ -458,6 +460,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             &pkgmgr_app,
             &fps_game_app,
             &mut fps_3d_app,
+            &mut city_drive_app,
             &now,
             mouse,
             keyboard,
@@ -584,6 +587,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         &mut pkgmgr_app,
                         &mut fps_game_app,
                         &mut fps_3d_app,
+                        &mut city_drive_app,
                     );
                 }
             }
@@ -1742,6 +1746,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 &mut pkgmgr_app,
                                                 &mut fps_game_app,
                                                 &mut fps_3d_app,
+                                                &mut city_drive_app,
                                             );
                                         }
                                     }
@@ -4073,6 +4078,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 &mut pkgmgr_app,
                                                 &mut fps_game_app,
                                                 &mut fps_3d_app,
+                                                &mut city_drive_app,
                                             );
                                         }
                                     } else if taskmgr_app.actions_menu_open {
@@ -4110,6 +4116,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                         &mut pkgmgr_app,
                                                         &mut fps_game_app,
                                                         &mut fps_3d_app,
+                                                        &mut city_drive_app,
                                                     );
                                                 }
                                             }
@@ -4788,6 +4795,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             &mut pkgmgr_app,
                             &mut fps_game_app,
                             &mut fps_3d_app,
+                            &mut city_drive_app,
                         );
                     } else {
                         // Masaustundeyken Alt+F4 guc menusunu acar.
@@ -4981,6 +4989,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             &mut browser_app,
                             -(gui::sp(30) as isize),
                         );
+                    } else if app_is_focused(&compositor, 17) {
+                        // Şehir sürüşü: ok tuşları gaz (yukarı) / fren (aşağı).
+                        city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowUp);
+                        force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow_up_down(true, false);
                         force_render = true;
@@ -5100,6 +5112,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
                         // Arrow down scrolls the browser page
                         browser_scroll_by(&mut compositor, &mut browser_app, gui::sp(30) as isize);
+                    } else if app_is_focused(&compositor, 17) {
+                        // Şehir sürüşü: ok aşağı frendir.
+                        city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowDown);
+                        force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow_up_down(false, true);
                         force_render = true;
@@ -5233,6 +5249,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         };
                         fps_game_app.select_tab(tab);
                         force_render = true;
+                    } else if app_is_focused(&compositor, 17) {
+                        // Şehir sürüşü: ok sola direksiyon.
+                        city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowLeft);
+                        force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow(true, false);
                         force_render = true;
@@ -5319,6 +5339,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 15) {
                         let tab = (fps_game_app.tab + 1) % apps::game::TAB_COUNT;
                         fps_game_app.select_tab(tab);
+                        force_render = true;
+                    } else if app_is_focused(&compositor, 17) {
+                        // Şehir sürüşü: ok sağa direksiyon.
+                        city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowRight);
                         force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow(false, true);
@@ -5563,6 +5587,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         &mut pkgmgr_app,
                                         &mut fps_game_app,
                                         &mut fps_3d_app,
+                                        &mut city_drive_app,
                                     );
                                 }
                             }
@@ -6238,6 +6263,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 &mut pkgmgr_app,
                                 &mut fps_game_app,
                                 &mut fps_3d_app,
+                                &mut city_drive_app,
                             );
                         }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -7238,6 +7264,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 &mut pkgmgr_app,
                                 &mut fps_game_app,
                                 &mut fps_3d_app,
+                                &mut city_drive_app,
                             ),
                             1 => {
                                 compositor.focus_window(idx);
@@ -7987,6 +8014,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     force_render = true;
                 }
 
+                // Şehir sürüşü: gaz/fren/direksiyon tuşları ve menü komutları.
+                let city_focused = app_is_focused(&compositor, 17);
+
+                if city_focused && city_drive_app.handle_key(ch) {
+                    force_render = true;
+                }
+
                 if !run_dialog_open
                     && !compositor.is_start_menu_open
                     && !compositor.is_context_menu_open
@@ -8183,6 +8217,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     &mut pkgmgr_app,
                                     &mut fps_game_app,
                                     &mut fps_3d_app,
+                                    &mut city_drive_app,
                                 );
                             }
                         } else {
@@ -8230,6 +8265,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             &mut pkgmgr_app,
                             &mut fps_game_app,
                             &mut fps_3d_app,
+                            &mut city_drive_app,
                         );
                     }
                 }
@@ -8318,6 +8354,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     &mut pkgmgr_app,
                                     &mut fps_game_app,
                                     &mut fps_3d_app,
+                                    &mut city_drive_app,
                                 );
                             }
                         } else {
@@ -8362,12 +8399,73 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             &mut pkgmgr_app,
                             &mut fps_game_app,
                             &mut fps_3d_app,
+                            &mut city_drive_app,
                         );
                     }
                 }
                 drop(fps3d_guard);
             }
             force_render = true;
+        }
+
+        // Şehir sürüşü: araç fiziği, trafik hareketi ve motor sesi.
+        // Aynı 30 FPS sınırı ve guard koruması uygulanır.
+        let city_open = compositor
+            .windows
+            .iter()
+            .flatten()
+            .any(|w| w.app_id == 17 && w.is_open && !w.is_minimized);
+        if city_open && timer_tick_fired {
+            let now_ms = crate::monotonic_ms();
+            let time_since_last_tick = now_ms.saturating_sub(last_city_tick_ms);
+            if time_since_last_tick >= FPS3D_FPS_LIMIT_MS {
+                let (city_guard, city_start) =
+                    apps::guard::prepare_recoverable(17, apps::guard::NO_WINDOW);
+                if unsafe { apps::guard::begin(city_start) } {
+                    let dt_ms = time_since_last_tick.min(200);
+                    city_drive_app.update(dt_ms, keyboard);
+                    city_drive_app.play_engine_sound(&mut audio_dev);
+                    last_city_tick_ms = now_ms;
+                    if let Some(idx) = compositor
+                        .windows
+                        .iter()
+                        .position(|w| w.is_some_and(|w| w.app_id == 17))
+                    {
+                        watchdog::heartbeat(idx, 17);
+                    }
+                    force_render = true;
+                } else {
+                    crate::serial_print("[CITY] Guard recovery: oyun hata verdi, kapatılıyor\n");
+                    if let Some(idx) = compositor
+                        .windows
+                        .iter()
+                        .position(|w| w.is_some_and(|w| w.app_id == 17))
+                    {
+                        terminate_app(
+                            idx,
+                            &mut compositor,
+                            &mut filemanager_app,
+                            &mut settings_app,
+                            &mut notepad_app,
+                            &mut browser_app,
+                            &mut imageviewer_app,
+                            &mut musicplayer_app,
+                            &mut videoplayer_app,
+                            &mut taskmgr_app,
+                            &mut calculator_app,
+                            &mut paint_apps[idx],
+                            &mut terminal_app,
+                            &mut installer_app,
+                            &mut viewer3d_app,
+                            &mut pkgmgr_app,
+                            &mut fps_game_app,
+                            &mut fps_3d_app,
+                            &mut city_drive_app,
+                        );
+                    }
+                }
+                drop(city_guard);
+            }
         }
 
         // Ag kartindan gelen paketleri isle (ARP cevaplari, ICMP vs.).
@@ -8751,6 +8849,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 &pkgmgr_app,
                 &fps_game_app,
                 &mut fps_3d_app,
+                &mut city_drive_app,
                 &now,
                 mouse,
                 keyboard,

@@ -56,6 +56,8 @@ pub fn render_full_frame(
 
     fps_3d: &mut apps::fps_game::FpsGameApp,
 
+    city: &mut apps::city_drive::CityDriveApp,
+
     now: &drivers::rtc::DateTime,
 
     mouse: &drivers::mouse::MouseState,
@@ -366,6 +368,21 @@ pub fn render_full_frame(
                         let frame_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
                         fps_3d.record_completed_frame(frame_ms);
                     }
+                }
+
+                17 => {
+                    // Şehir sürüşü: raycasting şehir + zemin izdüşümü. Aynı
+                    // şekilde 80 ms bütçe kullanılır (yavaş sanal ortamlarda
+                    // yarım kare, boş ekrandan iyidir).
+                    let city_budget: u64 = 80;
+                    city.render_content_with_budget(
+                        fb,
+                        win.x,
+                        win.y,
+                        win.width,
+                        win.height,
+                        city_budget,
+                    );
                 }
 
                 _ => {}

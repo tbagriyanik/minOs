@@ -1782,10 +1782,14 @@ impl FpsGameApp {
         }
     }
 
-    /// Fare hareketi ile bakış.
-    pub fn handle_mouse_look(&mut self, dx: f32) {
+    /// Fare hareketi ile bakış. Bakış gerçekten uygulandıysa `true` döner;
+    /// çağıran taraf yalnızca bu durumda kare isteğinde bulunur.
+    pub fn handle_mouse_look(&mut self, dx: f32) -> bool {
         if self.result == GameResult::Playing {
             self.look(dx);
+            true
+        } else {
+            false
         }
     }
 

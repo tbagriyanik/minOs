@@ -83,7 +83,7 @@ impl PhaseTimer {
             serial_print(label);
             serial_print("=");
             serial_print_dec(delta);
-            serial_print("ms (esik=");
+            serial_print("ms (Eşik=");
             serial_print_dec(SLOW_PHASE_MS);
             serial_print("ms)\n");
         }

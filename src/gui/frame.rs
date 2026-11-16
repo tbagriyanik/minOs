@@ -389,15 +389,24 @@ pub fn render_full_frame(
             app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
             app_render_time_ms[idx].set(render_elapsed_ms);
 
-            // Render workload budget enforcement: uyarı logla
+            // Render workload budget enforcement: uyarı logla.
+            // UART yazımı milisaniye düzeyinde pahalıdır; aşan uygulama
+            // her karede basılırsa logun kendisi takılmaya neden olur.
+            // Bu yüzden uyarı en fazla saniyede bir kez yazılır.
             if render_elapsed_ms > RENDER_BUDGET_MS && idx < gui::MAX_WINDOWS {
-                crate::serial_print("[RENDER] Uyarı: render bütçesi aştı: ID=");
-                crate::serial_print_dec(idx as u64);
-                crate::serial_print(" (");
-                crate::serial_print_dec(render_elapsed_ms);
-                crate::serial_print(" ms > ");
-                crate::serial_print_dec(RENDER_BUDGET_MS);
-                crate::serial_print(" ms)\n");
+                use core::sync::atomic::{AtomicU64, Ordering};
+                static LAST_WARN_MS: AtomicU64 = AtomicU64::new(0);
+                let warn_now = crate::monotonic_ms();
+                if warn_now.wrapping_sub(LAST_WARN_MS.load(Ordering::Relaxed)) >= 1_000 {
+                    LAST_WARN_MS.store(warn_now, Ordering::Relaxed);
+                    crate::serial_print("[RENDER] Uyarı: render bütçesi aştı: ID=");
+                    crate::serial_print_dec(idx as u64);
+                    crate::serial_print(" (");
+                    crate::serial_print_dec(render_elapsed_ms);
+                    crate::serial_print(" ms > ");
+                    crate::serial_print_dec(RENDER_BUDGET_MS);
+                    crate::serial_print(" ms)\n");
+                }
             }
 
             // Kirpmayi kaldir ve kaydirma cubuklarini pencerenin icinde ciz.

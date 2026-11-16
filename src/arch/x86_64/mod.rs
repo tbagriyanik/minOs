@@ -57,6 +57,78 @@ pub fn enable_sse() {
     }
 }
 
+/// CR4.PCIDE (bit 17) açar: Process-Context Identifiers.
+/// PCID ile CR3 değişikliklerinde TLB tam temizleme (full flush) gerekmez;
+/// her PCID için ayrı TLB girdileri korunur. Kernel PCID = 0, user süreçler
+/// için PCID atamaları yapılır.
+///
+/// TR / EN: Enable CR4.PCIDE (bit 17): Process-Context Identifiers.
+/// With PCID, CR3 changes do not require full TLB flush; separate TLB entries
+/// are maintained per PCID. Kernel PCID = 0, user processes get assigned PCIDs.
+pub fn enable_pcid() {
+    unsafe {
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+        cr4 |= 1 << 17; // PCIDE = 1
+        core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// CPUID.07H:EBX.INVPCID (bit 10): PCID'e özgü TLB geçersizleştirme
+/// desteği. `INVLPG` yalnızca geçerli PCID'yi etkilediğinden, paylaşılan
+/// kernel-yarı sayfa tabloları değiştiğinde diğer süreç PCID'lerinin
+/// bayat girdilerini temizlemek için INVPCID şarttır. Destek yoksa
+/// `alloc_pcid` tüm süreçlere PCID=0 verir (tek TLB bağlamı).
+pub fn invpcid_supported() -> bool {
+    (core::arch::x86_64::__cpuid_count(7, 0).ebx & (1 << 10)) != 0
+}
+
+/// INVPCID tip 2: tüm PCID'ler için tüm TLB çevirilerini (global sayfalar
+/// dahil) geçersiz kılar. Kernel-yarısı sayfa tabloları tüm adres
+/// uzaylarıyla paylaşıldığından (clone_kernel_mappings), bu tablolarda
+/// yapılan her değişiklikten sonra çağrılmalıdır — aksi halde diğer
+/// süreçlerin TLB'leri bayat fiziksel çerçeveleri göstermeye devam eder.
+///
+/// Yalnızca çağıran mantıksal işlemciyi etkiler; SMP'te diğer CPU'lar için
+/// IPI tabanlı shootdown ayrıca gerekir (mevcut `invlpg` yolları da aynı
+/// sınırlamaya sahiptir).
+pub fn invpcid_flush_all() {
+    if !invpcid_supported() {
+        return;
+    }
+    unsafe {
+        // INVPCID type, m128 descriptor: desc[0] = PCID (kullanılmaz),
+        // desc[1] = doğrusal adres (kullanılmaz). Tip 2 için tüm alanlar 0.
+        let desc = [0u64; 2];
+        core::arch::asm!(
+            "invpcid {}, [{}]",
+            in(reg) 2u64,
+            in(reg) desc.as_ptr(),
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// INVPCID tip 1: verilen PCID'ye ait tüm eşlemeleri (global sayfalar
+/// hariç) geçersiz kılar. Bir PCID yeniden kullanılırken önceki sahibin
+/// bayat çevirilerini temizlemek için `alloc_pcid` tarafından çağrılır.
+pub fn invpcid_flush_context(pcid: u16) {
+    if !invpcid_supported() {
+        return;
+    }
+    unsafe {
+        // Descriptor: bit 11..0 = PCID, bit 63..12 = 0, bit 127..64 =
+        // doğrusal adres (tip 1'de yok sayılır).
+        let desc = [pcid as u64, 0u64];
+        core::arch::asm!(
+            "invpcid {}, [{}]",
+            in(reg) 1u64,
+            in(reg) desc.as_ptr(),
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 pub fn disable_pic() {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFFu8, options(nomem, nostack, preserves_flags));

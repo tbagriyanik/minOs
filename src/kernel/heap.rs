@@ -151,8 +151,11 @@ const SLAB_THRESHOLD: usize = 64;
 const SLAB_CLASSES: [usize; 3] = [16, 32, 64];
 /// Sınıf başına en fazla sayfa (4 KiB × 256 = 1 MiB/sınıf üst sınırı).
 const MAX_SLAB_PAGES_PER_CLASS: usize = 256;
-/// Slab sayfa tablosu kapasitesi (sınıf başına sayfa üst sınırı toplamı).
-const SLAB_PAGE_TABLE_SIZE: usize = SLAB_CLASSES.len() * MAX_SLAB_PAGES_PER_CLASS;
+/// Slab sayfa tablosu kapasitesi. `slab_hash` maske (`size - 1`) kullandığı
+/// için 2'nin kuvveti olmalı; 768 girdi için 1024 seçildi — daha düşük doluluk
+/// oranı `slab_page_class` sondasını kısaltır (önceki 768'lik boyut maskesi
+/// yüzünden 256..511 arası yuvalar hiç kullanılmıyordu).
+const SLAB_PAGE_TABLE_SIZE: usize = 1024;
 
 /// Sayfa ayırıcıya giren asgari istek boyu (bayt).
 const LARGE_THRESHOLD: usize = 64 * 1024;
@@ -456,25 +459,22 @@ fn large_alloc(layout: &Layout) -> *mut u8 {
         match guard.as_mut() {
             Some(g) => {
                 let pmm = &mut g.get().pmm;
-                for (i, &frame) in frames.iter().enumerate().take(pages) {
-                    if space
-                        .map_page(
-                            base + (i as u64) * 4096,
-                            frame,
-                            crate::mm::vmm::PageFlags::PRESENT
-                                | crate::mm::vmm::PageFlags::WRITABLE,
-                            pmm,
-                        )
-                        .is_err()
-                    {
-                        ok = false;
-                        break;
-                    }
-                    mapped += 1;
-                }
+                let (n, err) = space.map_page_run(
+                    base,
+                    &frames[..pages],
+                    crate::mm::vmm::PageFlags::PRESENT | crate::mm::vmm::PageFlags::WRITABLE,
+                    pmm,
+                );
+                mapped = n;
+                ok = err.is_none();
             }
             None => ok = false,
         }
+    }
+    if ok {
+        // Pencere kernel yarısında paylaşılan sayfa tablolarına yazıldı;
+        // diğer süreç PCID'lerinin TLB'leri bayat kalmasın.
+        crate::arch::x86_64::invpcid_flush_all();
     }
     if !ok {
         // Eşlenen sayfaları sök, kalan çerçeveleri iade et.
@@ -483,11 +483,10 @@ fn large_alloc(layout: &Layout) -> *mut u8 {
             let mut guard = crate::mm::try_lock_memory();
             if let Some(g) = guard.as_mut() {
                 let pmm = &mut g.get().pmm;
-                for i in 0..mapped {
-                    let virt = base + (i as u64) * 4096;
-                    if let Some(frame) = space.unmap_page(virt) {
-                        pmm.free_frame(frame);
-                    }
+                let mut unmapped = [0u64; LARGE_SLOT_PAGES + 1];
+                let n = space.unmap_page_run(base, mapped, &mut unmapped);
+                for frame in unmapped.iter().take(n) {
+                    pmm.free_frame(*frame);
                 }
             }
         }
@@ -537,13 +536,14 @@ fn large_dealloc(ptr: *mut u8, layout: &Layout) {
     let mut guard = crate::mm::try_lock_memory();
     if let Some(guard) = guard.as_mut() {
         let pmm = &mut guard.get().pmm;
-        for i in 0..pages {
-            let virt = base + (i as u64) * 4096;
-            if let Some(frame) = space.unmap_page(virt) {
-                pmm.free_frame(frame);
-            }
+        let mut unmapped = [0u64; LARGE_SLOT_PAGES];
+        let n = space.unmap_page_run(base, pages, &mut unmapped);
+        for frame in unmapped.iter().take(n) {
+            pmm.free_frame(*frame);
         }
     }
+    // Kernel-yarısı tabloları değişti: tüm PCID'lerin TLB'sini temizle.
+    crate::arch::x86_64::invpcid_flush_all();
     LARGE_SLOTS_STATE.lock()[slot_idx] = LargeSlot { used: false };
 }
 
@@ -590,7 +590,29 @@ static TRACK_HITS: AtomicU64 = AtomicU64::new(0);
 static TRACK_MISSES: AtomicU64 = AtomicU64::new(0);
 static TRACK_PEAK: AtomicU64 = AtomicU64::new(0);
 
+/// Tahsis takibi varsayılan olarak kapalıdır: her `alloc`/`dealloc` üzerindeki
+/// global `TRACKER` kilidi ve sayaç güncellemeleri sıcak yolda ölçülebilir
+/// maliyet oluşturur. Teşhis testleri (`test_tiered_alloc`) ihtiyaç
+/// duyduğunda `track_set_enabled(true)` ile açar.
+static TRACK_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Tahsis takibini açar/kapatır. Kapatılırken tablo ve sayaçlar sıfırlanır;
+/// kapalıyken yapılan tahsisler sonradan açıldığında izlenmez (teşhis
+/// amaçlı yaklaşık sayaç olduğundan kabul edilebilir).
+pub fn track_set_enabled(enabled: bool) {
+    TRACK_ENABLED.store(enabled, Ordering::Relaxed);
+    if !enabled {
+        tracker_reset();
+        for counter in TRACK_LIVE.iter() {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 fn track_insert(ptr: *mut u8, layout: &Layout, tier: AllocTier) {
+    if !TRACK_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let mut table = TRACKER.lock();
     let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
     let entry = &mut table[idx];
@@ -610,6 +632,9 @@ fn track_insert(ptr: *mut u8, layout: &Layout, tier: AllocTier) {
 }
 
 fn track_remove(ptr: *mut u8, layout: &Layout) -> Option<AllocTier> {
+    if !TRACK_ENABLED.load(Ordering::Relaxed) {
+        return None;
+    }
     let mut table = TRACKER.lock();
     let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
     let entry = &mut table[idx];
@@ -634,6 +659,9 @@ fn track_remove(ptr: *mut u8, layout: &Layout) -> Option<AllocTier> {
 
 /// Adresin tracker kaydını döndürür (teşhis; `(size, align, tier)`).
 pub fn track_find(ptr: u64) -> Option<(u32, u32, u8)> {
+    if !TRACK_ENABLED.load(Ordering::Relaxed) {
+        return None;
+    }
     let table = TRACKER.lock();
     let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
     let entry = &table[idx];
@@ -887,68 +915,83 @@ fn zero_frame(frame: u64) {
     }
 }
 
-/// Tembel aralığın sayfalarını eşler. Başarısızlıkta hiçbir şey eşlenmez.
+/// Tembel aralığın sayfalarını eşler. Başarısızlıkta o ana kadar eşlenen
+/// sayfalar yerinde kalır (aralık zaten defterden düşmüştür).
+///
+/// Sayfalar 64'lü partiler halinde işlenir: daha önce tek seferde en fazla
+/// 64 sayfa (256 KiB) eşleniyordu; 256 KiB üzeri tembel tahsisatların kalanı
+/// eşlenmeden kalıyor ve ilk erişimde hataya yol açıyordu.
 fn populate_range(start: u64, len: usize) -> bool {
     if len == 0 {
         return true;
     }
-    let pages = len.div_ceil(4096).min(64);
-    let mut frames = [0u64; 64];
-    let mut taken = 0usize;
-    for _ in 0..pages {
-        let Some(frame) = alloc_frame() else {
-            for frame in frames.iter().take(taken) {
-                free_frame(*frame);
-            }
-            return false;
-        };
-        frames[taken] = frame;
-        taken += 1;
-    }
-    let hhdm = crate::drivers::phys_to_virt(0);
-    let _ = hhdm;
-    for frame in frames.iter().take(taken) {
-        zero_frame(*frame);
+    let total_pages = len.div_ceil(4096);
+    let mut done = 0usize;
+    while done < total_pages {
+        let batch = (total_pages - done).min(64);
+        let mut frames = [0u64; 64];
+        let mut taken = 0usize;
+        for _ in 0..batch {
+            let Some(frame) = alloc_frame() else {
+                for frame in frames.iter().take(taken) {
+                    free_frame(*frame);
+                }
+                return false;
+            };
+            frames[taken] = frame;
+            taken += 1;
+        }
+        let hhdm = crate::drivers::phys_to_virt(0);
+        let _ = hhdm;
+        for frame in frames.iter().take(taken) {
+            zero_frame(*frame);
+        }
         // Tembel aralık sanal pencerededir; hangi fiziksel çerçevelerin ona
         // bağlandığını bilmek için pencere tabanına göre ofset saklanır.
+        bind_window_pages(start + (done as u64) * 4096, &frames[..taken]);
+        LAZY_PAGES.fetch_add(taken as u64, Ordering::Relaxed);
+        MAPPED_BYTES.fetch_add((taken * 4096) as u64, Ordering::Relaxed);
+        done += taken;
     }
-    // Not: 4 KiB'lik aralıklar standart eşleme yoluyla (HHDM doğrudan
-    // haritalaması) zaten erişilebilir olduğundan fiziksel çerçeveler burada
-    // pencereye bağlanır. Bağlama `window_page_at` ile yapılır.
-    for (index, frame) in frames.iter().enumerate().take(taken) {
-        let virt = start + (index as u64) * 4096;
-        bind_window_page(virt, *frame);
-    }
-    LAZY_PAGES.fetch_add(taken as u64, Ordering::Relaxed);
-    MAPPED_BYTES.fetch_add((taken * 4096) as u64, Ordering::Relaxed);
     true
 }
 
-/// Sanal pencere sayfasını fiziksel çerçeveye bağlar.
+/// `frames[i]` çerçevesini `start + i*4096` sanal adresine toplu bağlar.
 ///
 /// Pencere, PML4'ün çekirdek yarısında (`HEAP_WINDOW_BASE`) 4 KiB yaprak
 /// sayfalarla eşlenir; böylece heap kullanımı yalnızca gerçekten yazılan
-/// sayfalar için fiziksel bellek harcar.
-fn bind_window_page(virt: u64, frame: u64) {
+/// sayfalar için fiziksel bellek harcar. Tüm çerçeveler tek sayfa tablosu
+/// kilidi altında ve tek seferde eşlenir; bağlanan sayfalar kernel-yarısı
+/// paylaşılan tablolara yazıldığı için ardından `invpcid_flush_all` ile
+/// diğer süreç PCID'lerinin TLB'leri de temizlenir.
+///
+/// Dönen: bağlanan sayfa sayısı. Erken durmada bağlanamayan çerçeveler
+/// iade edilir.
+fn bind_window_pages(start: u64, frames: &[u64]) -> usize {
     let mut space = crate::mm::vmm::AddressSpace::current();
     let mut guard = crate::mm::try_lock_memory();
-    match guard.as_mut() {
-        Some(guard) => {
-            let pmm = &mut guard.get().pmm;
-            if space
-                .map_page(
-                    virt,
-                    frame,
-                    crate::mm::vmm::PageFlags::PRESENT | crate::mm::vmm::PageFlags::WRITABLE,
-                    pmm,
-                )
-                .is_err()
-            {
-                free_frame(frame);
-            }
+    let Some(g) = guard.as_mut() else {
+        for frame in frames {
+            free_frame(*frame);
         }
-        None => free_frame(frame),
+        return 0;
+    };
+    let pmm = &mut g.get().pmm;
+    let (mapped, err) = space.map_page_run(
+        start,
+        frames,
+        crate::mm::vmm::PageFlags::PRESENT | crate::mm::vmm::PageFlags::WRITABLE,
+        pmm,
+    );
+    if err.is_some() {
+        for frame in frames.iter().skip(mapped) {
+            free_frame(*frame);
+        }
     }
+    if mapped > 0 {
+        crate::arch::x86_64::invpcid_flush_all();
+    }
+    mapped
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,10 +1066,10 @@ fn extend_locked(additional: usize) -> bool {
         EXTEND_FAILURES.fetch_add(1, Ordering::Relaxed);
         return false;
     }
-    for (index, frame) in frames.iter().enumerate().take(taken) {
+    for frame in frames.iter().take(taken) {
         zero_frame(*frame);
-        bind_window_page(append_at + (index as u64) * 4096, *frame);
     }
+    bind_window_pages(append_at, &frames[..taken]);
 
     let new_size = committed + grow;
     HEAP_COMMITTED.store(new_size as u64, Ordering::Relaxed);
@@ -1181,10 +1224,12 @@ fn relocate_locked() -> bool {
     if !LAZY.lock().enabled {
         LAZY.lock().enabled = true;
     }
-    for (index, frame) in frames.iter().enumerate().take(taken) {
-        let virt = HEAP_WINDOW_BASE + (index as u64) * 4096;
+    for frame in frames.iter().take(taken) {
         zero_frame(*frame);
-        bind_window_page(virt, *frame);
+    }
+    bind_window_pages(HEAP_WINDOW_BASE, &frames[..taken]);
+    for (index, _frame) in frames.iter().enumerate().take(taken) {
+        let virt = HEAP_WINDOW_BASE + (index as u64) * 4096;
         // SAFETY: hem eski statik tampon hem yeni pencere geçerli, sayfa hizalı
         // ve sayısı `taken` ile aynı.
         unsafe {
@@ -1338,6 +1383,9 @@ pub fn test_heap_growth() -> bool {
 /// katman yönlendirmesinin kendisi doğrulanmak istenen davranıştır.
 pub fn test_tiered_alloc() -> bool {
     serial_print("[TIER-TEST] --- Asamali tahsis yonlendirme testi ---\n");
+    // Katman etiketi `track_find` üzerinden doğrulandığı için takip
+    // bu test süresince açılır; bitiminde tekrar kapatılır.
+    track_set_enabled(true);
 
     let tier_of = |ptr: *mut u8| track_find(ptr as u64).map(|(_, _, t)| t);
 
@@ -1376,5 +1424,6 @@ pub fn test_tiered_alloc() -> bool {
         serial_print(if heap_ok { "OK" } else { "FAIL" });
         serial_print("\n");
     }
+    track_set_enabled(false);
     slab_ok && large_ok && heap_ok
 }

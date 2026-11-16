@@ -41,9 +41,19 @@ pub fn print(message: &str) {
     }
 }
 
+/// Log belleği üst sınırı. Sınırsız büyüme uzun çalışma sürelerinde kernel
+/// heap'ini şişirir; sınır aşılınca en eski yarı atılır (ring benzeri).
+const LOG_CAP: usize = 4 * 1024 * 1024;
+
 #[allow(static_mut_refs)]
 fn append_log(bytes: &[u8]) {
     unsafe {
+        if LOG_BYTES.len().saturating_add(bytes.len()) > LOG_CAP {
+            // Seyrek budama: en eski yarıyı at. `drain` iterator'ı düşerken
+            // aralığı gerçekten kaldırır.
+            let trim = LOG_BYTES.len() / 2;
+            drop(LOG_BYTES.drain(..trim));
+        }
         // Log storage grows with the transcript; no fixed 4 KiB/16 KiB cap.
         // try_reserve keeps logging failure from recursively panicking.
         if LOG_BYTES.try_reserve(bytes.len()).is_ok() {

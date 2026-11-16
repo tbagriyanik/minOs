@@ -36,9 +36,12 @@ const USER_PREEMPT_QUANTUM: usize = 4;
 static KERNEL_PML4: AtomicU64 = AtomicU64::new(0);
 
 /// Boot sırasında çekirdek CR3'ünü kaydeder (tekrar çağrı güvenli).
+/// `pml4_phys` PCID bitini (bit 63) içerir; trampolineler bu bit kullanarak
+/// CR3'ü PCID'li olarak yükler, TLB'yi tam temizlemeden (INVPCID kullanılmadan)
+/// ilgili girişleri yoksayarak temizler.
 pub fn note_kernel_cr3(pml4_phys: u64) {
     if pml4_phys != 0 {
-        KERNEL_PML4.store(pml4_phys, Ordering::Relaxed);
+        KERNEL_PML4.store(pml4_phys | 1 << 63, Ordering::Relaxed);
     }
 }
 
@@ -1459,7 +1462,6 @@ pub unsafe extern "C" fn ring3_fault_exit_trampoline() {
         "mov rax, [rip + {kcr3}]",
         "test rax, rax",
         "jz 1f",
-        "or rax, 0x8000000000000000",
         "mov cr3, rax",
         "1:",
         "mov rax, [rip + {saved_fx}]",
@@ -1496,7 +1498,6 @@ pub unsafe extern "C" fn ring3_exit_trampoline() {
         "mov rax, [rip + {kcr3}]",
         "test rax, rax",
         "jz 1f",
-        "or rax, 0x8000000000000000",
         "mov cr3, rax",
         "1:",
         "mov rax, [rip + {saved_fx}]",

@@ -1269,6 +1269,21 @@ impl ProcessManager {
             let _ = crate::mm::vmm::mark_frame_shared(shared_frame);
             return false;
         }
+        // Teşhis: remap sonrası PTE'yi doğrula.
+        // Diagnostic: verify PTE after remap.
+        let post_remap = self.processes[slot]
+            .address_space
+            .read_entry(page)
+            .unwrap_or(0);
+        crate::serial_print("[COW-DBG2] pid=");
+        crate::serial::print_dec(pid as u64);
+        crate::serial_print(" page=");
+        crate::serial::print_hex(page);
+        crate::serial_print(" copy=");
+        crate::serial::print_hex(copy);
+        crate::serial_print(" post_remap=");
+        crate::serial::print_hex(post_remap);
+        crate::serial_print("\n");
         let resources = &mut self.processes[slot].resources;
         let user_taken = resources.take_user_frame(shared_frame);
         let frame_taken = resources.take_frame(shared_frame);
@@ -1276,10 +1291,26 @@ impl ProcessManager {
             return false;
         }
         // Yeni çerçeve özel; paylaşım kaydından çıkartıldı.
-        self.processes[slot]
+        let set_flags_result =
+            self.processes[slot]
+                .address_space
+                .set_flags(page, private_flags, pmm);
+        // Teşhis: set_flags sonrası PTE'yi doğrula.
+        // Diagnostic: verify PTE after set_flags.
+        let post_flags = self.processes[slot]
             .address_space
-            .set_flags(page, private_flags, pmm)
-            .is_ok()
+            .read_entry(page)
+            .unwrap_or(0);
+        crate::serial_print("[COW-DBG3] pid=");
+        crate::serial::print_dec(pid as u64);
+        crate::serial_print(" post_flags=");
+        crate::serial::print_hex(post_flags);
+        crate::serial_print(" private_flags=");
+        crate::serial::print_hex(private_flags);
+        crate::serial_print(" set_flags_ok=");
+        crate::serial::print_dec(set_flags_result.is_ok() as u64);
+        crate::serial_print("\n");
+        set_flags_result.is_ok()
     }
 
     /// `[addr, addr+len)` aralığındaki tembel kullanıcı sayfalarını

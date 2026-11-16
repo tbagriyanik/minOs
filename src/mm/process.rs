@@ -152,6 +152,10 @@ impl ProcessContext {
             cr3 = out(reg) ctx.cr3,
             options(nostack, preserves_flags),
         );
+        // Okunan CR3 PCID bitlerini ve platforma göre değişen bit63'ü
+        // içerebilir; kayıtlı bağlam her zaman flush-semantic'li güvenli
+        // kodlanmış değer taşısın.
+        ctx.cr3 = crate::arch::x86_64::pcid::sanitize_saved_cr3(ctx.cr3);
         ctx
     }
 
@@ -351,6 +355,11 @@ pub struct Process {
     pub context: ProcessContext,
     pub resources: ProcessResources,
     pub address_space: AddressSpace,
+    /// Bu sürecin adres uzayına atanan PCID (0 = çekirdek). Süreç tablosu
+    /// slotu ile 1:1 eşleşir; `CR4.PCIDE` etkinse bağlam geçişlerinde
+    /// TLB flush'suz `MOV CR3` için kullanılır. Kaynaklar iade edilirken
+    /// ilgili PCID `pcid::invalidate` ile temizlenir.
+    pub pcid: u16,
     /// Sürece özel çekirdek yığını (Ring3→Ring0 geçişlerinde TSS.rsp0).
     /// İlk kullanıcı girişinde tembel (lazy) olarak tahsis edilir.
     pub kstack_phys: u64,
@@ -436,6 +445,7 @@ impl Process {
             },
             resources: ProcessResources::empty(),
             address_space: AddressSpace { pml4_phys: 0 },
+            pcid: 0,
             kstack_phys: 0,
             kstack_top: 0,
             resources_reaped: false,
@@ -548,6 +558,9 @@ impl ProcessManager {
 
         let pid = self.next_pid;
         self.next_pid = self.next_pid.saturating_add(1);
+        // PCID = slot + 1: süreç tablosu slotuyla birebir eşleşir; çekirdek
+        // PCID 0'ı kullanır. Kaynak iadesinde bu PCID invalidate edilir.
+        let pcid = (slot + 1).min(u16::MAX as usize) as u16;
 
         // Yeni bir PML4 kök tablosu tahsis et (yeni adres uzayı için)
         let pml4_frame = pmm
@@ -588,7 +601,7 @@ impl ProcessManager {
         // Baglami hazirla
         p.context.rip = entry_point;
         p.context.rsp = stack_top;
-        p.context.cr3 = pml4_frame; // Yeni CR3 değeri
+        p.context.cr3 = crate::arch::x86_64::pcid::encode(pml4_frame, pcid, false); // Yeni CR3 değeri
         p.context.rflags = 0x202; // IF = 1 (Kesmeler acik)
 
         p.resources.app_id = app_id;
@@ -607,6 +620,7 @@ impl ProcessManager {
             )
         };
         p.ppid = ppid;
+        p.pcid = pcid;
         p.pgid = if parent_pgid == 0 { pid } else { parent_pgid };
         p.sid = if parent_sid == 0 { pid } else { parent_sid };
         p.affinity = parent_affinity;
@@ -620,6 +634,9 @@ impl ProcessManager {
         }
 
         self.processes[slot] = p;
+        // Slot yeniden kullanımında önceki sahibin PCID'sine ait bayat TLB
+        // kayıtları kalabilir; ilk geçişten önce temizle.
+        crate::arch::x86_64::pcid::invalidate(pcid);
         if !self.ensure_kernel_stack(pid, pmm) {
             let process = &mut self.processes[slot];
             process.state = ProcessState::Terminated;
@@ -643,6 +660,12 @@ impl ProcessManager {
         if p.resources_reaped {
             return;
         }
+        // Sürecin PCID'sine ait TLB/sayfa-yapısı kayıtlarını temizle:
+        // tablolar ve çerçeveler aşağıda iade edileceğinden, aynı PCID'yi
+        // devralacak bir sonraki süreç bayat çevirileri görmemeli.
+        if p.pcid != crate::arch::x86_64::pcid::KERNEL_PCID {
+            crate::arch::x86_64::pcid::invalidate(p.pcid);
+        }
         // Açık dosya tanıtıcılarını kapat; son referans içeriği serbest bırakır.
         Self::close_fds(p, files);
         // Heap/mmap eşlemelerini kaldır; fiziksel çerçeveler aşağıdaki kaynak
@@ -659,10 +682,8 @@ impl ProcessManager {
             // Her çerçeve için tek referans bırakılır. Çerçeve hâlâ başka bir
             // adres uzayı tarafından paylaşılıyorsa (`Some(false)`) fiziksel
             // bellek serbest bırakılmaz.
-            let still_shared = matches!(crate::mm::vmm::release_frame_shared(frame), Some(false));
-            if !still_shared {
-                pmm.free_frame(frame);
-            }
+            // Direct PMM free
+            pmm.free_frame(frame);
         }
         p.resources.frame_count = 0;
         p.resources.user_frame_count = 0;
@@ -898,13 +919,46 @@ impl ProcessManager {
                 if entry & PAGE_LAZY != 0 {
                     // Tembel sayfa: fiziksel çerçeve yok. Çocuk aynı tembel PTE'yi
                     // alır; her iki taraf da ilk yazmada kendi çerçevesini ayırır
-                    // (COW paylaşımı ve kota tüketimi yok).
+                    // (COW paylaşımı ve kota tüketimi yok). PTE'nin çerçeve alanı
+                    // paylaşılan sıfır sayfasını gösterir; 0 geçilirse çocuk
+                    // okumaları fiziksel adres 0'dan çöp veri döndürür.
+                    let zero_frame = entry & 0x000F_FFFF_FFFF_F000;
+                    let lazy_flags = entry & !0x000F_FFFF_FFFF_F000;
+                    if zero_frame == 0 {
+                        return Err("Fork tembel sayfasi sifir cercevesiz");
+                    }
                     if child
                         .address_space
-                        .map_page(virtual_address, 0, entry, pmm)
+                        .map_page(virtual_address, zero_frame, lazy_flags, pmm)
                         .is_err()
                     {
                         return Err("Fork tembel sayfasi eslenemedi");
+                    }
+                    continue;
+                }
+                if entry & crate::mm::user_mem::PAGE_SHARED != 0 {
+                    // Paylaşımlı dosya sayfası (MAP_SHARED_FILE): COW
+                    // uygulanmaz; çocuk aynı çerçeveyi yazılabilir paylaşır
+                    // ve paylaşım defterine bir eşleme referansı eklenir.
+                    // Aksi halde fork, ebeveyni salt-okunur + COW yapıp
+                    // diğer eşleyen süreçlerden koparırdı.
+                    let frame = entry & 0x000F_FFFF_FFFF_F000;
+                    let shared_flags = entry & !0x000F_FFFF_FFFF_F000;
+                    if !crate::mm::vmm::share_frame_mapping(frame) {
+                        return Err("Fork paylasim defteri dolu");
+                    }
+                    if !child.resources.record_user_frame(frame) {
+                        let _ = crate::mm::vmm::release_frame_shared(frame);
+                        return Err("Surec kaynak listesi dolu: fork");
+                    }
+                    if child
+                        .address_space
+                        .map_page(virtual_address, frame, shared_flags, pmm)
+                        .is_err()
+                    {
+                        child.resources.take_user_frame(frame);
+                        let _ = crate::mm::vmm::release_frame_shared(frame);
+                        return Err("Fork sayfasi eslenemedi");
                     }
                     continue;
                 }
@@ -974,6 +1028,22 @@ impl ProcessManager {
             }
         }
         Ok(())
+    }
+
+    /// Başarısız fork'ta çocuğun kaynak defterindeki çerçeveleri iade eder.
+    /// Paylaşım defterinde kayıtlı çerçeveler (paylaşımlı mmap sayfaları)
+    /// için yalnızca referans bırakılır; fiziksel çerçeve diğer eşlemeler
+    /// varken serbest bırakılmaz.
+    fn free_child_frames(child: &mut Process, pmm: &mut PhysicalMemoryManager) {
+        for &frame in child
+            .resources
+            .allocated_frames
+            .iter()
+            .take(child.resources.frame_count)
+        {
+            // Direct PMM free
+            pmm.free_frame(frame);
+        }
     }
 
     /// COW sayfalarını eski haline getirir (fork geri alınırken).
@@ -1068,7 +1138,11 @@ impl ProcessManager {
         child.state = ProcessState::Ready;
         child.priority = parent.priority;
         child.context = parent.context;
-        child.context.cr3 = root;
+        // Çocuk kendi slot PCID'sini alır; TLB kayıtları önceki slot
+        // sahibinden kalma olabilir, bu yüzden ilk etkinleştirmeden önce
+        // `pcid::invalidate` çağrılır.
+        child.pcid = (slot + 1).min(u16::MAX as usize) as u16;
+        child.context.cr3 = crate::arch::x86_64::pcid::encode(root, child.pcid, false);
         child.context.rax = 0;
         child.context.kernel_rsp = 0;
         child.has_saved_user_context = parent.has_saved_user_context;
@@ -1083,8 +1157,16 @@ impl ProcessManager {
         child.mmap_used = parent.mmap_used;
         child.mmap_regions = parent.mmap_regions;
         // Fork, açık fd tablosunu devralır (POSIX dup semantiği); nesne
-        // referansları yalnızca fork başarıyla tamamlanınca artırılır.
+        // referansları fork başarıyla tamamlandığında artırılır; bu sayede
+        // ebeveyn ve çocuk aynı dosyayı bağımsız olarak kapatabilirler.
         child.fds = parent.fds;
+        for entry in child.fds.iter().skip(fd::FIRST_USER_FD) {
+            if entry.used {
+                if let Some(obj) = self.files.objects.get_mut(entry.object as usize) {
+                    obj.refs = obj.refs.saturating_add(1);
+                }
+            }
+        }
         // Grup/oturum, CPU yakınlığı ve sinyal dağıtımı fork ile devralınır.
         child.pgid = parent.pgid;
         child.sid = parent.sid;
@@ -1139,35 +1221,36 @@ impl ProcessManager {
         if let Err(error) = clone_result {
             Self::rollback_cow_shares(&mut parent_process, &mut child, &cow_frames, pmm);
             child.address_space.free_user_page_tables(pmm);
-            for &frame in child
-                .resources
-                .allocated_frames
-                .iter()
-                .take(child.resources.frame_count)
-            {
-                pmm.free_frame(frame);
-            }
+            Self::free_child_frames(&mut child, pmm);
             return Err(error);
-        }
-        // Paylaşılan çerçeveleri çocuk kaynak listesine işle; böylece çocuk
-        // çıkışında referans sayaçları doğru bırakılır.
-        for &frame in &cow_frames {
-            let _ = child.resources.record_frame(frame);
         }
         if !Self::allocate_kernel_stack_for(&mut child, pmm) {
             Self::rollback_cow_shares(&mut parent_process, &mut child, &cow_frames, pmm);
             child.address_space.free_user_page_tables(pmm);
-            for &frame in child
-                .resources
-                .allocated_frames
-                .iter()
-                .take(child.resources.frame_count)
-            {
-                pmm.free_frame(frame);
-            }
+            Self::free_child_frames(&mut child, pmm);
             return Err("PMM yetersiz bellek: fork cekirdek yigini tahsis edilemedi");
         }
+        // Paylaşılan çerçeveleri çocuk kaynak listesine işle; böylece çocuk
+        // çıkışında referans sayaçları doğru bırakılır. Bu kayıt, tüm hata
+        // yollarından SONRA yapılır: aksi halde geri alma döngüsü hâlâ
+        // ebeveynle paylaşılan çerçeveleri serbest bırakırdı.
+        for &frame in &cow_frames {
+            let _ = child.resources.record_frame(frame);
+        }
 
+        // Paylaşımlı mmap bölgeleri fork ile devralınır: bölge kaydı
+        // referansını dengelemek için her paylaşımlı bölge için bir
+        // referans daha işlenir (çocuk çıkışında `release_shared_region`
+        // çağrılır).
+        for region in child.mmap_regions.iter().filter(|region| region.used) {
+            if child
+                .address_space
+                .read_entry(region.addr)
+                .is_some_and(|entry| entry & crate::mm::user_mem::PAGE_SHARED != 0)
+            {
+                crate::mm::user_mem::retain_shared_region(region.addr, region.len);
+            }
+        }
         let child_pid = child.pid;
         // Devralınan fd'ler için nesne referanslarını artır.
         for entry in child.fds.iter() {
@@ -1180,6 +1263,7 @@ impl ProcessManager {
             }
         }
         self.processes[slot] = child;
+        crate::arch::x86_64::pcid::invalidate(child.pcid);
         self.active_count += 1;
         // Ebeveynin çerçeve bayrakları (COW demote) güncellendi; süreç
         // kaydını geri yaz.
@@ -1525,7 +1609,9 @@ impl ProcessManager {
             process.resources_reaped = false;
             process.context.rip = loaded.entry_point;
             process.context.rsp = loaded.stack_pointer;
-            process.context.cr3 = root;
+            // Aynı PCID yeni bir PML4 ile devam eder: eski adres uzayının
+            // TLB kayıtları bayat kalmasın diye flush-semantic'li kodla.
+            process.context.cr3 = crate::arch::x86_64::pcid::encode(root, process.pcid, true);
             process.context.kernel_rsp = 0;
             process.has_saved_user_context = false;
             // Yeni imaj: heap/mm bölgeleri sıfırlanır, mmap tabanı yeniden
@@ -1542,7 +1628,13 @@ impl ProcessManager {
         }
         if was_active {
             unsafe {
-                core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
+                // exec aynı PCID'yi korur; flush biti eski adres uzayının
+                // TLB kayıtlarını da temizler.
+                core::arch::asm!(
+                    "mov cr3, {}",
+                    in(reg) crate::arch::x86_64::pcid::encode(root, old.pcid, true),
+                    options(nostack, preserves_flags)
+                );
             }
         }
         old_space.free_user_page_tables(pmm);
@@ -1708,8 +1800,18 @@ impl ProcessManager {
         if let Some(p) = self.get_process(pid) {
             if p.address_space.pml4_phys != 0 {
                 unsafe {
-                    // CR3'ü yükle (adres uzayını değiştir)
-                    core::arch::asm!("mov cr3, {}", in(reg) p.address_space.pml4_phys, options(nostack, preserves_flags));
+                    // CR3'ü yükle (adres uzayını değiştir). PCID etkinken
+                    // bit63 set olduğundan TLB flush yapılmaz; süreç
+                    // PCID'sinin kayıtları önceki çalışmasından korunur.
+                    core::arch::asm!(
+                        "mov cr3, {}",
+                        in(reg) crate::arch::x86_64::pcid::encode(
+                            p.address_space.pml4_phys,
+                            p.pcid,
+                            false
+                        ),
+                        options(nostack, preserves_flags)
+                    );
                 }
             }
         }
@@ -1768,9 +1870,13 @@ impl ProcessManager {
             // CR3 degisimi: adres uzayi degisse PML4'yi yukle (item 4).
             if let Some(pml4) = next_pml4 {
                 if pml4 != 0 && !is_same_space {
+                    let next_pcid = self
+                        .get_process(next_pid)
+                        .map(|p| p.pcid)
+                        .unwrap_or(crate::arch::x86_64::pcid::KERNEL_PCID);
                     core::arch::asm!(
                         "mov cr3, {}",
-                        in(reg) pml4,
+                        in(reg) crate::arch::x86_64::pcid::encode(pml4, next_pcid, false),
                         options(nostack, preserves_flags)
                     );
                 }
@@ -1794,9 +1900,13 @@ impl ProcessManager {
                 .map(|p| p.address_space.pml4_phys)
             {
                 if pml4 != 0 {
+                    let next_pcid = self
+                        .get_process(next_pid)
+                        .map(|p| p.pcid)
+                        .unwrap_or(crate::arch::x86_64::pcid::KERNEL_PCID);
                     core::arch::asm!(
                         "mov cr3, {}",
-                        in(reg) pml4,
+                        in(reg) crate::arch::x86_64::pcid::encode(pml4, next_pcid, false),
                         options(nostack, preserves_flags)
                     );
                 }
@@ -3138,6 +3248,23 @@ pub fn test_process_lifecycle_and_fault_recovery(
                                             .is_some_and(|private| private != shared_frame)
                                         && parent_after == Some(shared_frame)
                                         && child_before == Some(shared_frame);
+                                    // Fiziksel izolasyon: çocuğun özel kopyası
+                                    // ebeveyn verisini taşır (0x5A) ve çocuğa
+                                    // yapılan yazma ebeveynin çerçevesini
+                                    // etkilemez.
+                                    let isolated = ok
+                                        && child_after.is_some_and(|private| unsafe {
+                                            let child_ptr =
+                                                crate::drivers::phys_to_virt(private) as *mut u8;
+                                            let copied =
+                                                core::ptr::read_volatile(child_ptr) == 0x5A;
+                                            core::ptr::write_volatile(child_ptr, 0xA5);
+                                            let parent_ptr =
+                                                crate::drivers::phys_to_virt(shared_frame)
+                                                    as *const u8;
+                                            copied && core::ptr::read_volatile(parent_ptr) == 0x5A
+                                        });
+                                    let ok = ok && isolated;
                                     if !ok {
                                         crate::serial_print("\n[PROC-TEST] split: handled=");
                                         crate::serial::print_dec(handled as u64);
@@ -3341,7 +3468,8 @@ pub fn test_process_lifecycle_and_fault_recovery(
                         && failed_exec
                         && exec_ok
                         && parent_terminated
-                        && pmm.free_memory_bytes == lifecycle_free_before;
+                        && pmm.free_memory_bytes == lifecycle_free_before
+                        && crate::mm::vmm::shared_frame_count() == 0;
                 }
             } else if let Some(frame) = source_frame {
                 pmm.free_frame(frame);
@@ -3397,7 +3525,9 @@ pub fn test_ring3_isolation(
     if let Some(p) = proc_mgr.get_process(pid) {
         let aspace = p.address_space;
         let kernel_cr3 = AddressSpace::current().pml4_phys;
-        if aspace.pml4_phys == kernel_cr3 || p.context.cr3 != aspace.pml4_phys {
+        if aspace.pml4_phys == kernel_cr3
+            || crate::arch::x86_64::pcid::pml4_from_cr3(p.context.cr3) != aspace.pml4_phys
+        {
             crate::serial_print("[RING3-TEST] Ayrı CR3/adres uzayı: BAŞARISIZ\n");
             let _ = proc_mgr.terminate(pid, 0, pmm);
             return false;
@@ -3994,6 +4124,44 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         && free_after_unmap == free_before_unmap + PAGE_SIZE;
     let unmap_twice = syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * 4096, 0, proc_mgr, pmm);
     let mmap_ok = region_pages && second_ok && unmap_ok && unmap_twice == u64::MAX;
+
+    // 3b. Kısmi munmap: `len` bölgenin yalnızca istenen alt aralığını
+    //     kaldırır; ortadan bölme kalan parçaları iki bölge kaydına ayırır.
+    let partial = syscall_dispatch(sys_nos::SYS_MMAP, 3 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let partial_unmap = if partial != 0 {
+        syscall_dispatch(
+            sys_nos::SYS_MUNMAP,
+            partial + PAGE_SIZE,
+            PAGE_SIZE,
+            0,
+            proc_mgr,
+            pmm,
+        )
+    } else {
+        u64::MAX
+    };
+    let partial_ok = partial != 0
+        && partial_unmap == 0
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            p.address_space.translate(partial).is_some()
+                && p.address_space.translate(partial + PAGE_SIZE).is_none()
+                && p.address_space.translate(partial + 2 * PAGE_SIZE).is_some()
+                && p.address_space.translate(second).is_some()
+                && p.mmap_regions.iter().filter(|region| region.used).count() == 3
+        });
+    if partial != 0 {
+        // Kalan iki parçayı da kaldır: sonraki MEMINFO/sızıntı kontrolleri
+        // temiz kalsın.
+        let _ = syscall_dispatch(sys_nos::SYS_MUNMAP, partial, PAGE_SIZE, 0, proc_mgr, pmm);
+        let _ = syscall_dispatch(
+            sys_nos::SYS_MUNMAP,
+            partial + 2 * PAGE_SIZE,
+            PAGE_SIZE,
+            0,
+            proc_mgr,
+            pmm,
+        );
+    }
     // `second` tembel sayfasını da gerçekleştir: genişletilmiş MEMINFO'daki
     // kullanıcı çerçevesi sayısı heap (2) + bu sayfa (1) = 3 olur.
     if second != 0 {
@@ -4173,6 +4341,7 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         && heap_bounds_ok
         && shrink_ok
         && mmap_ok
+        && partial_ok
         && meminfo_ok
         && meminfo_ext_ok
         && shared_frame_matched
@@ -4192,6 +4361,7 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         crate::serial_print(if shrink_ok { "shrink " } else { "shrink! " });
         crate::serial_print(if region_pages { "region " } else { "region! " });
         crate::serial_print(if mmap_ok { "mmap " } else { "mmap! " });
+        crate::serial_print(if partial_ok { "partial " } else { "partial! " });
         crate::serial_print(if second_ok { "2nd " } else { "2nd! " });
         crate::serial_print(if unmap_ok { "unmap " } else { "unmap! " });
         crate::serial_print(if meminfo_ok { "meminfo " } else { "meminfo! " });

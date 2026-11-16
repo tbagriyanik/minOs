@@ -32,6 +32,14 @@ pub fn init() -> BootDisplay {
     // 115200 8N1 ile çerçeveye oturur.
     crate::serial::init();
 
+    // PCID: süreç başına TLB etiketi; CR4.PCIDE etkinse bağlam geçişleri
+    // TLB flush'suz yapılır. Destek yoksa tüm PCID yardımcıları kapalı kalır.
+    if crate::arch::x86_64::pcid::init() {
+        crate::serial_print("[PCID] Process-context identifiers enabled (CR4.PCIDE).\n");
+    } else {
+        crate::serial_print("[PCID] CPU does not support PCID; TLB flush per switch.\n");
+    }
+
     // PKU/PKRU: kullanıcı sayfa koruma anahtarı altyapısı (varsa).
     if crate::arch::x86_64::pku::init() {
         crate::serial_print("[PKU] Protection keys enabled (CR4.PKE, PKRU=0).\n");

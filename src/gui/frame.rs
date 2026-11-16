@@ -389,10 +389,16 @@ pub fn render_full_frame(
             app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
             app_render_time_ms[idx].set(render_elapsed_ms);
 
-            // Render workload budget enforcement: uyarı logla
-            // Render budget warning: log at most once per second per window
-            // to avoid serial port flooding during sustained overload.
-            if render_elapsed_ms > RENDER_BUDGET_MS && idx < gui::MAX_WINDOWS {
+            // Render workload budget enforcement: uyarı logla.
+            // Oyun pencerelerinin (16=FPS3D, 17=Şehir) kendi geniş
+            // render bütçeleri vardır; genel 24 ms eşiği onlarda yanlış
+            // pozitif üretirdi. Eşik uygulamanın fiilen verilen bütçesi.
+            let app_budget_ms = match app_id {
+                16 => 160,
+                17 => 80,
+                _ => RENDER_BUDGET_MS,
+            };
+            if render_elapsed_ms > app_budget_ms && idx < gui::MAX_WINDOWS {
                 static mut LAST_WARN_MS: [u64; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
                 let now_ms = crate::monotonic_ms();
                 let last = unsafe { LAST_WARN_MS[idx] };
@@ -405,7 +411,7 @@ pub fn render_full_frame(
                     crate::serial_print(" (");
                     crate::serial_print_dec(render_elapsed_ms);
                     crate::serial_print(" ms > ");
-                    crate::serial_print_dec(RENDER_BUDGET_MS);
+                    crate::serial_print_dec(app_budget_ms);
                     crate::serial_print(" ms)\n");
                 }
             }

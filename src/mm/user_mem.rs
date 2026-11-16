@@ -489,6 +489,21 @@ fn map_shared_reuse(
     Ok(())
 }
 
+/// Fork ile devralınan paylaşımlı bölge kaydının referansını artırır.
+/// Çocuk `mmap_regions` tablosunu kopyaladığı için çıkışında
+/// `release_shared_region` çağıracaktır; dengeyi korumak için kayıt
+/// başına bir referans daha işlenir. Kayıt yoksa (tablo dolu idi)
+/// yapılacak iş yoktur.
+pub fn retain_shared_region(addr: u64, len: u64) {
+    let mut table = SHARED_REGIONS.lock();
+    for region in table.iter_mut() {
+        if region.used && region.addr == addr && region.len == len {
+            region.refs = region.refs.saturating_add(1);
+            return;
+        }
+    }
+}
+
 /// Paylaşımlı bölge kaydını bırakır (son referansta silinir).
 pub fn release_shared_region(addr: u64, len: u64) {
     let mut table = SHARED_REGIONS.lock();
@@ -497,6 +512,8 @@ pub fn release_shared_region(addr: u64, len: u64) {
             region.refs = region.refs.saturating_sub(1);
             if region.refs == 0 {
                 *region = SharedRegion::empty();
+                // VMM shared frame referansını da bırak.
+                let _ = vmm::release_frame_shared(addr);
             }
             return;
         }
@@ -678,8 +695,23 @@ pub fn mmap(
     Ok(addr)
 }
 
-/// `addr`/`len` ile belirtilen mmap bölgesini kaldırır. Tam eşleşme aranır.
-pub fn munmap(process: &mut Process, addr: u64, len: u64, pmm: &mut PhysicalMemoryManager) -> bool {
+/// `addr`/`len` ile belirtilen mmap bölgesini kaldırır. `addr`'i içeren
+/// bölge bulunur; `[addr, addr+len)` aralığı sayfa hizasına yuvarlanır ve
+/// bölge sınırlarıyla kesiştirilir. Kısmi kaldırmada bölge kaydı kalan
+/// parçalar için bölünür; ortadan bölme için boş bölge kaydı gerekir ve
+/// yoksa istek hiçbir eşleme kaldırılmadan reddedilir. Paylaşımlı
+/// (`PAGE_SHARED`) bölgeler sıfır-kopya yeniden kullanım defteri tam
+/// `(addr, len)` çiftiyle anahtarlandığından yalnızca tamamen
+/// kaldırılabilir.
+pub fn munmap(
+    process: &mut Process,
+    addr: u64,
+    len: u64,
+    _pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    if len == 0 {
+        return false;
+    }
     let Some(slot) = process
         .mmap_regions
         .iter()
@@ -690,16 +722,62 @@ pub fn munmap(process: &mut Process, addr: u64, len: u64, pmm: &mut PhysicalMemo
     let region = process.mmap_regions[slot];
     let start = region.addr;
     let end = region.addr + region.len;
-    let _ = len;
-    if process
+    let unmap_start = page_of(addr).max(start);
+    let unmap_end = addr
+        .checked_add(len)
+        .map(|end| end.saturating_add(PAGE_SIZE - 1) & !(PAGE_SIZE - 1))
+        .unwrap_or(u64::MAX)
+        .min(end);
+    if unmap_start >= unmap_end {
+        return false;
+    }
+    let shared = process
         .address_space
         .read_entry(start)
-        .is_some_and(|entry| entry & PAGE_SHARED != 0)
-    {
-        release_shared_region(start, region.len);
+        .is_some_and(|entry| entry & PAGE_SHARED != 0);
+    if shared && (unmap_start != start || unmap_end != end) {
+        // Kısmi paylaşımlı kaldırma desteklenmez; istek reddedilir.
+        return false;
     }
-    unmap_range(process, start, end, pmm);
-    process.mmap_regions[slot] = MmapRegion::default();
+    let head = unmap_start > start;
+    let tail = unmap_end < end;
+    if head && tail {
+        // Ortadan kaldırma: mevcut kayıt başı korur, kuyruk boş bir
+        // kayda taşınır.
+        let tail_region = MmapRegion {
+            addr: unmap_end,
+            len: end - unmap_end,
+            used: true,
+        };
+        let free_slot = process
+            .mmap_regions
+            .iter()
+            .position(|region| !region.used)
+            .unwrap_or(slot);
+        process.mmap_regions[slot] = MmapRegion {
+            addr: start,
+            len: unmap_start - start,
+            used: true,
+        };
+        process.mmap_regions[free_slot] = tail_region;
+    } else if head {
+        // Baştan kaldırma: region başı unmap_end'e kadar kalar, geri kısım başa alın.
+        process.mmap_regions[slot] = MmapRegion {
+            addr: unmap_end,
+            len: end - unmap_end,
+            used: true,
+        };
+    } else if tail {
+        // Sondan kaldırma: region sonu unmap_start'ten kalar, baş kısım korumalı kalır.
+        process.mmap_regions[slot] = MmapRegion {
+            addr: start,
+            len: unmap_start - start,
+            used: true,
+        };
+    } else {
+        // Bölge tamamen kaldırılıyor (addr == region start && addr+len == region end).
+        process.mmap_regions[slot] = MmapRegion::default();
+    }
     // Mmap tabanı ASLR için değişmez; serbest bölgeler yeniden kullanılmaz
     // (adres alanı yalıtımı ve deterministik davranış için).
     true

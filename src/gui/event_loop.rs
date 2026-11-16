@@ -13,6 +13,30 @@ use crate::task;
 use crate::watchdog;
 use crate::{alloc_pmm_frame_global, MEMORY_MGR};
 
+/// Animasyonlu oyun pencerelerinin her tikinde yalnızca ilgili pencere
+/// bölgesini (gölge payı dahil) kirli işaretler. Böylece `force_render`'ın
+/// tetiklediği tam ekran yeniden çizim yerine kirli-dikdörtgen çizimi
+/// yapılır; masaüstü arka planı ve diğer pencereler yeniden rasterize
+/// edilmez.
+fn track_app_window_dirty(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
+    let Some(win) = compositor
+        .windows
+        .iter()
+        .flatten()
+        .find(|w| w.app_id as usize == app_id && w.is_open && !w.is_minimized)
+    else {
+        return;
+    };
+    let x = win.x.saturating_sub(8);
+    let y = win.y.saturating_sub(8);
+    let x1 = win.x.saturating_add(win.width).saturating_add(8);
+    let y1 = win.y.saturating_add(win.height).saturating_add(8);
+    compositor.dirty_tracker.track(
+        0,
+        gui::dirty_rect::DirtyRect::new(x, y, x1.saturating_sub(x), y1.saturating_sub(y)),
+    );
+}
+
 /// Önyükleme sonrası masaüstü çalışma zamanı ve ana olay döngüsü.
 /// `main.rs` içindeki eski `_start` gövdesinden taşındı.
 pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
@@ -8119,18 +8143,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             || viewer3d_animating;
 
         // FPS 3D oyunu açıkken ana döngü 60 Hz'e çıkar; oyunun kendi
-        // güncelleme kapısı da buna göre ayarlanır.
+        // güncelleme kapısı da buna göre ayarlanır. Şehir sürüşü de aynı
+        // 16 ms'lik tavanı kullandığı için kendi pencere döngüsü de 60 Hz
+        // çalışabilir.
         let fps3d_running = compositor
             .windows
             .iter()
             .flatten()
             .any(|w| w.app_id == 16 && w.is_open && !w.is_minimized);
+        let city_running = compositor
+            .windows
+            .iter()
+            .flatten()
+            .any(|w| w.app_id == 17 && w.is_open && !w.is_minimized);
 
-        let frame_interval_ms = if is_interacting || viewer3d_animating || fps3d_running {
-            16
-        } else {
-            33
-        };
+        let frame_interval_ms =
+            if is_interacting || viewer3d_animating || fps3d_running || city_running {
+                16
+            } else {
+                33
+            };
 
         let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= frame_interval_ms;
 
@@ -8416,16 +8448,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
                 drop(fps3d_guard);
             }
-            force_render = true;
+            // Tam ekran yerine yalnızca oyun penceresi bölgesi kirli
+            // işaretlenir; kirli-dikdörtgen çizimi masaüstünü atlar.
+            track_app_window_dirty(&mut compositor, 16);
         }
 
         // Şehir sürüşü: araç fiziği, trafik hareketi ve motor sesi.
         // Aynı 30 FPS sınırı ve guard koruması uygulanır.
-        let city_open = compositor
-            .windows
-            .iter()
-            .flatten()
-            .any(|w| w.app_id == 17 && w.is_open && !w.is_minimized);
+        let city_open = city_running;
         if city_open && timer_tick_fired {
             let now_ms = crate::monotonic_ms();
             let time_since_last_tick = now_ms.saturating_sub(last_city_tick_ms);
@@ -8444,7 +8474,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     {
                         watchdog::heartbeat(idx, 17);
                     }
-                    force_render = true;
+                    track_app_window_dirty(&mut compositor, 17);
                 } else {
                     crate::serial_print("[CITY] Guard recovery: oyun hata verdi, kapatılıyor\n");
                     if let Some(idx) = compositor

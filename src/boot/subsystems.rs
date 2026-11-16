@@ -583,6 +583,9 @@ unsafe fn driver_lane_net(arg: *mut u8) {
     drivers::netstack::init();
     let _ = drivers::netstack::dhcp_request();
     drivers::netstack::run_network_self_test();
+    // `livetest` cmdline token'ı varsa gerçek sunucu bağlantı testleri
+    // (HTTP/1.1, TLS, HTTP/2, Brotli) çalışır; aksi hâlde anında döner.
+    drivers::netstack::run_live_server_tests();
     serial_print("[DRIVER] Ağ protokolü hazır.\n");
 }
 

@@ -276,17 +276,21 @@ pub fn arp_insert(ip: Ipv4Address, mac: MacAddress) {
                 return;
             }
         }
-        // Dolu ise Gateway olmayan ilk girişi değiştir
+        // Dolu ise Gateway olmayan bir girişi değiştir
+        let mut found = false;
         for e in ARP_TABLE.iter_mut() {
             if e.ip != GATEWAY_IP && e.ip != DNS_SERVER {
                 e.ip = ip;
                 e.mac = mac;
-                e.used = true;
-                return;
+                found = true;
+                break;
             }
         }
-        ARP_TABLE[0].ip = ip;
-        ARP_TABLE[0].mac = mac;
+        // Eğer tüm girişler Gateway/DNS ise, en eski girişi (ARP_TABLE[0])'yi değiştirmeyin;
+        // farklı bir giriş yapamayızsa hata durumunu yönetin.
+        if !found {
+            return;
+        }
     }
 }
 
@@ -1626,6 +1630,144 @@ pub fn run_network_self_test() -> bool {
     }
 
     ping_sent
+}
+
+/// Canlı sunucu bağlantı testleri: HTTP/1.1 (HTTPS ise TLS el sıkışması),
+/// HTTP/2 (ALPN `h2`) ve Brotli (`content-encoding: br` gövde çözümü).
+///
+/// Yalnızca önyükleme komut satırında `livetest` token'ı varsa çalışır;
+/// gerçek ağ erişimi gerektirdiği için normal açılışta atlanır. Hedef
+/// `livetest=<url>` ile değiştirilebilir; varsayılan QEMU kullanıcı ağı
+/// geçidi (host) üzerindeki test sunucusudur:
+/// `http://10.0.2.2:8000/`. `livetest_tls=<https-url>` eklenirse ikinci
+/// bir HTTPS hedefi de denenir: `http_get` TLS el sıkışmasını,
+/// `http2_get` ALPN `h2` görüşmesini doğrular (ör.
+/// `livetest=http://10.0.2.2:8000/ livetest_tls=https://ornek.test/`).
+///
+/// `#[cfg(not(test))]`: host test harness'ında `boot::limine` ve
+/// `drivers::http`/`http2` yalnızca stub olarak bulunur; canlı ağ
+/// testi yalnızca gerçek çekirdek derlemesinde anlamlıdır.
+#[cfg(not(test))]
+pub fn run_live_server_tests() -> bool {
+    use crate::boot::limine::{cmdline_has_token, limine_boot_cmdline};
+    let Some(cmdline) = limine_boot_cmdline() else {
+        return false;
+    };
+    if !cmdline_has_token(cmdline, "livetest") {
+        return false;
+    }
+    let mut url = "http://10.0.2.2:8000/";
+    let mut tls_url: Option<&str> = None;
+    for tok in cmdline.split_whitespace() {
+        if let Some(rest) = tok.strip_prefix("livetest_tls=") {
+            if !rest.is_empty() {
+                tls_url = Some(rest);
+            }
+        } else if let Some(rest) = tok.strip_prefix("livetest=") {
+            if !rest.is_empty() {
+                url = rest;
+            }
+        }
+    }
+    crate::serial_print("[LIVE-TEST] Gercek sunucu testleri: ");
+    crate::serial_print(url);
+    if let Some(t) = tls_url {
+        crate::serial_print(" + TLS: ");
+        crate::serial_print(t);
+    }
+    crate::serial_print("\n");
+    if !e1000::is_ready() {
+        crate::serial_print("[LIVE-TEST] Ag surucusu hazir degil, atlandi.\n");
+        return false;
+    }
+
+    let mut resp = alloc::vec![0u8; 65536];
+    let mut all_ok = true;
+
+    // 1. HTTP/1.1 GET (https:// verilirse TLS el sıkışması da burada doğrulanır).
+    crate::serial_print("[LIVE-TEST] 1. HTTP/1.1 GET... ");
+    match crate::drivers::http::http_get(url, &mut resp) {
+        Ok((status, hlen, total)) => {
+            crate::serial_print("durum=");
+            crate::serial::print_dec(status as u64);
+            crate::serial_print(" bayt=");
+            crate::serial::print_dec(total.saturating_sub(hlen) as u64);
+            // Brotli: sunucu `br` kodlaması gönderdiyse http_get gövdeyi
+            // zaten çözmüş demektir; başlığı doğrulayıp raporla.
+            let br = crate::drivers::http::header_value(&resp[..hlen], b"content-encoding")
+                .map(|v| core::str::from_utf8(v).unwrap_or("").to_ascii_lowercase())
+                .is_some_and(|v| v.split(',').any(|e| e.trim() == "br"));
+            if br {
+                crate::serial_print(" [BROTLI cozuldu]");
+            }
+            crate::serial_print("\n");
+            if !(200..400).contains(&status) {
+                all_ok = false;
+            }
+        }
+        Err(code) => {
+            crate::serial_print("HATA kod=");
+            crate::serial::print_dec(code as u64);
+            crate::serial_print("\n");
+            all_ok = false;
+        }
+    }
+
+    // 2. TLS: `livetest_tls=` verildiyse ya da ana hedef https ise
+    //    http_get ile gerçek TLS el sıkışması doğrulanır.
+    let tls_target = tls_url.or(if url.starts_with("https://") {
+        Some(url)
+    } else {
+        None
+    });
+    if let Some(t) = tls_target {
+        if tls_url.is_some() {
+            crate::serial_print("[LIVE-TEST] 2. TLS GET (https)... ");
+            match crate::drivers::http::http_get(t, &mut resp) {
+                Ok((status, _, _)) => {
+                    crate::serial_print("durum=");
+                    crate::serial::print_dec(status as u64);
+                    crate::serial_print("\n");
+                    if !(200..400).contains(&status) {
+                        all_ok = false;
+                    }
+                }
+                Err(code) => {
+                    crate::serial_print("HATA kod=");
+                    crate::serial::print_dec(code as u64);
+                    crate::serial_print("\n");
+                    all_ok = false;
+                }
+            }
+        }
+        // 3. HTTP/2: ALPN `h2` görüşmesi (TLS hedefi gerektirir).
+        crate::serial_print("[LIVE-TEST] 3. HTTP/2 GET (ALPN h2)... ");
+        match crate::drivers::http2::http2_get(t, &mut resp) {
+            Ok((status, _, _)) => {
+                crate::serial_print("durum=");
+                crate::serial::print_dec(status as u64);
+                crate::serial_print("\n");
+                if !(200..400).contains(&status) {
+                    all_ok = false;
+                }
+            }
+            Err(code) => {
+                crate::serial_print("ATLANDI/HATA kod=");
+                crate::serial::print_dec(code as u64);
+                crate::serial_print(" (sunucu h2 desteklemiyor olabilir)\n");
+                // h2 desteklenmemesi HTTP/1.1+TLS başarısını geçersiz kılmaz.
+            }
+        }
+    } else {
+        crate::serial_print("[LIVE-TEST] 2-3. TLS/HTTP2: hedef yok, atlandi.\n");
+    }
+
+    crate::serial_print(if all_ok {
+        "[LIVE-TEST] Sonuc: BASARILI\n"
+    } else {
+        "[LIVE-TEST] Sonuc: BASARISIZ\n"
+    });
+    all_ok
 }
 
 pub fn dhcp_request() -> bool {

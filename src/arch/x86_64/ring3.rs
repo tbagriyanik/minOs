@@ -36,9 +36,13 @@ const USER_PREEMPT_QUANTUM: usize = 4;
 static KERNEL_PML4: AtomicU64 = AtomicU64::new(0);
 
 /// Boot sırasında çekirdek CR3'ünü kaydeder (tekrar çağrı güvenli).
+/// Saklanan değer `pcid::encode` ile kodlanmıştır: PCID 0 + noflush biti.
 pub fn note_kernel_cr3(pml4_phys: u64) {
     if pml4_phys != 0 {
-        KERNEL_PML4.store(pml4_phys, Ordering::Relaxed);
+        KERNEL_PML4.store(
+            super::pcid::encode(pml4_phys, super::pcid::KERNEL_PCID, false),
+            Ordering::Relaxed,
+        );
     }
 }
 
@@ -48,8 +52,9 @@ fn kernel_pml4() -> u64 {
         return v;
     }
     let cur = crate::mm::vmm::AddressSpace::current().pml4_phys;
-    KERNEL_PML4.store(cur, Ordering::Relaxed);
-    cur
+    let encoded = super::pcid::encode(cur, super::pcid::KERNEL_PCID, false);
+    KERNEL_PML4.store(encoded, Ordering::Relaxed);
+    encoded
 }
 
 // --- IDT kapı kurulumu (idt.rs'deki tabloya) ---------------------------------
@@ -1384,7 +1389,9 @@ unsafe fn frame_to_process_context(frame: *const u64) -> crate::mm::process::Pro
             cs: core::ptr::read_volatile(frame.add(F_ICS)),
             rflags: core::ptr::read_volatile(frame.add(F_IRIP + 2)),
             ss: core::ptr::read_volatile(frame.add(F_ISS)),
-            cr3: crate::mm::vmm::AddressSpace::current().pml4_phys,
+            // Kayıt anındaki CR3'ü PCID bitleriyle birlikte koru; bit63
+            // temizlendiği için geri yüklemede hedef PCID flush edilir.
+            cr3: super::pcid::sanitize_saved_cr3(super::pcid::read_cr3()),
             kernel_rsp: frame as u64,
         }
     }
@@ -1864,10 +1871,16 @@ fn read_result_in(aspace: &crate::mm::vmm::AddressSpace) -> u64 {
     }
 }
 
+/// Ring3 demo adres uzayının PCID'si. Süreç PCID'leri (1..=32) ile
+/// çakışmaması için yüksek bir değer seçilir; her girişte flush
+/// semantic'li yükleme yapılır çünkü adımlar arasında kullanıcı
+/// sayfaları kaldırılıp yeniden eşlenir.
+const DEMO_PCID: u16 = 0xFFE;
+
 unsafe fn enter_demo_usermode(aspace: &crate::mm::vmm::AddressSpace, entry: u64, stack_top: u64) {
     core::arch::asm!(
         "mov cr3, {}",
-        in(reg) aspace.pml4_phys,
+        in(reg) super::pcid::encode(aspace.pml4_phys, DEMO_PCID, true),
         options(nostack, preserves_flags)
     );
     enter_usermode(entry, stack_top);
@@ -2088,6 +2101,8 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
     })();
     aspace.free_user_page_tables(pmm);
     pmm.free_frame(pml4_frame);
+    // Demo PCID'sine ait olası bayat TLB kayıtlarını temizle.
+    super::pcid::invalidate(DEMO_PCID);
     success
 }
 
@@ -2203,10 +2218,18 @@ pub fn execute_process(
         let fault = USER_FAULT_VEC.load(Ordering::Acquire);
         let exited = USER_EXITED.load(Ordering::Acquire);
 
-        // Kernel adres uzayına geri dön
+        // Kernel adres uzayına geri dön (PCID 0, noflush)
         if let Some(kernel_p) = proc_mgr.get_process(0) {
             unsafe {
-                core::arch::asm!("mov cr3, {}", in(reg) kernel_p.address_space.pml4_phys, options(nostack, preserves_flags));
+                core::arch::asm!(
+                    "mov cr3, {}",
+                    in(reg) super::pcid::encode(
+                        kernel_p.address_space.pml4_phys,
+                        super::pcid::KERNEL_PCID,
+                        false
+                    ),
+                    options(nostack, preserves_flags)
+                );
             }
         }
 

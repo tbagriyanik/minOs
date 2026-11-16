@@ -3,6 +3,7 @@ pub mod context;
 pub mod gdt;
 pub mod idt;
 pub mod ioapic;
+pub mod pcid;
 pub mod pku;
 pub mod ring3;
 pub mod smp;
@@ -163,6 +164,12 @@ fn mmio_map_2mb_flags(phys_2mb_aligned: u64, pde_flags: u64, pte_flags: u64) {
 
         // Sanal adres için TLB'yi temizle
         core::arch::asm!("invlpg [{}]", in(reg) v, options(nostack, preserves_flags));
+
+        // Çekirdek yarı eşlemesi değişti: diğer PCID'lere ait olası bayat
+        // TLB kayıtlarını da temizle (PCID kapalıyken no-op).
+        if pcid::enabled() {
+            pcid::flush_all();
+        }
     }
 }
 

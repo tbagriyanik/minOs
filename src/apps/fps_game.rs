@@ -247,6 +247,12 @@ pub struct FpsGameApp {
     metrics_window_start_ms: u64,
     metrics_window_frames: u64,
     metrics_window_max_interval_ms: u64,
+    /// Bellek ölçümü: oyun çalışırken gözlenen tepe sistem kullanımı (KB)
+    /// ve son örneklenen boş bellek (KB). Her metrik penceresinde seri
+    /// konsola `[FPS3D-METRICS]` satırıyla birlikte yazılır.
+    pub mem_peak_used_kb: u64,
+    pub mem_free_kb: u64,
+    pub mem_heap_kb: u64,
 
     // Ses durumu
     pub last_shot_tick: usize,
@@ -354,6 +360,9 @@ impl FpsGameApp {
             metrics_window_start_ms: 0,
             metrics_window_frames: 0,
             metrics_window_max_interval_ms: 0,
+            mem_peak_used_kb: 0,
+            mem_free_kb: 0,
+            mem_heap_kb: 0,
             last_shot_tick: 0,
             last_step_tick: 0,
             moving: false,
@@ -678,6 +687,22 @@ impl FpsGameApp {
         crate::boot::console::serial_print_dec(self.metrics_window_max_interval_ms);
         crate::boot::console::serial_print(" frames=");
         crate::boot::console::serial_print_dec(self.rendered_frames);
+        // Bellek ölçümü: pencere başına bir kez sistem belleği örneklenir;
+        // tepe kullanım ve o anki boş/heap değerleri raporlanır.
+        let stats = crate::mm::memory::mem_stats();
+        let used_kb = stats.used_bytes / 1024;
+        let free_kb = stats.free_bytes / 1024;
+        self.mem_free_kb = free_kb;
+        self.mem_heap_kb = stats.heap_committed_bytes / 1024;
+        self.mem_peak_used_kb = self.mem_peak_used_kb.max(used_kb);
+        crate::boot::console::serial_print(" used_kb=");
+        crate::boot::console::serial_print_dec(used_kb);
+        crate::boot::console::serial_print(" free_kb=");
+        crate::boot::console::serial_print_dec(free_kb);
+        crate::boot::console::serial_print(" heap_kb=");
+        crate::boot::console::serial_print_dec(self.mem_heap_kb);
+        crate::boot::console::serial_print(" peak_used_kb=");
+        crate::boot::console::serial_print_dec(self.mem_peak_used_kb);
         crate::boot::console::serial_print("\n");
         self.metrics_window_start_ms = now;
         self.metrics_window_frames = 0;
@@ -1361,6 +1386,11 @@ impl FpsGameApp {
         fps_text.push_str(") ");
         fps_text.push_usize(self.frame_time_ms as usize);
         fps_text.push_str("ms");
+        // Bellek: metrik penceresinde saniyede bir kez örneklenen boş
+        // bellek MB cinsinden gösterilir.
+        fps_text.push_str(crate::gui::ui_text(" bellek:", " mem:"));
+        fps_text.push_usize((self.mem_free_kb / 1024) as usize);
+        fps_text.push_str("MB");
         MinGuiCompositor::draw_string(
             fb,
             win_x + 220,

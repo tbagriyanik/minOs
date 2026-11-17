@@ -636,6 +636,64 @@ mod tests {
         }
     }
 
+    /// Geist Mono yüzünde de Türkçe karakterler birincil tier'da olmalı.
+    #[test]
+    fn turkish_characters_available_in_geist_primary_face() {
+        for ch in ['ğ', 'ü', 'ş', 'İ', 'ı', 'ö', 'ç', 'Ğ', 'Ü', 'Ş', 'Ö', 'Ç'] {
+            assert_eq!(
+                glyph_tier(Face::Geist, ch),
+                Some(0),
+                "Geist: Türkçe karakter '{ch}' birincil yüzde (tier 0) olmalı"
+            );
+        }
+    }
+
+    /// Türkçe gliflerin gerçek bitmap genişliği ve ilerleme değeri olmalı.
+    #[test]
+    fn turkish_glyphs_have_nonzero_bitmap_and_advance() {
+        for face in [Face::Inria, Face::Geist] {
+            for ch in ['ç', 'ğ', 'ı', 'İ', 'ö', 'ş', 'ü'] {
+                let record =
+                    glyph(face, ch).unwrap_or_else(|| panic!("{ch}: glif kaydı bulunamadı"));
+                assert!(record.width > 0, "{ch}: bitmap genişliği sıfır");
+                assert!(record.height > 0, "{ch}: bitmap yüksekliği sıfır");
+                assert!(record.advance > 0.0, "{ch}: ilerleme değeri sıfır");
+                let mut buf = [0u8; 4];
+                assert!(text_width(face, ch.encode_utf8(&mut buf), 14.0) > 0);
+            }
+        }
+    }
+
+    /// Noktalı `i` ve noktasız `ı` aynı görünmemeli (karakter seti ayrımı).
+    #[test]
+    fn dotless_i_is_distinct_from_ascii_i() {
+        for face in [Face::Inria, Face::Geist] {
+            let dotted = glyph(face, 'i').expect("i glifi");
+            let dotless = glyph(face, 'ı').expect("ı glifi");
+            assert_eq!(dotted.codepoint, 'i' as u32);
+            assert_eq!(dotless.codepoint, 'ı' as u32);
+            assert_ne!(
+                dotted.offset, dotless.offset,
+                "glif bitmap'leri ayrı olmalı"
+            );
+            assert_ne!(dotted.height, dotless.height, "noktasız ı daha kısa olmalı");
+        }
+    }
+
+    /// Atlasda bulunmayan karakter '?' yerine çizilir; ölçüm çökmez.
+    #[test]
+    fn missing_glyph_uses_question_mark_fallback() {
+        let emoji = '\u{1F600}';
+        assert!(glyph_tier(Face::Inria, emoji).is_none());
+        assert!(glyph_tier(Face::Geist, emoji).is_none());
+        let emoji_width = text_width(Face::Inria, "\u{1F600}", 14.0);
+        let question_width = text_width(Face::Inria, "?", 14.0);
+        assert_eq!(
+            emoji_width, question_width,
+            "eksik glif '?' genişliğini kullanmalı"
+        );
+    }
+
     /// Türkçe metin soldan sağa (LTR) korunmalı, ters çevrilmemeli.
     #[test]
     fn turkish_text_stays_left_to_right() {

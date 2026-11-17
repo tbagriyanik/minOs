@@ -86,6 +86,20 @@ pub struct PaintApp {
 }
 
 impl PaintApp {
+    /// Canvas points, undo/redo snapshots and the last saved BMP.
+    pub fn memory_usage_bytes(&self) -> usize {
+        let point_bytes = core::mem::size_of::<PaintPoint>();
+        let canvas = self.points.len().saturating_mul(point_bytes);
+        let history = |stack: &alloc::vec::Vec<alloc::vec::Vec<PaintPoint>>| {
+            crate::apps::memory::vec_bytes(stack)
+                .saturating_add(stack.iter().map(crate::apps::memory::vec_bytes).sum())
+        };
+        canvas
+            .saturating_add(history(&self.undo_stack))
+            .saturating_add(history(&self.redo_stack))
+            .saturating_add(self.saved_bmp.len())
+    }
+
     pub fn new() -> Self {
         Self {
             len: 0,

@@ -18,6 +18,28 @@ olmayan bileşenleri özetler. Sürücü olgunluk seviyeleri için
 > Not: ✅ yalnızca **otomatik QEMU testi** anlamına gelir. Gerçek donanım
 > sonuçları için aşağıdaki **Gerçek Donanım Doğrulama** bölümünü doldurun.
 
+## 📌 Son QEMU Doğrulaması
+
+Kaynak: [`../test-report.md`](../test-report.md) — `test_qemu.ps1` tarafından
+üretilen son rapor. Bu tablo **yalnızca o raporda gerçekten çalışan** kontrolleri
+listeler; profil dışı sonuçlar taşınmaz.
+
+| Öğe | Sonuç |
+| :--- | :--- |
+| Tarih / profil | 2026-11-17 20:05:39 UTC · `default` |
+| Sanal donanım | 512 MB RAM · 2 vCPU · virtio VGA · USB HID kapalı · PS/2 açık |
+| Toplam | 36/36 QEMU kontrolü ✅ GEÇTİ |
+| CPU & Çekirdek Donanım Başlatımı | ✅ GEÇTİ (BSP GDT/IDT, tek CPU yolu) |
+| Gerçek ses çıkışı (Intel HDA / WAV) | ✅ GEÇTİ (44 bayt WAV başlığı; 0 bayt PCM) |
+| `brk`/`mmap`/`munmap`, FD yaşam döngüsü, kaynak limitleri, COW | ✅ GEÇTİ |
+| GUI duman testi (`[GUI-SMOKE]`), `[APP-MEM]` seri raporu | ✅ GEÇTİ |
+
+> ⚠️ **Profil bazlı uyarı:** 2026-11-17 19:35 UTC civarındaki bir `high`
+> profili denemesinde `CPU & Cekirdek Donanım Başlatimi` ❌ **BAŞARISIZ** oldu.
+> 20:05 UTC `default` profil raporunda aynı kontrol ✅ GEÇTİ. Bu iki sonuç aynı
+> donanım profiline ait değildir; `high` profili sonucu ayrıca doğrulanmadan
+> genel destek iddiası yapılmaz.
+
 ---
 
 ## 🧪 QEMU Test Profilleri
@@ -112,38 +134,48 @@ ağ ve ses aygıtları yalnızca `minimal` dışındaki profillerde eklenir.
 - Giriş sürücüleri (USB HID / PS/2 fallback)
 - Intel HDA (48 kHz DMA) + gerçek WAV çıkışı
 - Masaüstü olay döngüsü
+- Uygulama bazlı bellek raporu (`[APP-MEM]`) — ✅ 20:05 UTC raporunda doğrulandı
+- GUI ekran geometrisi / duman testi (`[GUI-SMOKE]`) — ✅ 20:05 UTC raporunda doğrulandı
 - USB HID numaralandırma ve QMP ile klavye/fare raporu (yalnızca `high`/`UsbHid`)
 
 ---
 
 ## 🧷 Gerçek Donanım Doğrulama
 
-Aşağıdaki tabloyu gerçek donanımda test ettikçe doldurun. Her satır için
+Aşağıdaki tablolar **gerçek donanım ölçümü değildir**; doğrulama yapılmadığı
+için tüm hücreler açıkça `DOĞRULANMADI` olarak işaretlenmiştir. Gerçek bir
+sonuç elde edildiğinde ilgili hücreyi `✅` / `❌` ve tarihle güncelleyin.
 `minos.iso`'yu USB'ye yazdırıp (Rufus/Ventoy) sistemi başlatın.
+
+### CPU / SMP (gerçek donanım)
+
+| Donanım | CPU | BSP açılışı | AP/SMP | Tarih | Not |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| Doğrulanmadı | Doğrulanmadı | DOĞRULANMADI | DOĞRULANMADI | — | QEMU `default` sonucu gerçek donanıma taşınamaz |
 
 ### Ağ (ARP / ICMP / TCP)
 
 | Donanım | NIC | ARP | ICMP (ping) | TCP (HTTP) | Tarih | Not |
 | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| | | | | | | |
+| Doğrulanmadı | Doğrulanmadı | DOĞRULANMADI | DOĞRULANMADI | DOĞRULANMADI | — | — |
 
 ### Ses (HDA)
 
 | Donanım | Denetleyici | Çıkış | Tarih | Not |
 | :--- | :--- | :---: | :---: | :--- |
-| | | | | |
+| Doğrulanmadı | Doğrulanmadı | DOĞRULANMADI | — | — |
 
 ### Giriş (USB klavye / fare)
 
 | Donanım | Denetleyici | Klavye | Fare | Tarih | Not |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| | | | | | |
+| Doğrulanmadı | Doğrulanmadı | DOĞRULANMADI | DOĞRULANMADI | — | — |
 
 ### Depolama / Önyükleme
 
 | Donanım | Depolama | Önyükleme | Tarih | Not |
 | :--- | :--- | :---: | :---: | :--- |
-| | | | | |
+| Doğrulanmadı | Doğrulanmadı | DOĞRULANMADI | — | — |
 
 ---
 

@@ -225,7 +225,7 @@ Scheduler/process subsystem (`src/task`, `src/mm/process.rs`, `src/arch/x86_64/r
 
 | # | Item | Priority | Status |
 | :- | :--- | :--- | :--- |
-| 9.1 | Multi-core scheduler stress tests | P1 | Partial — `task::test_scheduler_multicore_race` exists; `test_stress_24h.ps1` provides configurable-duration QEMU soak runs (panic/exception/QEMU-exit auto-detection, `-Fps3d` render load); needs repeated/soak runs and per-CPU accounting checks |
+| 9.1 | Multi-core scheduler stress tests | P1 | Partial — `task::test_scheduler_multicore_race` exists; `test_stress_24h.ps1` provides configurable-duration QEMU soak runs (panic/exception/QEMU-exit auto-detection, `-Fps3d` render load); PMM/VMM/allocator QEMU self-tests are green, but repeated 24h runs, per-CPU accounting and real-hardware validation remain open |
 | 9.2 | Scheduler tests on real hardware | P1 | Todo — validate APIC/SMP paths outside QEMU |
 | 9.3 | CPU affinity support | P2 | Partial — `Task::cpu` + `least_loaded_cpu` assign queues; `SYS_SCHED_SETAFFINITY`/`GETAFFINITY` (24/25) store a per-process mask, but the scheduler does not yet consult it (Ring 3 slices still run on the BSP) |
 | 9.4 | Deeper security audit of process isolation | P0 | **Done** — `uaccess` range/USER-bit validation, `translate_user` 4-level USER checks, `clone_kernel_mappings` USER-bit stripping, syscall pointer coverage audited; ELF loader hardened (`e_entry` validation, phdr overflow/`e_phentsize` checks, NULL-page rejection), `SYS_SIGACTION` handler restricted to user-executable space |
@@ -306,11 +306,35 @@ Low-priority polish items tracked here; they do not block releases.
 
 | # | Item | Priority | Status |
 | :- | :--- | :- | :- |
-| 10.1 | UI tema ve erişilebilirlik testlerini artır | P3 | Todo — kontrast (WCAG AA/AAA), palet geçerliliği ve tema değiştirme testleri eklenecek (`tests/host_tests.rs` üzerinden `gui::theme`) |
-| 10.2 | Türkçe karakter ve font fallback testlerini otomatikleştir | P3 | Todo — `ğ, ü, ş, İ, ı, ö, ç` karakterleri ve yedek font tier'ları için `font_render.rs` testleri eklenecek |
-| 10.3 | Uygulama açılış süreleri ve bellek kullanımını ölç | P3 | Kısmi — `src/boot/timing.rs` `Stopwatch` eklendi (uygulama başlangıç süresi ölçümü); bellek ölçümü mevcut `MEM-PROFILE`/heap takibiyle |
-| 10.4 | Açılış, kapanış ve hata ekranlarını görsel olarak iyileştir | P3 | Todo — `src/gui/screens.rs` ekranları geliştirilecek |
-| 10.5 | Sürüm notlarında başarısız veya deneysel özellikleri açıkça işaretle | P3 | Todo — `docs/releases.md` deneysel/başarısız özellik etiketleri eklenecek |
+| 10.1 | UI tema ve erişilebilirlik testlerini artır | P3 | **Done (host)** — `tests/host_gui_tests.rs` tema/odak/erişilebilirlik ve `gui::screen_layout` geometri kontrolleri; `test_host.ps1` ile 358 test geçti. WCAG AAA oranları/kontrast ölçümü ayrı bir iyileştirme olarak kalıyor |
+| 10.2 | Türkçe karakter ve font fallback testlerini otomatikleştir | P3 | **Done** — `font_render.rs`: Geist tier-0 Türkçe karakterler, sıfır olmayan bitmap/advance, `i`/`ı` ayrımı, eksik glif `?` fallback'i ve yedek tier kontrolleri |
+| 10.3 | Uygulama açılış süreleri ve bellek kullanımını ölç | P3 | **Done (app memory)** — `apps::memory` kaydı, uygulama bazlı dinamik kapasite metodları, Görev Yöneticisi "Bellek" sütunu ve `[APP-MEM]` seri raporu; açılış süresi ölçümü `boot::timing` ile mevcut |
+| 10.4 | Açılış, kapanış ve hata ekranlarını görsel olarak iyileştir | P3 | **Done** — `gui::screen_layout` ortak geometri/metin, yükleme+açılış hatası+hoş geldin+kapanış ekranları, görünür kapanış fazları ve `finish_system()` VFS sync + sürücü kapanışı |
+| 10.5 | Sürüm notlarında başarısız veya deneysel özellikleri açıkça işaretle | P3 | **Done** — `docs/releases.md`, `docs/CHANGELOG.md` ve `docs/CHANGELOG.en.md` içinde 🧪/⚠️ etiketleri ve gerçek/QEMU ayrımı |
+
+## 11. Doğrulanmış P1 Kontrol Listesi (17 Kasım 2026)
+
+Kaynak: `test-report.md` (QEMU `default`, 36/36 kontrol ✅) ve `test_host.ps1`
+(358/358 ✅). Gerçek donanım sonuçları bu listeye dahil değildir.
+
+| # | Görev | Durum | Kanıt / Not |
+| :- | :--- | :--- | :--- |
+| 11.1 | Heap (`brk`) büyütme/küçültme testleri | **Done** | `[PROC-TEST]` / `Kullanici Heap ve Mmap` ✅; tembel eşleme ve iade dahil |
+| 11.2 | `mmap`/`munmap` sınır ve hata testleri | **Done** | `Kullanici Heap ve Mmap` ✅; 16 bölge, hizalama, çift iade reddi |
+| 11.3 | Dosya tanıtıcısı yaşam döngüsü | **Done** | `Dosya Taniticisi Yasam Dongusu` ✅; open/read/lseek/close, fork/exec, fd kotası |
+| 11.4 | Süreç kaynak limitleri + fork aktarımı | **Done** | `Surec Kaynak Limitleri` ✅; `SYS_RESINFO`, heap/mmap/fd/çerçeve kotası mirası |
+| 11.5 | COW testindeki başarısızlık | **Done** | `Copy-on-Write (Ring3 yazma hatasi)` ✅; `#PF` ile özel kopya, ebeveyne sızma yok |
+| 11.6 | PMM / VMM / allocator uzun süreli stres | **Partial** | QEMU öz-testleri (`MM-TEST`, `ALLOC-TEST`) ✅ ve `test_stress_24h.ps1` soak harness'i mevcut; 24h tekrarları ve gerçek donanım ölçümü yapılmadı |
+| 11.7 | Donanım uyumluluk matrisi gerçek sonuçlarla güncellendi | **Done** | `docs/HARDWARE_DRIVER_SUPPORT_MATRIX.md`: QEMU sonucu + gerçek donanım için açık `DOĞRULANMADI` |
+| 11.8 | GUI duman testleri | **Done** | `[GUI-SMOKE]` QEMU ✅, `screen_layout` öz-testi, `tests/host_gui_tests.rs` |
+| 11.9 | Uygulama hata mesajları ve kurtarma yolları | **Done** | `apps::errors` sabit kodlar + TR/EN mesaj/kurtarma; dosya bırakma ve guard toast'ları bağlandı |
+| 11.10 | Tema / erişilebilirlik testleri | **Done (host)** | `tests/host_gui_tests.rs`, `gui::theme` kontrast/palette testleri |
+| 11.11 | Türkçe karakter / font fallback testleri | **Done** | Geist tier-0, bitmap/advance, `i`/`ı`, eksik glif fallback |
+| 11.12 | Uygulama bazlı bellek raporu | **Done** | `apps::memory`, `[APP-MEM]` QEMU ✅, Görev Yöneticisi sütunu |
+| 11.13 | Açılış/kapanış/hata ekranları | **Done** | Ortak `screen_layout`, görünür kapanış fazları, `finish_system()` |
+| 11.14 | Deneysel/başarısız özellik etiketleri | **Done** | 🧪 / ⚠️ işaretleri sürüm notlarında ve bu planda |
+
+---
 
 ## Success Metrics
 - Boot time < 3s kernel-side (currently ~3.5s to desktop-ready; welcome

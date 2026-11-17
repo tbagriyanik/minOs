@@ -684,6 +684,16 @@ $checks = @(
         Description = "PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari"
     },
     @{
+        Name = "Uygulama Bazli Bellek Raporu";
+        Pattern = "\[APP-MEM\] app=\d+ bytes=\d+";
+        Description = "Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu"
+    },
+    @{
+        Name = "GUI Ekran Geometrisi / Duman Testi";
+        Pattern = "\[GUI-SMOKE\].*BASARILI";
+        Description = "Acilis/kapanis/hata ekran geometrisi ve yerellestirilmis ekran metinleri"
+    },
+    @{
         Name = "CPU & Cekirdek Donanim Baslatimi";
         Pattern = "\[SMP\].*CPU";
         Description = "BSP GDT, IDT ve coklu/tek CPU baslatma durumu"

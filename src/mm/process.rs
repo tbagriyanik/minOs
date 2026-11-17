@@ -23,6 +23,258 @@ use crate::mm::pmm::{PhysicalMemoryManager, PAGE_SIZE};
 use crate::mm::uaccess;
 use crate::mm::vmm::{AddressSpace, PageFlags};
 
+// ---------------------------------------------------------------------------
+// GUI syscall köprüsü: kullanıcı modu süreçleri, pencere oluşturma, çizim ve
+// girdi işlemleri için syscall kuyruğu üzerinden kompozitörle iletişim kurar.
+// ---------------------------------------------------------------------------
+
+/// Kullanıcı modu pencere tanımlayıcısı (compositor window idx'si ile eşleşir).
+pub type GuiWindowId = u32;
+
+/// GUI syscall isteği: kullanıcı modu süreci tarafından oluşturulur,
+/// olay döngüsü tarafından tüketilir.
+#[derive(Debug, Clone, Copy)]
+pub enum GuiSyscallRequest {
+    CreateWindow {
+        pid: usize,
+        title_ptr: u64,
+        title_len: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+    },
+    DestroyWindow {
+        pid: usize,
+        window_id: GuiWindowId,
+    },
+    SetTitle {
+        pid: usize,
+        window_id: GuiWindowId,
+        title_ptr: u64,
+        title_len: usize,
+    },
+    DrawPixel {
+        pid: usize,
+        window_id: GuiWindowId,
+        x: usize,
+        y: usize,
+        color: u32,
+    },
+    DrawRect {
+        pid: usize,
+        window_id: GuiWindowId,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        color: u32,
+    },
+    GetInput {
+        pid: usize,
+        window_id: GuiWindowId,
+        buffer_ptr: u64,
+        buffer_len: usize,
+    },
+    SetCursor {
+        pid: usize,
+        x: usize,
+        y: usize,
+    },
+    GetWindowInfo {
+        pid: usize,
+        window_id: GuiWindowId,
+        buffer_ptr: u64,
+    },
+}
+
+/// GUI syscall yanıtı: olay döngüsü tarafından doldurulur, syscall tarafından okunur.
+#[derive(Debug, Clone, Copy)]
+pub enum GuiSyscallReply {
+    CreateWindow {
+        window_id: GuiWindowId,
+        ok: bool,
+    },
+    DestroyWindow {
+        ok: bool,
+    },
+    SetTitle {
+        ok: bool,
+    },
+    DrawPixel {
+        ok: bool,
+    },
+    DrawRect {
+        ok: bool,
+    },
+    GetInput {
+        bytes: usize,
+    },
+    SetCursor {
+        ok: bool,
+    },
+    GetWindowInfo {
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        ok: bool,
+    },
+}
+
+/// Azami eşzamanlı GUI syscall isteği sayısı.
+pub const MAX_GUI_SYSCALL_PENDING: usize = 16;
+
+/// GUI syscall durumu: olay döngüsü ve syscall işleyicisi arasında paylaşılır.
+pub struct GuiSyscallState {
+    pub pending_requests: [Option<GuiSyscallRequest>; MAX_GUI_SYSCALL_PENDING],
+    pub pending_count: usize,
+    pub replies: [(GuiWindowId, Option<GuiSyscallReply>); MAX_GUI_SYSCALL_PENDING],
+    pub reply_count: usize,
+    /// window_id -> compositor window index eşlemesi (0 = kullanılmıyor).
+    pub window_to_compositor: [usize; MAX_PROCESSES],
+    pub next_window_id: GuiWindowId,
+}
+
+impl GuiSyscallState {
+    pub const fn new() -> Self {
+        Self {
+            pending_requests: [None; MAX_GUI_SYSCALL_PENDING],
+            pending_count: 0,
+            replies: [(0, None); MAX_GUI_SYSCALL_PENDING],
+            reply_count: 0,
+            window_to_compositor: [0; MAX_PROCESSES],
+            next_window_id: 1,
+        }
+    }
+}
+
+impl Default for GuiSyscallState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static mut GUI_SYSCALL_STATE: GuiSyscallState = GuiSyscallState::new();
+
+/// GUI syscall durumuna güvenli erişim.
+pub fn gui_syscall_state() -> &'static mut GuiSyscallState {
+    unsafe { &mut *core::ptr::addr_of_mut!(GUI_SYSCALL_STATE) }
+}
+
+/// Bir GUI syscall isteğini kuyruğa ekler. Syscall işleyicisi tarafından çağrılır.
+pub fn enqueue_gui_request(req: GuiSyscallRequest) -> GuiWindowId {
+    let state = gui_syscall_state();
+    if state.pending_count >= MAX_GUI_SYSCALL_PENDING {
+        return 0;
+    }
+    let id = state.next_window_id;
+    state.next_window_id = state.next_window_id.saturating_add(1);
+    for slot in state.pending_requests.iter_mut() {
+        if slot.is_none() {
+            *slot = Some(req);
+            state.pending_count += 1;
+            return id;
+        }
+    }
+    0
+}
+
+/// Bir GUI syscall yanıtını kuyruğa ekler. Olay döngüsü tarafından çağrılır.
+pub fn enqueue_gui_reply(window_id: GuiWindowId, rep: GuiSyscallReply) -> bool {
+    let state = gui_syscall_state();
+    if state.reply_count >= MAX_GUI_SYSCALL_PENDING {
+        return false;
+    }
+    for slot in state.replies.iter_mut() {
+        if slot.1.is_none() {
+            slot.0 = window_id;
+            slot.1 = Some(rep);
+            state.reply_count += 1;
+            return true;
+        }
+    }
+    false
+}
+
+/// Bekleyen bir GUI syscall yanıtını alır (window_id'ye göre). Syscall işleyicisi tarafından çağrılır.
+pub fn dequeue_gui_reply(window_id: GuiWindowId) -> Option<GuiSyscallReply> {
+    let state = gui_syscall_state();
+    for i in 0..state.replies.len() {
+        if state.replies[i].0 == window_id {
+            if let Some(rep) = state.replies[i].1.take() {
+                state.replies[i].0 = 0;
+                state.reply_count = state.reply_count.saturating_sub(1);
+                return Some(rep);
+            }
+        }
+    }
+    None
+}
+
+/// Tüm bekleyen GUI isteklerini döndürür ve kuyruğu temizler. Olay döngüsü tarafından çağrılır.
+pub fn drain_gui_requests() -> alloc::vec::Vec<(GuiWindowId, GuiSyscallRequest)> {
+    let state = gui_syscall_state();
+    let mut out = alloc::vec::Vec::new();
+    // Her istek için benzersiz bir window ID atanmış olmalı; burada
+    // pending_requests içindeki sırayla ID'leri yeniden atıyoruz.
+    let mut next_id = state.next_window_id;
+    for slot in state.pending_requests.iter_mut() {
+        if let Some(req) = slot.take() {
+            next_id = next_id.saturating_sub(1);
+            out.push((next_id, req));
+            state.pending_count = state.pending_count.saturating_sub(1);
+        }
+    }
+    state.next_window_id = next_id;
+    out
+}
+
+/// Pencere kaydı oluşturur (pencere oluşturulduktan sonra olay döngüsü tarafından çağrılır).
+pub fn register_gui_window(_window_id: GuiWindowId, compositor_idx: usize) -> bool {
+    let state = gui_syscall_state();
+    for slot in state.window_to_compositor.iter_mut() {
+        if *slot == 0 {
+            *slot = compositor_idx;
+            return true;
+        }
+    }
+    false
+}
+
+/// Pencere kaydını siler (pencere kapatıldığında olay döngüsü tarafından çağrılır).
+pub fn unregister_gui_window(compositor_idx: usize) -> Option<GuiWindowId> {
+    let state = gui_syscall_state();
+    for (i, slot) in state.window_to_compositor.iter_mut().enumerate() {
+        if *slot == compositor_idx {
+            *slot = 0;
+            return Some((i + 1) as GuiWindowId);
+        }
+    }
+    None
+}
+
+/// Compositor indeksine göre pencere ID'sini bulur.
+pub fn gui_window_id_by_compositor(compositor_idx: usize) -> Option<GuiWindowId> {
+    let state = gui_syscall_state();
+    for (i, &slot) in state.window_to_compositor.iter().enumerate() {
+        if slot == compositor_idx {
+            return Some((i + 1) as GuiWindowId);
+        }
+    }
+    None
+}
+
+/// Pencere ID'sine göre compositor indeksini bulur.
+pub fn compositor_idx_by_gui_window(window_id: GuiWindowId) -> Option<usize> {
+    let state = gui_syscall_state();
+    let idx = window_id as usize;
+    if idx > 0 && idx <= MAX_PROCESSES && state.window_to_compositor[idx - 1] != 0 {
+        return Some(state.window_to_compositor[idx - 1]);
+    }
+    None
+}
+
 /// Azami eszamanli aktif surec sayisi
 pub const MAX_PROCESSES: usize = 32;
 
@@ -2415,6 +2667,30 @@ pub mod sys_nos {
     /// (`yeni = eski & arg1`); genişletme imkânsızdır. `SYS_EXIT` her zaman
     /// serbesttir. Dönüş: `0` / `MAX`.
     pub const SYS_SECCOMP: u64 = 28;
+
+    /// --- GUI syscall'leri (kullanıcı modu pencere çizimi ve girdi) ---
+    /// Pencere oluşturur: RDI=title_ptr, RSI=title_len, RDX=x, R10=y,
+    /// R8=w, R9=h. Dönüş: window_id / u64::MAX.
+    pub const SYS_GUI_CREATE_WINDOW: u64 = 29;
+    /// Pencereyi kapatır: RDI=window_id. Dönüş: 0 / u64::MAX.
+    pub const SYS_GUI_DESTROY_WINDOW: u64 = 30;
+    /// Pencere başlığını ayarlar: RDI=window_id, RSI=title_ptr, RDX=title_len.
+    /// Dönüş: 0 / u64::MAX.
+    pub const SYS_GUI_SET_TITLE: u64 = 31;
+    /// Piksel çizer: RDI=window_id, RSI=x, RDX=y, R10=color (0xRRGGBB).
+    /// Dönüş: 0 / u64::MAX.
+    pub const SYS_GUI_DRAW_PIXEL: u64 = 32;
+    /// Dikdörtgen çizer: RDI=window_id, RSI=x, RDX=y, R10=w, R8=h, R9=color.
+    /// Dönüş: 0 / u64::MAX.
+    pub const SYS_GUI_DRAW_RECT: u64 = 33;
+    /// Girdi olaylarını okur: RDI=window_id, RSI=buffer_ptr, RDX=buffer_len.
+    /// Dönüş: okunan olay bayt sayısı / u64::MAX.
+    pub const SYS_GUI_GET_INPUT: u64 = 34;
+    /// Fare imlecini ayarlar: RDI=x, RSI=y. Dönüş: 0 / u64::MAX.
+    pub const SYS_GUI_SET_CURSOR: u64 = 35;
+    /// Pencere bilgisi döndürür: RDI=window_id, RSI=buffer_ptr (u64[4]=x,y,w,h).
+    /// Dönüş: 0 / u64::MAX.
+    pub const SYS_GUI_GET_WINDOW_INFO: u64 = 36;
 }
 
 /// Standart sinyal numaraları (Linux numaralandırmasıyla uyumlu alt küme).
@@ -2976,6 +3252,204 @@ pub fn syscall_dispatch_abi(
             };
             process.syscall_mask &= arg1;
             0
+        }
+
+        // --- GUI syscall handlers ---
+        sys_nos::SYS_GUI_CREATE_WINDOW => {
+            // Parametre yapısı kullanıcı belleğinde:
+            //   struct GuiCreateWindow { title_ptr: u64, title_len: u64,
+            //                            x: u64, y: u64, w: u64, h: u64 }
+            // RDI = parametre yapısının kullanıcı adresi.
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let Some(process) = proc_mgr.get_process(current) else {
+                return u64::MAX;
+            };
+            let params_addr = arg1;
+            if params_addr == 0 {
+                return u64::MAX;
+            }
+            // GuiCreateWindow yapısı: 6 x u64 = 48 bayt.
+            let mut params = [0u64; 6];
+            let param_bytes =
+                unsafe { core::slice::from_raw_parts_mut(params.as_mut_ptr() as *mut u8, 48) };
+            let address_space = process.address_space;
+            if uaccess::copy_from_user(&address_space, params_addr, 48)
+                .map(|data| {
+                    param_bytes.copy_from_slice(&data);
+                })
+                .is_err()
+            {
+                return u64::MAX;
+            }
+            let title_ptr = params[0];
+            let title_len = params[1] as usize;
+            let x = params[2] as usize;
+            let y = params[3] as usize;
+            let w = params[4] as usize;
+            let h = params[5] as usize;
+            if title_len == 0 || title_len > 128 || w == 0 || h == 0 || w > 4096 || h > 4096 {
+                return u64::MAX;
+            }
+            let req = GuiSyscallRequest::CreateWindow {
+                pid: current,
+                title_ptr,
+                title_len,
+                x,
+                y,
+                w,
+                h,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_DESTROY_WINDOW => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let window_id = arg1 as GuiWindowId;
+            let req = GuiSyscallRequest::DestroyWindow {
+                pid: current,
+                window_id,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_SET_TITLE => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let _process = proc_mgr.get_process(current);
+            let window_id = arg1 as GuiWindowId;
+            let title_ptr = arg2;
+            let title_len = arg3 as usize;
+            if title_len == 0 || title_len > 128 {
+                return u64::MAX;
+            }
+            let req = GuiSyscallRequest::SetTitle {
+                pid: current,
+                window_id,
+                title_ptr,
+                title_len,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_DRAW_PIXEL => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let window_id = arg1 as GuiWindowId;
+            let x = arg2 as usize;
+            let y = arg3 as usize;
+            let color = arg4 as u32;
+            let req = GuiSyscallRequest::DrawPixel {
+                pid: current,
+                window_id,
+                x,
+                y,
+                color,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_DRAW_RECT => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let window_id = arg1 as GuiWindowId;
+            let x = arg2 as usize;
+            let y = arg3 as usize;
+            let w = arg4 as usize;
+            let h = (arg4 >> 16) as usize;
+            let color = (arg1 >> 32) as u32;
+            let req = GuiSyscallRequest::DrawRect {
+                pid: current,
+                window_id,
+                x,
+                y,
+                w,
+                h,
+                color,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_GET_INPUT => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let window_id = arg1 as GuiWindowId;
+            let buffer_ptr = arg2;
+            let buffer_len = arg3 as usize;
+            if buffer_len == 0 {
+                return u64::MAX;
+            }
+            let req = GuiSyscallRequest::GetInput {
+                pid: current,
+                window_id,
+                buffer_ptr,
+                buffer_len,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_SET_CURSOR => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let x = arg1 as usize;
+            let y = arg2 as usize;
+            let req = GuiSyscallRequest::SetCursor { pid: current, x, y };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
+        }
+        sys_nos::SYS_GUI_GET_WINDOW_INFO => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            let window_id = arg1 as GuiWindowId;
+            let buffer_ptr = arg2;
+            let req = GuiSyscallRequest::GetWindowInfo {
+                pid: current,
+                window_id,
+                buffer_ptr,
+            };
+            let reply_id = enqueue_gui_request(req);
+            if reply_id == 0 {
+                return u64::MAX;
+            }
+            reply_id as u64
         }
         sys_nos::SYS_RESINFO => {
             let current = proc_mgr.current_pid;

@@ -732,6 +732,74 @@ impl Default for FormAutofill {
 }
 
 impl BrowserApp {
+    /// Rough lower bound of heap allocations held by a browser instance.
+    /// Inline arrays are covered by `size_of_val` in the runtime publisher;
+    /// here we count Vec/String capacities and image payloads.
+    pub fn memory_usage_bytes(&self) -> usize {
+        use crate::apps::memory::{slice_bytes, vec_bytes};
+        let mut bytes = 0usize;
+
+        let string_vec = |items: &Vec<String>| {
+            vec_bytes(items).saturating_add(items.iter().map(|s| s.capacity()).sum::<usize>())
+        };
+        bytes = bytes
+            .saturating_add(string_vec(&self.error_logs))
+            .saturating_add(vec_bytes(&self.page_lines))
+            .saturating_add(vec_bytes(&self.pending_resources))
+            .saturating_add(string_vec(&self.pending_resources));
+
+        bytes = bytes
+            .saturating_add(slice_bytes(self.rendered_links.borrow().as_slice()))
+            .saturating_add(slice_bytes(self.rendered_images.borrow().as_slice()));
+
+        bytes = bytes.saturating_add(
+            self.previous_styles
+                .keys()
+                .map(|key| {
+                    key.capacity()
+                        .saturating_add(core::mem::size_of::<types::ElementStyle>())
+                })
+                .sum::<usize>(),
+        );
+        bytes = bytes.saturating_add(
+            self.image_cache
+                .iter()
+                .map(|(key, (_, _, rgb))| key.capacity().saturating_add(vec_bytes(rgb)))
+                .sum::<usize>(),
+        );
+
+        bytes = bytes
+            .saturating_add(self.original_html.capacity())
+            .saturating_add(self.current_resource_url.capacity())
+            .saturating_add(self.post_body.capacity())
+            .saturating_add(vec_bytes(&self.cookies))
+            .saturating_add(self.response_data.capacity())
+            .saturating_add(self.tls_app_data.capacity())
+            .saturating_add(self.tls_pending_request.capacity());
+
+        if let Some(alert) = &self.js_alert {
+            bytes = bytes.saturating_add(alert.capacity());
+        }
+        let string_pairs = |pairs: &Vec<(String, String)>| {
+            vec_bytes(pairs)
+                .saturating_add(pairs.iter().map(|(k, v)| k.capacity() + v.capacity()).sum())
+        };
+        bytes = bytes
+            .saturating_add(string_pairs(&self.js_vars))
+            .saturating_add(string_pairs(&self.js_functions))
+            .saturating_add(vec_bytes(&self.bookmarks_extra));
+        if let Some(path) = &self.download_path {
+            bytes = bytes.saturating_add(path.capacity());
+        }
+        if let Some(data) = &self.download_data {
+            bytes = bytes.saturating_add(data.capacity());
+        }
+        bytes = bytes
+            .saturating_add(vec_bytes(&self.canvases))
+            .saturating_add(vec_bytes(&self.downloads));
+        bytes
+    }
+
     pub fn open_find(&mut self) {
         self.find_active = true;
         self.find_len = 0;

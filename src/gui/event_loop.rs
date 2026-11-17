@@ -9,6 +9,9 @@ use crate::desktop::helpers::*;
 use crate::drivers;
 use crate::gui;
 use crate::handle_terminal_open_request;
+use crate::mm::process::{drain_gui_requests, GuiSyscallRequest};
+use crate::mm::uaccess;
+use crate::mm::vmm::AddressSpace;
 use crate::task;
 use crate::watchdog;
 use crate::{alloc_pmm_frame_global, MEMORY_MGR};
@@ -35,6 +38,174 @@ fn track_app_window_dirty(compositor: &mut gui::MinGuiCompositor, app_id: usize)
         0,
         gui::dirty_rect::DirtyRect::new(x, y, x1.saturating_sub(x), y1.saturating_sub(y)),
     );
+}
+
+/// Statik yapı boyutu ile dinamik tampon kapasitesini birleştirip uygulama
+/// bellek kaydına yayınlar. `size_of_val` çağrıları çağıran tarafça yapılır;
+/// böylece paint gibi birden çok örneği olan uygulamalar da aynı kimlik altında
+/// toplanabilir.
+fn publish_app_memory(app_id: usize, static_bytes: usize, dynamic_bytes: usize) {
+    apps::memory::publish(app_id, static_bytes.saturating_add(dynamic_bytes));
+}
+
+/// Yerleşik uygulamaların son bellek ölçümünü kayda yazar ve seri bağlantıya
+/// `[APP-MEM]` satırını gönderir. Çalışma zamanında periyodik çağrılır;
+/// Görev Yöneticisi aynı kaydı "Bellek" sütununda kullanır.
+fn publish_runtime_app_memory(
+    filemanager_app: &apps::filemanager::FileManagerApp,
+    desktop_files: &apps::filemanager::FileManagerApp,
+    settings_app: &apps::settings::SystemSettings,
+    notepad_app: &apps::notepad::NotepadApp,
+    browser_app: &apps::browser::BrowserApp,
+    imageviewer_app: &apps::imageviewer::ImageViewerApp,
+    musicplayer_app: &apps::musicplayer::MusicPlayerApp,
+    videoplayer_app: &apps::videoplayer::VideoPlayerApp,
+    taskmgr_app: &apps::taskmgr::TaskManagerApp,
+    calculator_app: &apps::calculator::CalculatorApp,
+    paint_apps: &[Option<apps::paint::PaintApp>],
+    terminal_app: &apps::terminal::TerminalApp,
+    installer_app: &apps::installer::InstallerApp,
+    viewer3d_app: &apps::viewer3d::Viewer3DApp,
+    pkgmgr_app: &apps::pkgmgr::PackageManagerApp,
+    fps_game_app: &apps::game::GameApp,
+    fps_3d_app: &apps::fps_game::FpsGameApp,
+    city_drive_app: &apps::city_drive::CityDriveApp,
+) {
+    // 0: Dosya Yöneticisi (masaüstü görünümü aynı kimliğe dahil).
+    publish_app_memory(
+        0,
+        core::mem::size_of_val(filemanager_app),
+        filemanager_app
+            .memory_usage_bytes()
+            .saturating_add(desktop_files.memory_usage_bytes()),
+    );
+    // 1..=17: kalan yerleşik uygulamalar. Dinamik tampon bildirmeyenler için
+    // `size_of_val` güvenli alt sınırdır.
+    publish_app_memory(1, core::mem::size_of_val(settings_app), 0);
+    publish_app_memory(
+        2,
+        core::mem::size_of_val(notepad_app),
+        notepad_app.memory_usage_bytes(),
+    );
+    publish_app_memory(
+        3,
+        core::mem::size_of_val(browser_app),
+        browser_app.memory_usage_bytes(),
+    );
+    publish_app_memory(
+        4,
+        core::mem::size_of_val(imageviewer_app),
+        imageviewer_app.memory_usage_bytes(),
+    );
+    publish_app_memory(5, core::mem::size_of_val(musicplayer_app), 0);
+    publish_app_memory(6, core::mem::size_of_val(videoplayer_app), 0);
+    publish_app_memory(
+        7,
+        core::mem::size_of_val(taskmgr_app),
+        taskmgr_app.memory_usage_bytes(),
+    );
+    publish_app_memory(8, core::mem::size_of_val(calculator_app), 0);
+    let paint_static = core::mem::size_of::<apps::paint::PaintApp>();
+    let paint_dynamic = paint_apps
+        .iter()
+        .flatten()
+        .map(|app| app.memory_usage_bytes())
+        .sum::<usize>();
+    publish_app_memory(9, paint_static, paint_dynamic);
+    publish_app_memory(
+        10,
+        core::mem::size_of_val(terminal_app),
+        terminal_app.memory_usage_bytes(),
+    );
+    publish_app_memory(11, core::mem::size_of_val(installer_app), 0);
+    publish_app_memory(12, core::mem::size_of_val(viewer3d_app), 0);
+    publish_app_memory(13, core::mem::size_of_val(pkgmgr_app), 0);
+    publish_app_memory(14, 0, 0); // Kontrol Paneli durumu global.
+    publish_app_memory(15, core::mem::size_of_val(fps_game_app), 0);
+    publish_app_memory(16, core::mem::size_of_val(fps_3d_app), 0);
+    publish_app_memory(17, core::mem::size_of_val(city_drive_app), 0);
+
+    let mut total = gui::TextBuf::new();
+    total.push_str("[APP-MEM] toplam=");
+    total.push_usize(apps::memory::total());
+    total.push_str(" bayt, guncelleme=");
+    total.push_usize(apps::memory::snapshot_seq() as usize);
+    serial_print(total.as_str());
+    serial_print("\n");
+
+    apps::memory::for_each(|app_id, bytes| {
+        let mut line = gui::TextBuf::new();
+        line.push_str("[APP-MEM] app=");
+        line.push_usize(app_id);
+        line.push_str(" bytes=");
+        line.push_usize(bytes);
+        serial_print(line.as_str());
+        serial_print("\n");
+    });
+}
+
+/// Kapanış/yeniden başlatma akışı: görünür ilerleme, VFS senkronizasyonu,
+/// sürücü kapatma ve DONANIM reseti. Tüm kapatma giriş noktaları burayı
+/// kullanır; böylece kullanıcı "kaydediliyor / boşaltılıyor / kapatılıyor"
+/// adımlarını görür ve diskteki değişiklikler yazılmadan güç kesilmez.
+fn finish_system(
+    fb: &mut drivers::video::Framebuffer,
+    fs_mgr: &crate::fs::FileSystemManager,
+    width: usize,
+    height: usize,
+    restart: bool,
+) -> ! {
+    serial_print(if restart {
+        "[SHUTDOWN] Yeniden başlatma isteği alındı.\n"
+    } else {
+        "[SHUTDOWN] Sistem kapatma isteği alındı.\n"
+    });
+
+    // 0: değişiklikler, 1: disk önbelleği, 2: sürücüler, 3: son adım.
+    for phase in 0..2 {
+        gui::render_shutdown_screen(fb, width, height, phase, restart);
+        let start = monotonic_ms();
+        while monotonic_ms().saturating_sub(start) < 120 {
+            core::hint::spin_loop();
+        }
+    }
+
+    let (dirs, files) = fs_mgr.vfs.sync_all_to_disk();
+    let mut sync_line = gui::TextBuf::new();
+    sync_line.push_str("[SHUTDOWN] VFS disk senkronizasyonu: ");
+    sync_line.push_usize(dirs);
+    sync_line.push_str(" dizin, ");
+    sync_line.push_usize(files);
+    sync_line.push_str(" dosya\n");
+    serial_print(sync_line.as_str());
+
+    gui::render_shutdown_screen(fb, width, height, 2, restart);
+    let start = monotonic_ms();
+    while monotonic_ms().saturating_sub(start) < 120 {
+        core::hint::spin_loop();
+    }
+
+    drivers::framework::shutdown_all();
+    serial_print("[SHUTDOWN] Suruculer kapatildi.\n");
+    gui::render_shutdown_screen(fb, width, height, 3, restart);
+    let start = monotonic_ms();
+    while monotonic_ms().saturating_sub(start) < 120 {
+        core::hint::spin_loop();
+    }
+
+    if restart {
+        restart_system();
+    }
+
+    unsafe {
+        // QEMU/Bochs ACPI poweroff (0x604), ardından legacy fallback.
+        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
+        core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
+        core::arch::asm!("cli; hlt");
+    }
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 /// Önyükleme sonrası masaüstü çalışma zamanı ve ana olay döngüsü.
@@ -154,6 +325,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         boot::text_console::fatal("Grafik arayuz oz-denetimi basarisiz; GUI acilmadi");
     }
 
+    // Açılış/kapanış/hata ekranlarının geometrisi host testlerinde de
+    // doğrulanan saf modülle aynı kaynaktan gelir; bozulursa erken durdur.
+    if !gui::screen_layout::self_test() {
+        boot::text_console::fatal("Ekran yerlesim oz-denetimi basarisiz; GUI acilmadi");
+    }
+    serial_print("[GUI-SMOKE] ekran geometrisi ve ekran metinleri: BASARILI\n");
+
     serial_print("[BOOT] Grafik arayüz denetimleri tamamlandı.\n");
     boot_timer.mark("gui-kurulum");
 
@@ -176,13 +354,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
             crate::gui::screens::set_cursor_busy(false);
 
-            gui::render_loading_transition(
-                &mut fb,
-                width,
-                height,
-                phase,
-                gui::ui_text("Masaüstü hazırlanıyor", "Preparing desktop"),
-            );
+            gui::render_loading_transition(&mut fb, width, height, phase);
 
             let frame_start = monotonic_ms();
 
@@ -198,13 +370,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
             crate::gui::screens::set_cursor_busy(false);
 
-            gui::render_loading_transition(
-                &mut fb,
-                width,
-                height,
-                phase,
-                gui::ui_text("Sistem yükleniyor", "Loading system"),
-            );
+            gui::render_loading_transition(&mut fb, width, height, phase);
 
             let frame_start = monotonic_ms();
 
@@ -236,13 +402,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     if !installed {
         for phase in 0..6 {
-            gui::render_loading_transition(
-                &mut fb,
-                width,
-                height,
-                phase + 2,
-                gui::ui_text("Masaüstü hazırlanıyor", "Preparing desktop"),
-            );
+            gui::render_loading_transition(&mut fb, width, height, phase + 2);
 
             let frame_start = monotonic_ms();
 
@@ -554,8 +714,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // hatali uygulamayi kapat; masaustu ve diger uygulamalar yasamaya
         // devam eder.
         if let Some(fault) = apps::guard::take_pending() {
+            let crash = apps::errors::AppError::new("MinOs", apps::errors::AppErrorKind::Crashed);
             let mut line = gui::TextBuf::new();
             line.push_str("[GUARD] ");
+            line.push_str(crash.kind.code());
+            line.push_str(" ");
             line.push_str(fault.kind.as_str());
             line.push_str(" vec=");
             line.push_usize(fault.vector as usize);
@@ -579,6 +742,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 serial_print_dec(fault.line as u64);
                 serial_print("\n");
             }
+            serial_print("[GUARD] ");
+            serial_print(crash.kind.code());
+            serial_print(" ");
+            serial_print(crash.recovery(gui::ui_english()));
+            serial_print("\n");
 
             let window_idx = if fault.window_idx < gui::MAX_WINDOWS
                 && compositor.windows[fault.window_idx].is_some_and(|w| w.is_open)
@@ -618,25 +786,48 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
+            let mut title = gui::TextBuf::new();
+            title.push_str(crash.kind.code());
+            title.push_str(" · ");
+            title.push_str(crash.title(gui::ui_english()));
+
+            // Bildirim gövdesinde somut kurtarma adımı; uygulama adı seri
+            // günlüğünde ve [APP-MEM] kaydında zaten yer alıyor.
             let mut message = gui::TextBuf::new();
-            if fault.app_id != apps::guard::NO_APP {
-                message.push_str(gui::ui_text(
-                    "Bellek hatası yakalandı: ",
-                    "Memory fault contained: ",
-                ));
-                message.push_str(app_process_name(fault.app_id));
-            } else {
-                message.push_str(gui::ui_text(
-                    "Görev hatası yakalandı.",
-                    "Task fault contained.",
-                ));
-            }
+            message.push_str(crash.recovery(gui::ui_english()));
             compositor.push_toast(
                 gui::ToastKind::Error,
-                gui::ui_text("Uygulama durduruldu", "Application stopped"),
+                title.as_str(),
                 message.as_str(),
                 monotonic_ms(),
                 6000,
+            );
+        }
+
+        // Uygulama bazlı bellek ölçümü: her 90 turda bir yayınla. Böylece
+        // Görev Yöneticisi ve `[APP-MEM]` seri satırları aynı kaynağı görür.
+        static APP_MEM_TICK: core::sync::atomic::AtomicUsize =
+            core::sync::atomic::AtomicUsize::new(0);
+        if APP_MEM_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 90 == 0 {
+            publish_runtime_app_memory(
+                &filemanager_app,
+                &desktop_files,
+                &settings_app,
+                &notepad_app,
+                &browser_app,
+                &imageviewer_app,
+                &musicplayer_app,
+                &videoplayer_app,
+                &taskmgr_app,
+                &calculator_app,
+                &paint_apps,
+                &terminal_app,
+                &installer_app,
+                &viewer3d_app,
+                &pkgmgr_app,
+                &fps_game_app,
+                &fps_3d_app,
+                &city_drive_app,
             );
         }
 
@@ -2019,13 +2210,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             "[minOs] Başlat menüsünden sistem kapatma onaylandı.\n",
                                         );
 
-                                        unsafe {
-                                            core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
-
-                                            core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
-
-                                            core::arch::asm!("cli; hlt");
-                                        }
+                                        finish_system(&mut fb, &fs_mgr, width, height, false);
                                     } else {
                                         compositor.confirm_shutdown = true;
 
@@ -2037,7 +2222,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                 if k == 1 {
                                     if compositor.confirm_restart {
-                                        restart_system();
+                                        finish_system(&mut fb, &fs_mgr, width, height, true);
                                     }
 
                                     compositor.confirm_restart = true;
@@ -5523,17 +5708,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 #[cfg(minos_boot_log)]
                                 serial_print("[minOs] Klavyeden sistem kapatma onaylandı.\n");
 
-                                unsafe {
-                                    core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
-
-                                    core::arch::asm!("cli; hlt");
-                                }
+                                finish_system(&mut fb, &fs_mgr, width, height, false);
                             } else {
                                 compositor.confirm_shutdown = true;
                             }
                         } else if active_g == 4 && item_k == 1 {
                             if compositor.confirm_restart {
-                                restart_system();
+                                finish_system(&mut fb, &fs_mgr, width, height, true);
                             }
 
                             compositor.confirm_restart = true;
@@ -5975,11 +6156,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     #[cfg(minos_boot_log)]
                     serial_print("[minOs] Sistem kapatma isteği alındı.\n");
 
-                    unsafe {
-                        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
-
-                        core::arch::asm!("cli; hlt");
-                    }
+                    finish_system(&mut fb, &fs_mgr, width, height, false);
                 }
 
                 drivers::keyboard::KeyAction::CopyText => {
@@ -7367,9 +7544,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             Err(err) => {
                                 if desktop_drag_source {
-                                    desktop_files.set_status_text(err);
+                                    desktop_files.set_status_text(err.as_str());
                                 } else {
-                                    filemanager_app.set_status_text(err);
+                                    filemanager_app.set_status_text(err.as_str());
                                 }
                             }
                         }
@@ -7808,7 +7985,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             } else if compositor.is_start_menu_open && (ch == 'r' || ch == 'R') {
                 if compositor.confirm_restart {
-                    restart_system();
+                    finish_system(&mut fb, &fs_mgr, width, height, true);
                 }
 
                 compositor.confirm_restart = true;
@@ -7816,10 +7993,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 compositor.confirm_shutdown = false;
             } else if compositor.is_start_menu_open && ch == '0' {
                 if compositor.confirm_shutdown {
-                    unsafe {
-                        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
-                        core::arch::asm!("cli; hlt");
-                    }
+                    finish_system(&mut fb, &fs_mgr, width, height, false);
                 }
 
                 compositor.confirm_shutdown = true;
@@ -8201,6 +8375,111 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 // Watchdog yalnızca donmayı bildirir; zaman aşımına uğrayan
                 // uygulama kullanıcı açıkça kapatana kadar çalışmaya devam eder.
                 watchdog::acknowledge_frozen(fw.idx);
+            }
+        }
+
+        // --- Kullanıcı modu GUI syscall isteklerini işle ---
+        // Olay döngüsü, kullanıcı modu süreçlerinden gelen pencere oluşturma,
+        // çizim ve girdi isteklerini tüketir ve kompozitörle eşler.
+        for (req_id, req) in drain_gui_requests() {
+            match req {
+                GuiSyscallRequest::CreateWindow {
+                    pid: _,
+                    title_ptr,
+                    title_len,
+                    x,
+                    y,
+                    w,
+                    h,
+                } => {
+                    // Başlığı kullanıcı belleğinden kopyala.
+                    let address_space = AddressSpace::current();
+                    let title_bytes = match uaccess::copy_cstring_from_user(
+                        &address_space,
+                        title_ptr,
+                        title_len + 1,
+                    ) {
+                        Ok(b) => b,
+                        Err(_) => continue,
+                    };
+                    let title_str = match core::str::from_utf8(&title_bytes) {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+                    // Sabit bir başlık kullan (dinamik başlık için Window.title
+                    // alanının &'static str'den String'e değiştirilmesi gerekir).
+                    let _ = title_str;
+                    let title = "Kullanıcı Uygulaması";
+                    let win =
+                        gui::Window::new(title, "UserApp", x, y, w.min(800), h.min(600), true);
+                    let mut win = win;
+                    win.app_id = u8::MAX; // Kullanıcı modu penceresini işaretler.
+                    if compositor.add_window(win) {
+                        let _ = req_id;
+                    }
+                }
+                GuiSyscallRequest::DestroyWindow { pid: _, window_id } => {
+                    let _ = window_id;
+                    let _ = req_id;
+                    // TODO: Pencereyi kompozitörden kaldır.
+                }
+                GuiSyscallRequest::SetTitle {
+                    pid: _,
+                    window_id,
+                    title_ptr: _,
+                    title_len: _,
+                } => {
+                    let _ = window_id;
+                    let _ = req_id;
+                    // TODO: Pencere başlığını güncelle.
+                }
+                GuiSyscallRequest::DrawPixel {
+                    pid: _,
+                    window_id,
+                    x: _,
+                    y: _,
+                    color: _,
+                } => {
+                    let _ = window_id;
+                    let _ = req_id;
+                    // TODO: Pikseli kullanıcı belleğinden çizer.
+                }
+                GuiSyscallRequest::DrawRect {
+                    pid: _,
+                    window_id,
+                    x: _,
+                    y: _,
+                    w: _,
+                    h: _,
+                    color: _,
+                } => {
+                    let _ = window_id;
+                    let _ = req_id;
+                    // TODO: Dikdörtgeni kullanıcı belleğinden çizer.
+                }
+                GuiSyscallRequest::GetInput {
+                    pid: _,
+                    window_id,
+                    buffer_ptr: _,
+                    buffer_len: _,
+                } => {
+                    let _ = window_id;
+                    let _ = req_id;
+                    // TODO: Girdi olaylarını kullanıcı tamponuna yazar.
+                }
+                GuiSyscallRequest::SetCursor { pid: _, x: _, y: _ } => {
+                    let _ = req_id;
+                    // TODO: Fare imlecini ayarlar.
+                }
+                GuiSyscallRequest::GetWindowInfo {
+                    pid: _,
+                    window_id,
+                    buffer_ptr: _,
+                } => {
+                    let _ = window_id;
+                    let _ = req_id;
+                    // TODO: Pencere bilgilerini kullanıcı tamponuna yazar.
+                }
             }
         }
 

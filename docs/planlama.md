@@ -158,6 +158,18 @@ P1 süreç, Ring 3 ve CI hedefleri mevcut kod ve QEMU boot testleriyle doğrulan
 - [x] Tam syscall ABI dokümantasyonu (`docs/SYSCALL_ABI.md`, 20 çağrı, R10)
 - [x] Boot + QEMU scheduler/süreç testleri ve canlı `[SCHED-STAT]` izleme (30/30 kontrol geçti)
 
+### 17 Kasım 2026 — P1/GUI Tamamlama Denetimi
+
+- [x] `brk` büyüt/küçült, `mmap`/`munmap` sınır/hata, FD yaşam döngüsü, kaynak limitleri ve COW yazma testleri QEMU `default` profilinde ✅ (`test-report.md`, 36/36).
+- [x] Donanım uyumluluk matrisi gerçek QEMU sonuçlarıyla güncellendi; gerçek donanım hücreleri açıkça `DOĞRULANMADI` (`docs/HARDWARE_DRIVER_SUPPORT_MATRIX.md`).
+- [x] GUI duman testi: `[GUI-SMOKE]` seri marker'ı, ortak `screen_layout` geometrisi ve host testleri.
+- [x] Uygulama hata mesajları/kurtarma yolları (`apps::errors`) ve guard/drop bildirimleri bağlandı.
+- [x] UI tema/erişilebilirlik ve Türkçe karakter/font fallback testleri genişletildi (358 host testi geçti).
+- [x] Uygulama bazlı bellek kaydı (`apps::memory`), Görev Yöneticisi sütunu ve `[APP-MEM]` seri raporu.
+- [x] Açılış/kapanış/hata ekranları ortak düzene geçti; `finish_system()` VFS sync + sürücü kapanışı sağlıyor.
+- [x] Sürüm notlarında 🧪 deneysel ve ⚠️ sınırlı/başarısız etiketleri açıkça kullanıldı.
+- [ ] PMM/VMM/allocator için 24 saatlik tekrarlı stres sonucu ve gerçek donanım doğrulaması (`test_stress_24h.ps1` hazır).
+
 ### Kalan İşler
 
 > 13 Kasım 2026 kapanış denetimi: aşağıdaki maddelerin bir kısmı bu belge

@@ -2432,8 +2432,12 @@ pub fn interpolate_keyframes(kf: &Keyframes, progress: f32) -> ElementStyle {
         }
     }
 
-    // p son karenin üzerindeyse son kareyi döndür
-    kf.frames.last().unwrap().style.clone()
+    // p son karenin üzerindeyse son kareyi döndür. Liste beklenmedik biçimde
+    // boşaldıysa (ör. çalışma zamanında mutasyon) boş stil güvenli düşüştür.
+    kf.frames
+        .last()
+        .map(|frame| frame.style.clone())
+        .unwrap_or_else(ElementStyle::new)
 }
 
 /// İki stil arasında lineer interpolasyon (opacity, renk, arka plan rengi).

@@ -19,8 +19,10 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 /// İzlenebilen azami uygulama kimliği (yerleşik uygulamalar 0..=17).
 pub const MAX_TRACKED_APPS: usize = 32;
 
-static APP_BYTES: [AtomicUsize; MAX_TRACKED_APPS] = [const { AtomicUsize::new(0) }; MAX_TRACKED_APPS];
-static PEAK_BYTES: [AtomicUsize; MAX_TRACKED_APPS] = [const { AtomicUsize::new(0) }; MAX_TRACKED_APPS];
+static APP_BYTES: [AtomicUsize; MAX_TRACKED_APPS] =
+    [const { AtomicUsize::new(0) }; MAX_TRACKED_APPS];
+static PEAK_BYTES: [AtomicUsize; MAX_TRACKED_APPS] =
+    [const { AtomicUsize::new(0) }; MAX_TRACKED_APPS];
 static SNAPSHOT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Bir uygulamanın son ölçülen bayt değerini yayınlar.
@@ -110,45 +112,47 @@ pub fn vec_bytes<T>(vec: &alloc::vec::Vec<T>) -> usize {
 mod tests {
     use super::*;
 
+    // Host testleri paralel çalıştığından global kayıtları sıfırlamayız;
+    // her test kendi ayrılmış yüksek kimliklerini kullanır.
     #[test]
     fn publish_sample_and_peak_track_app_memory() {
-        clear();
-        publish(3, 4096);
-        publish(7, 8192);
-        assert_eq!(sample(3), 4096);
-        assert_eq!(sample(7), 8192);
-        assert_eq!(total(), 12288);
-        assert_eq!(peak(3), 4096);
-        publish(3, 2048);
-        assert_eq!(sample(3), 2048);
-        assert_eq!(peak(3), 4096, "zirve değer korunmalı");
-        clear();
-        assert_eq!(total(), 0);
-        assert_eq!(peak(3), 0);
+        publish(28, 4096);
+        publish(29, 8192);
+        assert_eq!(sample(28), 4096);
+        assert_eq!(sample(29), 8192);
+        assert!(total() >= 12288);
+        assert_eq!(peak(28), 4096);
+        publish(28, 2048);
+        assert_eq!(sample(28), 2048);
+        assert_eq!(peak(28), 4096, "zirve değer korunmalı");
     }
 
     #[test]
     fn out_of_range_app_ids_are_ignored() {
+        let before = total();
         publish(MAX_TRACKED_APPS, 9999);
         publish(usize::MAX, 9999);
         assert_eq!(sample(MAX_TRACKED_APPS), 0);
-        assert_eq!(total(), 0);
+        assert_eq!(total(), before);
     }
 
     #[test]
     fn for_each_visits_only_published_apps() {
-        clear();
-        publish(0, 100);
-        publish(17, 200);
+        publish(30, 100);
+        publish(31, 200);
         let mut seen = alloc::vec::Vec::new();
-        for_each(|id, bytes| seen.push((id, bytes)));
-        assert_eq!(seen, alloc::vec![(0usize, 100usize), (17usize, 200usize)]);
-        clear();
+        for_each(|id, bytes| {
+            if id == 30 || id == 31 {
+                seen.push((id, bytes));
+            }
+        });
+        assert!(seen.contains(&(30usize, 100usize)));
+        assert!(seen.contains(&(31usize, 200usize)));
     }
 
     #[test]
     fn byte_helpers_use_capacity_and_underlying_type_size() {
-        let v: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(8);
+        let v = alloc::vec![0u32; 8];
         assert_eq!(vec_bytes(&v), 32);
         assert_eq!(slice_bytes(&v[..2]), 8);
     }

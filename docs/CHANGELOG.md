@@ -5,6 +5,12 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 
 ## Güncel · v2.5.0
 
+- **P1 bellek/süreç doğrulaması:** `brk` büyütme/küçültme, `mmap`/`munmap` sınır ve hata yolları, FD yaşam döngüsü, kaynak limitlerinin `fork` ile aktarımı ve COW yazma hatası QEMU `default` profilinde ✅ geçti (36/36 kontrol). PMM/VMM/allocator öz-testleri ve `test_stress_24h.ps1` soak harness'i mevcut; 24h tekrarları ⚠️ henüz raporlanmadı.
+- **GUI duman testleri:** `gui::screen_layout` açılış/yükleme/hoş geldin/kapanış geometrisini ve yerelleştirilmiş metinleri tek kaynakta topladı; `[GUI-SMOKE]` seri marker'ı ve host geometri testleri eklendi.
+- **Hata mesajları ve kurtarma:** `apps::errors` sabit hata kodları, TR/EN başlık/açıklama/kurtarma metinleri üretir; Dosya Yöneticisi bırakma hataları ve guard fault toast'ları bu sınıfa bağlandı.
+- **Uygulama bazlı bellek:** `apps::memory` kaydı, uygulama başına dinamik tampon kapasitesi metodları, Görev Yöneticisi "Bellek" sütunu ve `[APP-MEM] app=N bytes=M` seri raporu eklendi. Değerler paylaşılan ring-0 heap nedeniyle **alt sınır**dır (🧪 ölçüm yaklaşımı).
+- **Erişilebilirlik/font:** tema/kontrast/odak testleri ve Türkçe glif testleri genişletildi: Geist tier-0 karakterler, sıfır olmayan bitmap/advance, `i`/`ı` ayrımı, eksik glif `?` fallback'i.
+- **Kapanış akışı:** tüm kapanış/yeniden başlatma yolları tek `finish_system()` üzerinden VFS sync + sürücü kapanışı + görünür fazlarla çalışıyor.
 - Süreç yaşam döngüsü testi (`[PROC-TEST]`), `SYS_ALLOC_FRAME` çağrısının ring-3 güvenlik sınırı olarak devre dışı bırakılmasına (artık `u64::MAX` döner) göre güncellendi: geçersiz syscall + NULL tampon + sahiplik sınırları, COW fork paylaşımı/split, exec sonrası eski imaj ve kaynakların temizlenmesi, bloklanan `wait`'in çocuk çıkışıyla uyanması ve `SYS_FORK` hata yolunda kaynak iadesi doğrulanır. `test_qemu.ps1` içindeki yanlış-pozitif başarı kalıbı düzeltildi.
 - Watchdog donmuş uygulama tespiti APIC zamanlayıcı kesmesine taşındı (`watchdog::timer_tick()`); kesme bağlamında `try_lock` korumalı kısa kritik bölüm çalışır, sonlandırma ana döngüde `drain_frozen()` ile ertelenir.
 - FPS 3D Oyun (app ID 16) tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` metrikleri üretir (`[FPS3D-METRICS]`); açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
@@ -14,7 +20,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp tamamlanmazsa geri yüklenir.
 - `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi.
 - TLS/X.509 sertifika zinciri doğrulaması sıkılaştırıldı: güvenilmeyen zincir sertifikalarının tarihleri ve CA BasicConstraints/pathLen kısıtları; varsa CA `keyCertSign` ve yaprak KeyUsage/EKU uzantıları denetlenir. Bilinmeyen kritik uzantılar reddedilir. Host TLS testlerinde doğrulama kestirmesi kaldırıldı; geçerli RSA/ECDSA el sıkışmaları ile geçersiz ara CA senaryoları doğrulanır.
-- Host test paketi 322 test içerir (322 geçti / 0 hata).
+- Host test paketi 358 test içerir (358 geçti / 0 hata).
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

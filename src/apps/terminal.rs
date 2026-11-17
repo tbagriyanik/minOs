@@ -495,6 +495,28 @@ pub struct TerminalApp {
 }
 
 impl TerminalApp {
+    /// Heap allocations outside the fixed inline line/history arrays.
+    pub fn memory_usage_bytes(&self) -> usize {
+        let mut bytes = 0usize;
+        if let Some(capture) = &self.capture {
+            bytes = bytes
+                .saturating_add(crate::apps::memory::vec_bytes(capture))
+                .saturating_add(
+                    capture
+                        .iter()
+                        .map(|(text, _)| text.capacity())
+                        .sum::<usize>(),
+                );
+        }
+        if let Some(stdin) = &self.stdin {
+            bytes = bytes.saturating_add(stdin.capacity());
+        }
+        if let Some(open_request) = &self.open_request {
+            bytes = bytes.saturating_add(open_request.capacity());
+        }
+        bytes
+    }
+
     pub const fn new() -> Self {
         let mut app = Self {
             input: [0; LINE_MAX],
@@ -3546,7 +3568,11 @@ impl TerminalApp {
             self.push_line(usage.as_str(), Color::ACCENT_YELLOW);
             return;
         }
-        let (last, sources) = args.split_last().expect("len >= 2");
+        // `args.len() >= 2` yukarıda doğrulandı; yine de panic yerine güvenli
+        // düşüş kullanılır (gelecekteki doğrulama değişikliklerine karşı).
+        let Some((last, sources)) = args.split_last() else {
+            return;
+        };
         let mut dest = self.resolve_path(last);
         let dest_is_dir = vfs.is_dir(&dest) || sources.len() > 1;
         if dest_is_dir && !dest.starts_with('/') {

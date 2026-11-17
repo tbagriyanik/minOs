@@ -46,8 +46,21 @@ pub mod calc_core;
 #[path = "../src/apps/game_core.rs"]
 pub mod game_core;
 
+// Uygulama hata siniflari/kurtarma yollari ve uygulama bazli bellek olcumu.
+#[path = "../src/apps/errors.rs"]
+pub mod app_errors;
+
+#[path = "../src/apps/memory.rs"]
+pub mod app_memory;
+
 #[path = "../src/gui/textbuf.rs"]
 pub mod textbuf;
+
+#[path = "../src/gui/clipboard.rs"]
+pub mod clipboard;
+
+#[path = "../src/gui/dirty_rect.rs"]
+pub mod dirty_rect;
 
 #[path = "../src/gui/textedit.rs"]
 pub mod textedit;
@@ -57,6 +70,10 @@ pub mod timefmt;
 
 #[path = "../src/gui/theme.rs"]
 pub mod theme;
+
+// Ekran geometrisi: `super::theme` yolu crate kokundeki theme modulunu bulur.
+#[path = "../src/gui/screen_layout.rs"]
+pub mod screen_layout;
 
 #[path = "../src/gui/font_render.rs"]
 pub mod font_render;
@@ -428,6 +445,10 @@ mod host_allocator_tests;
 #[cfg(test)]
 #[path = "host_feature_tests.rs"]
 mod host_feature_tests;
+
+#[cfg(test)]
+#[path = "host_gui_tests.rs"]
+mod host_gui_tests;
 
 #[cfg(test)]
 #[path = "host_fs_tests.rs"]

@@ -17,6 +17,11 @@ pub struct ImageViewerApp {
 }
 
 impl ImageViewerApp {
+    /// Decoded/raw image payloads held in reference-counted slices.
+    pub fn memory_usage_bytes(&self) -> usize {
+        self.image.len().saturating_add(self.rgb.len())
+    }
+
     pub fn new() -> Self {
         Self {
             zoom_level: 4,

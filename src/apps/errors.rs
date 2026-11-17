@@ -117,9 +117,7 @@ impl AppErrorKind {
             (Self::PermissionDenied, true) => {
                 "Write permission is missing for this operation; the source may be read-only."
             }
-            (Self::DiskFull, false) => {
-                "Hedefte yeterli boş alan yok; dosya kaydedilemedi."
-            }
+            (Self::DiskFull, false) => "Hedefte yeterli boş alan yok; dosya kaydedilemedi.",
             (Self::DiskFull, true) => {
                 "There is not enough free space on the target; the file was not saved."
             }
@@ -129,36 +127,22 @@ impl AppErrorKind {
             (Self::InvalidFormat, true) => {
                 "The file content does not match the expected format; data was left unchanged."
             }
-            (Self::NetworkUnavailable, false) => {
-                "Ağ bağlantısı kurulamadı; sunucuya ulaşılamıyor."
-            }
+            (Self::NetworkUnavailable, false) => "Ağ bağlantısı kurulamadı; sunucuya ulaşılamıyor.",
             (Self::NetworkUnavailable, true) => {
                 "No network connection could be established; the server is unreachable."
             }
-            (Self::Timeout, false) => {
-                "İşlem beklenen sürede tamamlanmadı ve güvenle iptal edildi."
-            }
+            (Self::Timeout, false) => "İşlem beklenen sürede tamamlanmadı ve güvenle iptal edildi.",
             (Self::Timeout, true) => {
                 "The operation did not finish in time and was safely cancelled."
             }
-            (Self::OutOfMemory, false) => {
-                "Bellek kotası doldu; büyük veri yüklenemedi."
-            }
+            (Self::OutOfMemory, false) => "Bellek kotası doldu; büyük veri yüklenemedi.",
             (Self::OutOfMemory, true) => {
                 "The memory quota is full; the large payload could not be loaded."
             }
-            (Self::InvalidInput, false) => {
-                "Girilen değer bu işlem için geçersiz."
-            }
-            (Self::InvalidInput, true) => {
-                "The entered value is not valid for this operation."
-            }
-            (Self::Unsupported, false) => {
-                "Bu özellik şu anda desteklenmiyor."
-            }
-            (Self::Unsupported, true) => {
-                "This feature is not supported at the moment."
-            }
+            (Self::InvalidInput, false) => "Girilen değer bu işlem için geçersiz.",
+            (Self::InvalidInput, true) => "The entered value is not valid for this operation.",
+            (Self::Unsupported, false) => "Bu özellik şu anda desteklenmiyor.",
+            (Self::Unsupported, true) => "This feature is not supported at the moment.",
             (Self::Crashed, false) => {
                 "Uygulamada kurtarılamayan bir hata oluştu; sistem çalışmaya devam ediyor."
             }
@@ -186,12 +170,8 @@ impl AppErrorKind {
             (Self::DiskFull, false) => {
                 "Kurtarma: Geri Dönüşüm Kutusu'nu boşaltın veya başka bir sürücü seçin."
             }
-            (Self::DiskFull, true) => {
-                "Recovery: empty the Recycle Bin or choose another drive."
-            }
-            (Self::InvalidFormat, false) => {
-                "Kurtarma: farklı bir dosya açın; özgün dosya korundu."
-            }
+            (Self::DiskFull, true) => "Recovery: empty the Recycle Bin or choose another drive.",
+            (Self::InvalidFormat, false) => "Kurtarma: farklı bir dosya açın; özgün dosya korundu.",
             (Self::InvalidFormat, true) => {
                 "Recovery: open a different file; the original file was preserved."
             }
@@ -201,24 +181,16 @@ impl AppErrorKind {
             (Self::NetworkUnavailable, true) => {
                 "Recovery: check the cable/Wi-Fi connection and retry (F5)."
             }
-            (Self::Timeout, false) => {
-                "Kurtarma: işlemi yeniden deneyin; yarım kalan veri atıldı."
-            }
-            (Self::Timeout, true) => {
-                "Recovery: retry the operation; partial data was discarded."
-            }
+            (Self::Timeout, false) => "Kurtarma: işlemi yeniden deneyin; yarım kalan veri atıldı.",
+            (Self::Timeout, true) => "Recovery: retry the operation; partial data was discarded.",
             (Self::OutOfMemory, false) => {
                 "Kurtarma: açık sekmeleri/pencereleri kapatıp işlemi yeniden deneyin."
             }
-            (Self::OutOfMemory, true) => {
-                "Recovery: close open tabs/windows and try again."
-            }
+            (Self::OutOfMemory, true) => "Recovery: close open tabs/windows and try again.",
             (Self::InvalidInput, false) => {
                 "Kurtarma: Yardım (F1) içindeki örnek sözdizimini kullanın."
             }
-            (Self::InvalidInput, true) => {
-                "Recovery: use the example syntax in Help (F1)."
-            }
+            (Self::InvalidInput, true) => "Recovery: use the example syntax in Help (F1).",
             (Self::Unsupported, false) => {
                 "Kurtarma: desteklenen bir seçenek kullanın veya güncel sürümü denetleyin."
             }
@@ -285,10 +257,7 @@ impl AppErrorKind {
             || s.contains("kota")
         {
             Self::DiskFull
-        } else if s.contains("timeout")
-            || s.contains("zaman aşım")
-            || s.contains("zaman asim")
-        {
+        } else if s.contains("timeout") || s.contains("zaman aşım") || s.contains("zaman asim") {
             Self::Timeout
         } else if s.contains("network")
             || s.contains("ağ ")
@@ -429,9 +398,16 @@ mod tests {
         for kind in AppErrorKind::ALL {
             let expected = matches!(
                 kind,
-                AppErrorKind::NetworkUnavailable | AppErrorKind::Timeout | AppErrorKind::OutOfMemory
+                AppErrorKind::NetworkUnavailable
+                    | AppErrorKind::Timeout
+                    | AppErrorKind::OutOfMemory
             );
-            assert_eq!(kind.retryable(), expected, "{:?}: yanlış yeniden deneme sınıfı", kind);
+            assert_eq!(
+                kind.retryable(),
+                expected,
+                "{:?}: yanlış yeniden deneme sınıfı",
+                kind
+            );
         }
     }
 
@@ -473,8 +449,14 @@ mod tests {
         assert_eq!(err.app, "Dosya Yöneticisi");
         assert_eq!(err.title(false), "Erişim reddedildi");
         assert_eq!(err.title(true), "Access denied");
-        assert_eq!(err.message(false), AppErrorKind::PermissionDenied.message(false));
-        assert_eq!(err.recovery(true), AppErrorKind::PermissionDenied.recovery(true));
+        assert_eq!(
+            err.message(false),
+            AppErrorKind::PermissionDenied.message(false)
+        );
+        assert_eq!(
+            err.recovery(true),
+            AppErrorKind::PermissionDenied.recovery(true)
+        );
         assert!(!err.retryable());
     }
 }

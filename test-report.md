@@ -2,12 +2,12 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-17 19:41:07 UTC |
+| Zaman | 2026-11-17 20:05:39 UTC |
 | ISO | `D:\minos\minos.iso` |
-| QEMU profili | high |
-| Bellek / vCPU | 8192 MB / 1 |
-| VGA | std |
-| USB HID / PS/2 | açık / açık |
+| QEMU profili | default |
+| Bellek / vCPU | 512 MB / 2 |
+| VGA | virtio |
+| USB HID / PS/2 | kapalı / açık |
 | HDA WAV çıktısı | 0 bayt PCM / dosya 44 bayt |
 
 ## Kontroller
@@ -22,6 +22,8 @@
 | Bellek sıkıstirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sıkıstirilamaz veri reddi |
 | Kernel Heap Buyutme ve Tembel Doldurma | ✅ GEÇTİ | Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi |
 | Bellek Kullanim Profili | ✅ GEÇTİ | PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari |
+| Uygulama Bazli Bellek Raporu | ✅ GEÇTİ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
+| GUI Ekran Geometrisi / Duman Testi | ✅ GEÇTİ | Acilis/kapanis/hata ekran geometrisi ve yerellestirilmis ekran metinleri |
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |
 | Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir) | ✅ GEÇTİ | PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu |
 | Giris Suruculeri (USB-HID / PS-2 Fallback) | ✅ GEÇTİ | xHCI taramasi veya basarili PS/2 fallback aktivasyonu |
@@ -46,10 +48,6 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
-| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi |
-| USB HID Etkin Girdi Yolu | ✅ GEÇTİ | Masaustu girdisi USB HID surucusune baglandi |
-| USB Klavye Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP 'a' tusu xHCI HID raporu olarak islendi |
-| USB Fare Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP fare hareketi/tiki xHCI HID raporu olarak islendi |
 | Gerçek Ses Çıkışı (Intel HDA / WAV) | ✅ GEÇTİ | 48 kHz DMA akışı ve WAV dosyası |
 | Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 

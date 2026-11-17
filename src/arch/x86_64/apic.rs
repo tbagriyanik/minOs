@@ -195,10 +195,11 @@ pub fn enable_bsp_idle() -> bool {
     unsafe {
         core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
     }
-    // APIC timer ~100 Hz (10 ms) çalışabilir; 5 ms'lik yoklama yanlış negatif
-    // üretmesin diye iki tikten biraz fazla (25 ms) bekle.
+    // APIC timer ~100 Hz (10 ms) çalışabilir; 10 ms'lik yoklama yanlış negatif
+    // üretmesin diye biraz daha fazla (100 ms) bekle. Daha agresif zaman aşımı
+    // CI ortamlarında (Azure VM, TCG) timer interrupt'in gecikmesine sebep olur.
     let timeout = unsafe { crate::boot::time::TSC_CYCLES_PER_US }
-        .saturating_mul(25_000)
+        .saturating_mul(100_000)
         .max(1);
     while bsp_timer_ticks() == ticks_before
         && crate::boot::time::read_cpu_cycles().wrapping_sub(start) < timeout

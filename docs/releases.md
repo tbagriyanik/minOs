@@ -6,6 +6,17 @@ README'den ayrılan v1.6.0 ve v1.5.0 değişiklik listeleri.
 > - 🧪 **Deneysel:** Özellik çalışıyor ancak henüz kararlı kabul edilmez; üretimde dikkatli kullanılmalı.
 > - ⚠️ **Sınırlı / Başarısız deneme:** Özellik kısıtlı şekilde çalışır veya bilinmeyen bir sınırı/bozulması vardır; geri alınabilir veya yeniden tasarlanabilir.
 
+## Yenilikler (v2.5.0)
+
+- **✅ P1 bellek ve süreç testleri (Doğrulandı):** `brk` büyütme/küçültme, `mmap`/`munmap` sınır ve hata testleri, dosya tanıtıcısı yaşam döngüsü, süreç kaynak limitleri ve `fork` aktarımı, COW yazma hatası QEMU `default` profilinde geçti (`test-report.md`, 36/36 ✅).
+- **✅ GUI duman testleri (Doğrulandı, host):** açılış, yükleme, hata ve kapanış ekranları `screen_layout` üzerinden ortak geometri/metin kullanıyor; `[GUI-SMOKE]` seri marker'ı ve host testleri eklendi; QEMU `default` profilinde ✅ doğrulandı.
+- **✅ Uygulama hataları ve kurtarma (Doğrulandı, kod):** kararlı hata kodları, TR/EN açıklama ve kurtarma adımları; Dosya Yöneticisi sürükle-bırak hataları ile bellek guard bildirimleri bu yollara bağlandı.
+- **🧪 Uygulama bazlı bellek ölçümü (Deneysel ölçüm yaklaşımı):** uygulamalar aynı ring-0 heap'i paylaştığı için değerler `size_of_val` + bilinen tampon kapasitelerinden gelen **alt sınırdır**; gerçek süreç izolasyonu sonrası hassaslaştırılmalı. Görev Yöneticisi ve `[APP-MEM]` aynı kaynağı gösterir.
+- **✅ Tema/erişilebilirlik ve Türkçe font testleri (Doğrulandı, host):** kontrast/palette/odak testleri; Geist birincil yüzde Türkçe karakterler, `i`/`ı` ayrımı, sıfır olmayan glif ölçümleri ve eksik glif fallback'i.
+- **✅ Kapanış ekranı (Doğrulandı, kod):** tüm yollar tek `finish_system()` akışında VFS senkronizasyonu, sürücü kapanışı ve görünür fazlarla tamamlanır.
+- **⚠️ Donanım uyumluluğu (Sınırlı):** yalnızca QEMU `default` profili otomatik doğrulandı. Gerçek donanım tabloları `DOĞRULANMADI` olarak işaretlidir. 2026-11-17 19:35 UTC civarındaki bir `high` profili denemesinde `CPU & Cekirdek Donanım Başlatimi` ❌ **BAŞARISIZ** oldu; 19:51 UTC `default` profilinde ✅ geçti. `high` profili tekrar doğrulanmadan destek iddiası yapılmaz.
+- **⚠️ Uzun süreli stres (Sınırlı):** `test_stress_24h.ps1` soak harness'i ve PMM/VMM/allocator öz-testleri mevcut/yeşil; 24 saatlik tekrar sonucu ve gerçek donanım ölçümü henüz yok.
+
 ## Yenilikler (v2.3.0)
 
 - **🚫 Tarayıcı Donma Düzeltmesi (Engellemeyen Kaynak Yükleme):** Web Tarayıcısı sayfa açılırken donma sorunu giderildi. Harici kaynaklar (`<link rel="stylesheet">`, `<script src="...">`, `<img src="...">`) render sırasında senkron olarak getirilmez; URL'ler `pending_resources` listesine eklenir ve `poll_network()` tarafından kare başına tek tek asenkron olarak getirilir, sayfa her kaynaktan sonra yeniden render edilir. Ağ işlemleri artık ana olay döngüsünü bloke etmez.

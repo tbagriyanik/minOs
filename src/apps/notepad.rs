@@ -252,6 +252,20 @@ const OVERFLOW_MENU_ITEMS: [MenuItemDef; 5] = [
 ];
 
 impl NotepadApp {
+    /// Text buffer plus undo/redo snapshot capacities.
+    pub fn memory_usage_bytes(&self) -> usize {
+        let snapshots = |list: &Vec<Snapshot>| {
+            list.iter()
+                .map(|snapshot| crate::apps::memory::vec_bytes(&snapshot.chars))
+                .sum::<usize>()
+        };
+        crate::apps::memory::vec_bytes(&self.buffer)
+            .saturating_add(crate::apps::memory::vec_bytes(&self.history.undo))
+            .saturating_add(snapshots(&self.history.undo))
+            .saturating_add(crate::apps::memory::vec_bytes(&self.history.redo))
+            .saturating_add(snapshots(&self.history.redo))
+    }
+
     // --- Menü geometrisi ---
     // Çizim (render) ile fare tıklama testlerinin aynı koordinatları
     // kullanmasını sağlayan ortak yardımcılar.

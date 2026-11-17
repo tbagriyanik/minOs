@@ -151,6 +151,13 @@ pub const TM_CONTENT_Y: usize = 120;
 pub const TM_ROW_STEP: usize = 22;
 
 impl TaskManagerApp {
+    /// Process table is inline; report the live portion as a useful dynamic
+    /// lower bound (the struct itself is added by the runtime publisher).
+    pub fn memory_usage_bytes(&self) -> usize {
+        self.proc_count
+            .saturating_mul(core::mem::size_of::<ProcessInfo>())
+    }
+
     pub const fn new() -> Self {
         Self {
             processes: [ProcessInfo {
@@ -413,7 +420,14 @@ impl TaskManagerApp {
             if let Some(window) = window {
                 if window.is_open {
                     let app_id = window.app_id as usize;
-                    let state_bytes = Self::app_state_bytes(app_id);
+                    // Gerçek çalışma zamanı ölçümü varsa onu kullan; registry
+                    // henüz yayın yapmadıysa statik yapı boyutuna düş.
+                    let measured = crate::apps::memory::sample(app_id);
+                    let state_bytes = if measured > 0 {
+                        measured
+                    } else {
+                        Self::app_state_bytes(app_id)
+                    };
                     self.processes[count] = ProcessInfo {
                         app_idx,
                         app_id,

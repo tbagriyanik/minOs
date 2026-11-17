@@ -8,6 +8,9 @@ boot-log = []
 # exFAT read/write support — disabled by default due to Microsoft patent considerations.
 # Enable with: cargo build --features exfat
 exfat = []
+# Kullanıcı modu (Ring3) GUI syscall yolu. Ayrı ELF ikili dosyaları olarak
+# derlenmiş kullanıcı uygulamaları için etkinleştirilir.
+user_mode = []
 
 [dependencies]
 # Allocator for no_std environment

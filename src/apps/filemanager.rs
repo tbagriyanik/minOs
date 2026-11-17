@@ -321,6 +321,32 @@ pub struct FileManagerApp {
 }
 
 impl FileManagerApp {
+    /// Kullanıcıya gösterilen sürükle-bırak hatalarını sınıflandırır; kararlı
+    /// hata kodu, açıklama ve somut kurtarma adımı tek satırda birleştirilir.
+    fn drop_error(kind: crate::apps::errors::AppErrorKind, detail: &str) -> String {
+        let err = crate::apps::errors::AppError::new("Dosya Yöneticisi", kind);
+        let mut message = String::from(err.kind.code());
+        message.push_str(" · ");
+        message.push_str(err.message(crate::gui::ui_english()));
+        message.push(' ');
+        message.push_str(detail);
+        message.push(' ');
+        message.push_str(err.recovery(crate::gui::ui_english()));
+        message
+    }
+
+    /// Dynamically allocated thumbnail buffers (struct size is added by the
+    /// runtime publisher via `size_of_val`).
+    pub fn memory_usage_bytes(&self) -> usize {
+        let thumbs = self
+            .thumbs
+            .iter()
+            .filter_map(|thumb| thumb.as_ref())
+            .map(|thumb| crate::apps::memory::vec_bytes(&thumb.px))
+            .sum::<usize>();
+        crate::apps::memory::vec_bytes(&self.thumbs).saturating_add(thumbs)
+    }
+
     pub fn search_matches(&self, idx: usize) -> bool {
         if idx >= self.file_count {
             return false;
@@ -1902,31 +1928,33 @@ impl FileManagerApp {
         target: DropTarget,
         is_copy: bool,
         vfs: &mut crate::fs::vfs::VirtualFileSystem,
-    ) -> Result<String, &'static str> {
+    ) -> Result<String, String> {
+        use crate::apps::errors::AppErrorKind;
+
         if src_idx >= self.file_count {
-            return Err(crate::gui::ui_text(
-                "Kaynak öğe bulunamadı.",
-                "Source item not found.",
+            return Err(Self::drop_error(
+                AppErrorKind::FileNotFound,
+                crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found."),
             ));
         }
         if self.files[src_idx].display_name() == ".." {
-            return Err(crate::gui::ui_text(
-                "Üst klasör taşınamaz.",
-                "Parent folder cannot be moved.",
+            return Err(Self::drop_error(
+                AppErrorKind::InvalidInput,
+                crate::gui::ui_text("Üst klasör taşınamaz.", "Parent folder cannot be moved."),
             ));
         }
 
         let Some(target_dir) = self.target_directory(target) else {
-            return Err(crate::gui::ui_text(
-                "Hedef klasör geçersiz.",
-                "Invalid target folder.",
+            return Err(Self::drop_error(
+                AppErrorKind::InvalidInput,
+                crate::gui::ui_text("Hedef klasör geçersiz.", "Invalid target folder."),
             ));
         };
 
         if target_dir == "/media/cdrom" {
-            return Err(crate::gui::ui_text(
-                "CD-ROM salt okunurdur.",
-                "CD-ROM is read-only.",
+            return Err(Self::drop_error(
+                AppErrorKind::PermissionDenied,
+                crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."),
             ));
         }
 
@@ -1953,16 +1981,18 @@ impl FileManagerApp {
             }
             src_path.push_str(src_name);
             if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
-                vfs.copy_item(&src_path, &target_dir)?;
+                vfs.copy_item(&src_path, &target_dir)
+                    .map_err(|err| Self::drop_error(AppErrorKind::classify(err), err))?;
             } else {
-                vfs.move_item(&src_path, &target_dir)?;
+                vfs.move_item(&src_path, &target_dir)
+                    .map_err(|err| Self::drop_error(AppErrorKind::classify(err), err))?;
             }
             count += 1;
         }
         if count == 0 {
-            return Err(crate::gui::ui_text(
-                "Kaynak öğe bulunamadı.",
-                "Source item not found.",
+            return Err(Self::drop_error(
+                AppErrorKind::FileNotFound,
+                crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found."),
             ));
         }
 

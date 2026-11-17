@@ -5,6 +5,12 @@ The README files only summarise the highlights; the full list lives here.
 
 ## Current · v2.5.0
 
+- **P1 memory/process verification:** `brk` grow/shrink, `mmap`/`munmap` bounds and error paths, FD lifecycle, resource-limit inheritance across `fork`, and COW write faults all pass under the QEMU `default` profile (36/36 checks). PMM/VMM/allocator self-tests and the `test_stress_24h.ps1` soak harness exist; repeated 24h runs are ⚠️ not yet reported.
+- **GUI smoke tests:** `gui::screen_layout` centralises geometry and localized copy for boot/loading/welcome/shutdown screens; a `[GUI-SMOKE]` serial marker and host geometry tests were added.
+- **Errors and recovery:** `apps::errors` provides stable codes plus TR/EN title, detail and recovery text; File Manager drop errors and guard-fault toasts now use them.
+- **Per-app memory:** `apps::memory` registry, per-app dynamic buffer accounting, the Task Manager "Memory" column and `[APP-MEM] app=N bytes=M` serial report were added. Values are lower bounds because built-in apps share one ring-0 heap (🧪 measurement approach).
+- **Accessibility/fonts:** expanded theme/contrast/focus tests and Turkish glyph coverage: Geist tier-0 characters, non-zero bitmap/advance, `i`/`ı` distinction and missing-glyph `?` fallback.
+- **Shutdown flow:** every shutdown/restart path now goes through one `finish_system()` helper with VFS sync, driver shutdown and visible phases.
 - Process lifecycle test (`[PROC-TEST]`) updated for `SYS_ALLOC_FRAME` being disabled as a ring-3 security boundary (now returns `u64::MAX`): invalid syscall + NULL buffer + ownership limits, COW fork sharing/split, old-image and resource teardown after `exec`, wake of a blocked `wait` on child exit, and `SYS_FORK` error-path resource return are verified. A false-positive success pattern in `test_qemu.ps1` was fixed.
 - Watchdog frozen-app detection moved to the APIC timer interrupt (`watchdog::timer_tick()`); interrupt context uses a short `try_lock`-guarded section and termination is deferred to the main loop via `drain_frozen()`.
 - FPS 3D Game (app ID 16) reports real `fps`/`min_fps`/`frame_ms` metrics from completed frames (`[FPS3D-METRICS]`); launch is verified via the `[FPS3D] Uygulama açıldı` marker.
@@ -14,7 +20,7 @@ The README files only summarise the highlights; the full list lives here.
 - On `RENDER_BUDGET_MS` expiry, half-drawn framebuffer content is no longer visible; the FPS 3D content region is backed up and restored when the render does not complete.
 - `TimeBudget` gained an injectable test clock and deterministic timeout tests.
 - TLS/X.509 chain validation is stricter: validity dates and CA BasicConstraints/pathLen are checked for every non-anchor chain certificate; CA `keyCertSign` and leaf KeyUsage/EKU extensions are enforced when present. Unknown critical extensions are rejected. The test-only validation bypass was removed; valid RSA/ECDSA handshakes and invalid intermediate CA cases are covered.
-- The host test suite contains 322 tests (322 passed / 0 failed).
+- The host test suite contains 358 tests (358 passed / 0 failed).
 - Double-clicking a WAV file plays the selected file directly in Music Player.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.

@@ -52,14 +52,16 @@ impl Drop for BusyScope {
     }
 }
 
-/// Draw one frame of the centered minOs loading transition.
-pub fn render_loading_transition(
-    fb: &mut Framebuffer,
-    width: usize,
-    height: usize,
-    phase: usize,
-    message: &str,
-) {
+///Draw one frame of the centered minOs loading transition.
+///
+///Aşama metni, yüzde ve çubuk geometrisi `gui::screen_layout` üzerinden
+///alınır; böylece açılış ekranı host GUI smoke testlerinde de doğrulanır.
+pub fn render_loading_transition(fb: &mut Framebuffer, width: usize, height: usize, phase: usize) {
+    let english = ui_english();
+    let stage = screen_layout::loading_stage(phase, english);
+    let percent = screen_layout::loading_percent(phase);
+    let bar = screen_layout::loading_bar(width, height, phase);
+
     fb.draw_rect(0, 0, width, height, Color::DARK_BG);
     let cx = width / 2;
     let cy = height / 2;
@@ -82,28 +84,53 @@ pub fn render_loading_transition(
         3,
     );
 
-    let bar_w = 220.min(width.saturating_sub(48));
-    let bar_x = cx.saturating_sub(bar_w / 2);
-    let bar_y = cy + 34;
-    fb.draw_rounded_rect(bar_x, bar_y, bar_w, 8, 4, Color::TASKBAR_BG);
-    let sweep_w = (bar_w / 3).max(12);
-    let travel = bar_w.saturating_sub(sweep_w);
-    let sweep_x = bar_x + (phase * 19 % (travel + 1));
-    fb.draw_rounded_rect(sweep_x, bar_y + 1, sweep_w, 6, 3, Color::ACCENT_BLUE);
+    fb.draw_rounded_rect(
+        bar.track.0,
+        bar.track.1,
+        bar.track.2,
+        bar.track.3,
+        4,
+        Color::TASKBAR_BG,
+    );
+    fb.draw_rounded_rect(
+        bar.sweep.0,
+        bar.sweep.1,
+        bar.sweep.2,
+        bar.sweep.3,
+        3,
+        Color::ACCENT_BLUE,
+    );
 
-    let dots = match phase % 4 {
-        0 => ".  ",
-        1 => ".. ",
-        2 => "...",
-        _ => "   ",
-    };
-    let text_w = MinGuiCompositor::text_width(message, 1);
-    let dots_w = MinGuiCompositor::text_width(dots, 1);
-    let group_w = text_w + 4 + dots_w;
-    let text_x = cx.saturating_sub(group_w / 2);
-    MinGuiCompositor::draw_string(fb, text_x, bar_y + 20, message, Color::TEXT_MUTED);
-    let dots_x = text_x + text_w + 4;
-    MinGuiCompositor::draw_string(fb, dots_x, bar_y + 20, dots, Color::ACCENT_BLUE);
+    let stage_w = MinGuiCompositor::text_width(stage, 1);
+    MinGuiCompositor::draw_string(
+        fb,
+        cx.saturating_sub(stage_w / 2),
+        bar.track.1 + 20,
+        stage,
+        Color::TEXT_MUTED,
+    );
+
+    let mut percent_text = TextBuf::new();
+    percent_text.push_usize(percent);
+    percent_text.push_str("%");
+    let percent_w = MinGuiCompositor::text_width(percent_text.as_str(), 1);
+    MinGuiCompositor::draw_string(
+        fb,
+        bar.track.0 + bar.track.2.saturating_sub(percent_w),
+        bar.track.1 + 20,
+        percent_text.as_str(),
+        Color::ACCENT_GREEN,
+    );
+
+    let hint = screen_layout::loading_hint(english);
+    let hint_w = MinGuiCompositor::text_width(hint, 1);
+    MinGuiCompositor::draw_string(
+        fb,
+        cx.saturating_sub(hint_w / 2),
+        bar.track.1 + 38,
+        hint,
+        Color::TEXT_MUTED,
+    );
     fb.flush();
 }
 
@@ -183,13 +210,13 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
         2,
     );
 
-    // Bilgi kutusu
-    let box_w = 640.min(width.saturating_sub(48)).max(320);
-    let box_h = 300.min(height.saturating_sub(96)).max(180);
-    let box_x = width.saturating_sub(box_w) / 2;
-    let box_y = 52 + (height.saturating_sub(52 + box_h)) / 2;
+    // Bilgi kutusu (geometri GUI smoke testleriyle paylaşılır).
+    let (box_x, box_y, box_w, box_h) = screen_layout::boot_error_box(width, height);
     fb.draw_rounded_rect(box_x, box_y, box_w, box_h, 10, Color::WINDOW_BG);
     fb.draw_rounded_rect_outline(box_x, box_y, box_w, box_h, 10, Color::ACCENT_RED);
+
+    let code = screen_layout::boot_error_code();
+    MinGuiCompositor::draw_string(fb, box_x + 24, box_y + 18, code, Color::ACCENT_RED);
 
     let lines: [(&str, u32); 8] = [
         (
@@ -220,7 +247,7 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
         ),
     ];
 
-    let mut y = box_y + 24;
+    let mut y = box_y + 42;
     for (text, color) in lines.iter() {
         if !text.is_empty() {
             MinGuiCompositor::draw_string(fb, box_x + 24, y, text, *color);
@@ -228,7 +255,7 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
         y += 26;
     }
 
-    let footer = "Yeniden başlatmak için herhangi bir tuşa basın.  /  Press any key to restart.";
+    let footer = screen_layout::boot_error_footer();
     let footer_w = MinGuiCompositor::text_width(footer, 1);
     if footer_w <= width.saturating_sub(24) {
         MinGuiCompositor::draw_string(
@@ -251,78 +278,22 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
     fb.flush();
 }
 
-/// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
-fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let w = 520.min(width.saturating_sub(24)).max(320);
-    let cols = if w >= 420 {
-        4
-    } else if w >= 350 {
-        3
-    } else {
-        2
-    };
-    let rows = theme::ThemeId::ALL.len().div_ceil(cols);
-    let row_gap = 10;
-    let card_h = 46;
-    let theme_h = rows * card_h + (rows.saturating_sub(1)) * row_gap;
-    let reserve_h = 190; // dil, başlık, alt bilgi ve düğme alanı için boşluk.
-    let h = (reserve_h + theme_h)
-        .max(310)
-        .min(height.saturating_sub(24))
-        .max(260);
-    (
-        (width.saturating_sub(w)) / 2,
-        (height.saturating_sub(h)) / 2,
-        w,
-        h,
-    )
+/// Hoş geldin ekranı seçim alanları; çizim, giriş işleme ve host smoke
+/// testleri aynı geometri kaynağını (`screen_layout`) kullanır.
+fn welcome_panel(width: usize, height: usize) -> screen_layout::Rect {
+    screen_layout::welcome_panel(width, height)
 }
 
-pub fn welcome_language_rect(
-    width: usize,
-    height: usize,
-    index: usize,
-) -> (usize, usize, usize, usize) {
-    let (x, y, _, _) = welcome_panel(width, height);
-    (x + 28 + index * 140, y + 84, 126, 32)
+pub fn welcome_language_rect(width: usize, height: usize, index: usize) -> screen_layout::Rect {
+    screen_layout::welcome_language_rect(width, height, index)
 }
 
-pub fn welcome_theme_rect(
-    width: usize,
-    height: usize,
-    index: usize,
-) -> (usize, usize, usize, usize) {
-    let (x, y, w, h) = welcome_panel(width, height);
-    let cols = if w >= 420 {
-        4
-    } else if w >= 350 {
-        3
-    } else {
-        2
-    };
-    let gap_x = 10;
-    let gap_y = 10;
-    let card_h = 46;
-    let available_w = w.saturating_sub(56).max(1);
-    let card_w = available_w.saturating_sub(gap_x * (cols - 1)) / cols;
-    let rows = theme::ThemeId::ALL.len().div_ceil(cols);
-    let theme_total_h = rows * card_h + (rows.saturating_sub(1)) * gap_y;
-    let theme_top = y + 148;
-    let bottom_limit = y + h.saturating_sub(76);
-    let theme_y = theme_top.min(bottom_limit.saturating_sub(theme_total_h));
-    let col = index % cols;
-    let row = index / cols;
-    (
-        x + 28 + col * (card_w + gap_x),
-        theme_y + row * (card_h + gap_y),
-        card_w,
-        card_h,
-    )
+pub fn welcome_theme_rect(width: usize, height: usize, index: usize) -> screen_layout::Rect {
+    screen_layout::welcome_theme_rect(width, height, index)
 }
 
-pub fn welcome_continue_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let (x, y, w, h) = welcome_panel(width, height);
-    (x + w.saturating_sub(168), y + h.saturating_sub(50), 140, 36)
+pub fn welcome_continue_rect(width: usize, height: usize) -> screen_layout::Rect {
+    screen_layout::welcome_continue_rect(width, height)
 }
 
 pub fn render_welcome_screen(
@@ -483,16 +454,11 @@ pub fn render_welcome_screen(
     }
 
     // 3. Alt Kısım: Bilgi İpucu (Zaman Aşımı Göstergesi) & Başla Düğmesi
-    let hint_text = if english {
-        "Tab: select  Enter: confirm  Esc: cancel  E: boot log"
-    } else {
-        "Tab: sec  Enter: onayla  Esc: vazgec  E: boot logu"
-    };
     MinGuiCompositor::draw_string(
         fb,
         x + 28,
         y + h.saturating_sub(40),
-        hint_text,
+        screen_layout::welcome_hint(english),
         Color::TEXT_MUTED,
     );
 
@@ -546,23 +512,27 @@ pub fn render_welcome_screen(
     fb.flush();
 }
 
-/// Sistem kapanış ekranı. Güç düğmesi / "Kapat" işlemi sırasında gösterilir;
-/// `phase` basit bir döngü sağlayıcıdır (ör. kare sayısı) ve `message`
-/// geçerli kapanış adımını açıklar.
+/// Sistem kapanış/yeniden başlatma ekranı. Başlık, adım metni ve ipucu
+/// `screen_layout` üzerinden yerelleştirilir; `phase` kapanış adımını ve
+/// spinner fazını birlikte belirler.
 pub fn render_shutdown_screen(
     fb: &mut Framebuffer,
     width: usize,
     height: usize,
     phase: usize,
-    message: &str,
+    restart: bool,
 ) {
+    let english = ui_english();
+    let title = screen_layout::shutdown_title(restart, english);
+    let message = screen_layout::shutdown_step_text(phase, restart, english);
+    let hint = screen_layout::shutdown_hint(english);
+
     fb.draw_rect(0, 0, width, height, Color::DARK_BG);
 
     let cx = width / 2;
 
     // Üst kapanış şeridi
     fb.draw_rect(0, 0, width, 52, Color::ACCENT_BLUE);
-    let title = "Sistem Kapatılıyor  /  Shutting down...";
     let title_w = MinGuiCompositor::text_width(title, 2);
     MinGuiCompositor::draw_string_scaled(
         fb,
@@ -573,11 +543,8 @@ pub fn render_shutdown_screen(
         2,
     );
 
-    // Bilgi kutusu
-    let box_w = 560.min(width.saturating_sub(48)).max(320);
-    let box_h = 220.min(height.saturating_sub(96)).max(160);
-    let box_x = width.saturating_sub(box_w) / 2;
-    let box_y = 52 + (height.saturating_sub(52 + box_h)) / 2;
+    // Bilgi kutusu (geometri GUI smoke testleriyle paylaşılır).
+    let (box_x, box_y, box_w, box_h) = screen_layout::shutdown_box(width, height);
     fb.draw_rounded_rect(box_x, box_y, box_w, box_h, 10, Color::WINDOW_BG);
     fb.draw_rounded_rect_outline(box_x, box_y, box_w, box_h, 10, Color::ACCENT_BLUE);
 
@@ -588,28 +555,36 @@ pub fn render_shutdown_screen(
     MinGuiCompositor::draw_string(
         fb,
         cx.saturating_sub(spin_w / 2),
-        box_y + 40,
+        box_y + 30,
         spinner,
         Color::ACCENT_BLUE,
     );
 
-    MinGuiCompositor::draw_string(fb, box_x + 24, box_y + 78, message, Color::TEXT_MAIN);
+    MinGuiCompositor::draw_string(fb, box_x + 24, box_y + 68, message, Color::TEXT_MAIN);
 
-    let hint = if message.is_empty() {
-        "Lütfen bekleyiniz.  /  Please wait."
-    } else {
-        ""
-    };
-    if !hint.is_empty() {
-        let hint_w = MinGuiCompositor::text_width(hint, 1);
-        MinGuiCompositor::draw_string(
-            fb,
-            cx.saturating_sub(hint_w / 2),
-            box_y + box_h - 40,
-            hint,
-            Color::TEXT_MUTED,
-        );
-    }
+    let hint_w = MinGuiCompositor::text_width(hint, 1);
+    MinGuiCompositor::draw_string(
+        fb,
+        cx.saturating_sub(hint_w / 2),
+        box_y + box_h - 48,
+        hint,
+        Color::TEXT_MUTED,
+    );
+
+    let bar_x = box_x + 24;
+    let bar_w = box_w.saturating_sub(48);
+    let bar_y = box_y + box_h - 24;
+    let steps = 4usize;
+    let done = phase.saturating_add(1).min(steps);
+    fb.draw_rounded_rect(bar_x, bar_y, bar_w, 6, 3, Color::TASKBAR_BG);
+    fb.draw_rounded_rect(
+        bar_x,
+        bar_y,
+        bar_w.saturating_mul(done) / steps,
+        6,
+        3,
+        Color::ACCENT_BLUE,
+    );
 
     fb.flush();
 }

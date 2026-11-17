@@ -66,8 +66,14 @@ impl GlobalDirtyTracker {
         if rect.width == 0 || rect.height == 0 {
             return;
         }
-        // Bounding rect'i her zaman güncelle (overflow olsa bile).
-        self.bounding = self.bounding.union(rect);
+        // Bounding rect'i her zaman güncelle (overflow olsa bile). İlk rect
+        // `(0,0,0,0)` başlangıcıyla birleştirilirse sol/üst kenarlar yanlışlıkla
+        // 0'a kayar; ilk izlemede doğrudan rect'i kullan.
+        if self.bounding.width == 0 || self.bounding.height == 0 {
+            self.bounding = rect;
+        } else {
+            self.bounding = self.bounding.union(rect);
+        }
         if self.len < MAX_DIRTY_RECTS {
             self.rects[self.len] = rect;
             self.len += 1;

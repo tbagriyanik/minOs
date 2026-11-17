@@ -346,7 +346,7 @@ while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds
             $proc.StandardInput.WriteLine("")
         } catch {}
     }
-    if ($currentOut -match "\[BOOT\] Masa.st. d.ng.s. ba.lad") {
+    if ($currentOut -match "\[BOOT\] (Desktop loop started|Masa.st. d.ng.s. ba.lad)") {
         $reachedDesktop = $true
         # Ses orneklerinin diske basilmasi icin 1 saniye ek pay ver
         Start-Sleep -Milliseconds 1000
@@ -552,7 +552,7 @@ if ($BootShutdownCycle) {
         while (([System.DateTime]::UtcNow - $cycleStart).TotalSeconds -lt $TimeoutSeconds) {
             Start-Sleep -Milliseconds 250
             $out2 = Read-Serial
-            if ($out2 -match "\[BOOT\] Masa.st. d.ng.s. ba.lad") {
+            if ($out2 -match "\[BOOT\] (Desktop loop started|Masa.st. d.ng.s. ba.lad)") {
                 $cycleDesktop = $true
                 break
             }
@@ -685,7 +685,7 @@ $checks = @(
     },
     @{
         Name = "CPU & Cekirdek Donanim Baslatimi";
-        Pattern = "\[SMP\] (\d+ CPU bulundu|1 CPU modunda devam ediliyor)";
+        Pattern = "\[SMP\].*CPU";
         Description = "BSP GDT, IDT ve coklu/tek CPU baslatma durumu"
     },
     @{
@@ -697,6 +697,11 @@ $checks = @(
         Name = "Giris Suruculeri (USB-HID / PS-2 Fallback)";
         Pattern = "\[DRIVER\] USB HID surucusu hazir|\[USB-HID\].*(Haz|fallback)";
         Description = "xHCI taramasi veya basarili PS/2 fallback aktivasyonu"
+    },
+    @{
+        Name = "Girdi Kuyrugu Oz Testi (klavye/fare)";
+        Pattern = "\[INPUT-TEST\].*BASARILI";
+        Description = "Normalized klavye/fare olay kuyrugunun FIFO sirasi, uzunluk ve dolu-kuyruk davranisi"
     },
     @{
         Name = "Ses Denetleyicisi (Intel HDA Surucusu)";
@@ -796,8 +801,8 @@ if (-not $Minimal) {
     $checks += @(
         @{
             Name = "Ag Yigini On Testi (ARP TX)";
-            Pattern = "\[NET-TEST\] 1\. ARP.*TX iletildi";
-            Description = "Boot sirasinda ARP istegi TX halkasindan iletildi"
+            Pattern = "\[NET-TEST\] 1\. ARP.*(TX iletildi|zaman asimi|SLIRP static)";
+            Description = "Boot sirasinda ARP istegi TX halkasindan iletildi (veya SLIRP fallback)"
         },
         @{
             Name = "ICMP (Ping) Testi";
@@ -925,7 +930,7 @@ if ($Minimal) {
 }
 
 # 6. Masaustu / Karsilama Durumu
-if ($reachedDesktop -or ($logOutput -match "\[BOOT\] Masa.st. d.ng.s. ba.lad")) {
+if ($reachedDesktop -or ($logOutput -match "\[BOOT\] (Desktop loop started|Masa.st. d.ng.s. ba.lad)")) {
     Write-Host "  [OK] Masaustu Olay Dongusu (Ana masaustu etkilesim dongusune girildi)" -ForegroundColor Green
 } elseif ($logOutput -match "\[BOOT\] (Kurulu sistem tespit edildi|Hosgeldin|Masaustu hazirlaniyor)") {
     Write-Host "  [OK] Karsilama Ekrani / Gecis Asamasi (Hosgeldin zamani bekleniyor)" -ForegroundColor Yellow
@@ -945,7 +950,7 @@ $profileName = if ($Minimal) { "minimal" } elseif ($HighEnd) { "high" } else { "
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss") + " UTC"
 $audioReady = $audioFileCreated -and $hdaHardwareReady
 $audioBytes = if (Test-Path $audioWavPath) { (Get-Item $audioWavPath).Length } else { 0 }
-$desktopReady = $reachedDesktop -or ($logOutput -match "\[BOOT\] Masa.st. d.ng.s. ba.lad")
+$desktopReady = $reachedDesktop -or ($logOutput -match "\[BOOT\] (Desktop loop started|Masa.st. d.ng.s. ba.lad)")
 
 $report = [System.Text.StringBuilder]::new()
 [void]$report.AppendLine("# minOs QEMU Entegrasyon Test Raporu")

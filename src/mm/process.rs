@@ -5032,40 +5032,42 @@ pub fn test_resource_limits(
         }
     };
 
-    // 5. Çerçeve kotası: mevcut kullanım + 2 çerçeve; üçüncü istek reddedilir.
+    // 5. Çerçeve kotası: `SYS_ALLOC_FRAME` ring-3 güvenlik sınırı olarak
+    //    kapalı (`u64::MAX` döner) olduğundan kota, tembel heap sayfalarının
+    //    ilk yazmada gerçek çerçeveye dönüşmesi üzerinden doğrulanır. Kota
+    //    mevcut kullanım + 1 iken ilk tembel sayfa realize olur, ikinci sayfa
+    //    reddedilir; `brk` küçültmesi çerçeveyi iade eder.
     let frame_limit_ok = {
         let state = proc_mgr.get_process_mut(pid).map(|p| {
             let old = p.resources.limits.max_user_frames;
-            p.resources.limits.max_user_frames = p.resources.user_frame_count + 2;
+            p.resources.limits.max_user_frames = p.resources.user_frame_count + 1;
             (old, p.resources.user_frame_count)
         });
         if let Some((saved, current)) = state {
-            let first = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
-            let second = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
-            let third = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
-            let free_first = if first != 0 {
-                syscall_dispatch(sys_nos::SYS_FREE_FRAME, first, 0, 0, proc_mgr, pmm)
-            } else {
-                u64::MAX
-            };
-            let free_second = if second != 0 {
-                syscall_dispatch(sys_nos::SYS_FREE_FRAME, second, 0, 0, proc_mgr, pmm)
-            } else {
-                u64::MAX
-            };
+            // Heap'i 2 sayfaya büyüt ve ikinci sayfayı realize et: kota 1
+            // çerçeve olduğundan bu kabul edilmeli.
+            let grew = syscall_dispatch(sys_nos::SYS_BRK, 2 * PAGE_SIZE, 0, 0, proc_mgr, pmm)
+                == crate::mm::user_mem::HEAP_BASE + 2 * PAGE_SIZE;
+            let first =
+                proc_mgr.handle_lazy_fault(pid, crate::mm::user_mem::HEAP_BASE + PAGE_SIZE, pmm);
+            // Üçüncü sayfa realize edilmeye çalışıldığında kota aşılmalı.
+            let grew_more = syscall_dispatch(sys_nos::SYS_BRK, 3 * PAGE_SIZE, 0, 0, proc_mgr, pmm)
+                == crate::mm::user_mem::HEAP_BASE + 3 * PAGE_SIZE;
+            let second = proc_mgr.handle_lazy_fault(
+                pid,
+                crate::mm::user_mem::HEAP_BASE + 2 * PAGE_SIZE,
+                pmm,
+            );
+            // Küçültme, realize edilmiş çerçeveyi süreç defterinden düşürür.
+            let shrunk = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm)
+                == crate::mm::user_mem::HEAP_BASE + PAGE_SIZE;
             let restored = proc_mgr
                 .get_process(pid)
                 .is_some_and(|p| p.resources.user_frame_count == current);
             if let Some(p) = proc_mgr.get_process_mut(pid) {
                 p.resources.limits.max_user_frames = saved;
             }
-            first != 0
-                && second != 0
-                && first != second
-                && third == 0
-                && free_first == 0
-                && free_second == 0
-                && restored
+            grew && first && grew_more && !second && shrunk && restored
         } else {
             false
         }

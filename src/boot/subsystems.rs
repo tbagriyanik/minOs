@@ -474,6 +474,14 @@ pub fn init_subsystems(
         serial_print("[INPUT] USB HID etkin: bağlı aygıtlar kullanıma hazır.\n");
     }
 
+    // 5a. Girdi kuyruğu öz-testi: klavye/fare olaylarının FIFO sırası, uzunluk
+    //     bilgisi ve kuyruk dolu davranışı doğrulanır (gerçek donanımdan bağımsız).
+    if drivers::input_queue::self_test() {
+        serial_print("[INPUT-TEST] klavye/fare kuyrugu: BASARILI\n");
+    } else {
+        serial_print("[INPUT-TEST] klavye/fare kuyrugu: BAŞARISIZ\n");
+    }
+
     // 5b. Tema motorunu başlat
     crate::gui::theme::init();
     serial_print("[BOOT] Theme ready.\n");

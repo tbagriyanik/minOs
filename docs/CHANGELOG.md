@@ -14,7 +14,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp tamamlanmazsa geri yüklenir.
 - `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi.
 - TLS/X.509 sertifika zinciri doğrulaması sıkılaştırıldı: güvenilmeyen zincir sertifikalarının tarihleri ve CA BasicConstraints/pathLen kısıtları; varsa CA `keyCertSign` ve yaprak KeyUsage/EKU uzantıları denetlenir. Bilinmeyen kritik uzantılar reddedilir. Host TLS testlerinde doğrulama kestirmesi kaldırıldı; geçerli RSA/ECDSA el sıkışmaları ile geçersiz ara CA senaryoları doğrulanır.
-- Host test paketi 319 test içerir (319 geçti / 0 hata).
+- Host test paketi 322 test içerir (322 geçti / 0 hata).
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

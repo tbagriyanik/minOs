@@ -67,12 +67,12 @@ Derleme profilleri, QEMU örnekleri ve ayrıntılı donanım sınırları için 
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Kaynak Dosyası (`src/`)** | 199 dosya |
-| **Toplam Kod Satırı (`src/*.rs`)** | 158.489 satır (ham) / 145.286 satır (boşlukları hariç) |
-| **Test Dosyaları (`tests/*.rs`)** | 3.075 satır |
-| **Derleme Komut Dosyası (`build.rs`)** | 204 satır |
-| **Toplam (`src/` + `tests/` + `build.rs`)** | 161.768 satır (ham) |
+| **Toplam Kod Satırı (`src/*.rs`)** | 158.793 satır (ham) / 145.563 satır (boşlukları hariç) |
+| **Test Dosyaları (`tests/*.rs`)** | 3.094 satır |
+| **Derleme Komut Dosyası (`build.rs`)** | 210 satır |
+| **Toplam (`src/` + `tests/` + `build.rs`)** | 162.097 satır (ham) |
 
-Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 145.286 satırdır.
+Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 145.563 satırdır.
 
 ---
 

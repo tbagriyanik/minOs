@@ -24,7 +24,7 @@ minos/
 │   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici,
 │   │                        # memory/ alt modülü (büyük sayfa, sıkıştırma, profilleme)
 │   └── main.rs              # Çekirdek giriş noktası (_start)
-├── tests/                   # Host birim testleri (319 test)
+├── tests/                   # Host birim testleri (322 test)
 ├── boot/                    # Limine bootloader yapılandırması (limine.conf)
 ├── docs/                    # Yerel Markdown dokümanları
 ├── wiki/                    # Wiki sayfaları (bu dizin)
@@ -50,13 +50,13 @@ kodlarıyla, sıfır harici bağımlılıkla çalışır; `webpki-roots`, `smolt
 
 ## Birim Testleri (`test_host.ps1`)
 
-Kriptografi, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, dosya sistemi, bellek, sürücüler ve GUI testlerini içeren 319 birim testi host ortamında yürütülür. TLS testleri artık üretimdeki sertifika doğrulama yolunu kullanır; geçerli RSA/ECDSA zincirleri ile hatalı ve süresi dolmuş ara CA senaryolarını kapsar.
+Kriptografi, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, dosya sistemi, bellek, sürücüler ve GUI testlerini içeren 322 birim testi host ortamında yürütülür. TLS testleri artık üretimdeki sertifika doğrulama yolunu kullanır; geçerli RSA/ECDSA zincirleri ile hatalı ve süresi dolmuş ara CA senaryolarını kapsar.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Test sonuçları: **319 geçti / 0 hata**
+Test sonuçları: **322 geçti / 0 hata**
 
 ---
 
@@ -80,9 +80,9 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 | Ölçüt | Değer |
 | :--- | :--- |
 | **Toplam Rust Kaynak Dosyası** | 209 dosya (`src/` + `tests/` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | 161.768 satır |
+| **Toplam Kod Satırı (ham)** | 162.097 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri** | 319 test (0 hata, %100 başarılı) |
+| **Birim Testleri** | 322 test (0 hata, %100 başarılı) |
 | **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Pencere Yöneticisi |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |

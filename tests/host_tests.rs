@@ -444,6 +444,13 @@ mod host_compression_tests;
 #[path = "../src/mm/memory/compress.rs"]
 pub mod mzram_compress;
 
+#[path = "../src/drivers/input_queue.rs"]
+pub mod input_queue;
+
 #[cfg(test)]
 #[path = "host_mzram_tests.rs"]
 mod host_mzram_tests;
+
+#[cfg(test)]
+#[path = "host_input_tests.rs"]
+mod host_input_tests;

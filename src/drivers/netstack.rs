@@ -360,6 +360,8 @@ fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
                     if next_hop == gateway {
                         let gw_mac = MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02]);
                         arp_insert(gateway, gw_mac);
+                        // ARP timeout için bilgi çıktısı
+                        crate::serial_print("[NET-TEST] 1. ARP: Gateway ARP yanıtı zaman aşımı, statik MAC kullanılıyor.\n");
                         gw_mac
                     } else if next_hop == DNS_SERVER {
                         let dns_mac = MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x03]);

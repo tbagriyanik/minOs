@@ -14,7 +14,7 @@ The README files only summarise the highlights; the full list lives here.
 - On `RENDER_BUDGET_MS` expiry, half-drawn framebuffer content is no longer visible; the FPS 3D content region is backed up and restored when the render does not complete.
 - `TimeBudget` gained an injectable test clock and deterministic timeout tests.
 - TLS/X.509 chain validation is stricter: validity dates and CA BasicConstraints/pathLen are checked for every non-anchor chain certificate; CA `keyCertSign` and leaf KeyUsage/EKU extensions are enforced when present. Unknown critical extensions are rejected. The test-only validation bypass was removed; valid RSA/ECDSA handshakes and invalid intermediate CA cases are covered.
-- The host test suite contains 319 tests (319 passed / 0 failed).
+- The host test suite contains 322 tests (322 passed / 0 failed).
 - Double-clicking a WAV file plays the selected file directly in Music Player.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.

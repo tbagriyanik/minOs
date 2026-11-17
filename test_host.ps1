@@ -25,8 +25,18 @@ $outDir = Join-Path $repoRoot "target\host-tests"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 # `font_render.rs` host testlerinde derleme zamanı atlas kaynağı `env!("MINOS_FONT_ATLAS_DIR")`
-# ile bulunur. Build.rs tarafından üretilen `font_atlas.rs`'ın debug out dizinini
-# bulup ortam değişkenine yazın (yoksa font_render testleri derleme hatası verir).
+# ile bulunur. Önce `cargo build` ile build.rs'yi çalıştırarak `font_atlas.rs`'ı
+# üret (build komutu yoksa atlas kaynağı yoktur ve testler derlenemez), ardından
+# üretilen kaynağın debug out dizinini bulup ortam değişkenine yazın.
+Write-Host "[BILGI] Font atlası üretimi için cargo build çalıştırılıyor..." -ForegroundColor Cyan
+$buildOutput = & cargo build 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $buildOutput | ForEach-Object { Write-Host $_ }
+    Write-Host "[HATA] cargo build (font atlası üretimi) başarısız." -ForegroundColor Red
+    exit 1
+}
+$buildOutput | ForEach-Object { Write-Host $_ }
+
 $atlasBuildRoot = Join-Path $repoRoot "target\x86_64-minos\debug\build\minos-kernel"
 $atlasDir = if (Test-Path -LiteralPath $atlasBuildRoot) {
     # Birden fazla build hash dizini bulunabilir; en yeni atlas kaynagini

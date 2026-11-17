@@ -2,12 +2,12 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-17 18:57:36 UTC |
+| Zaman | 2026-11-17 19:41:07 UTC |
 | ISO | `D:\minos\minos.iso` |
-| QEMU profili | default |
-| Bellek / vCPU | 512 MB / 2 |
-| VGA | virtio |
-| USB HID / PS/2 | kapalı / açık |
+| QEMU profili | high |
+| Bellek / vCPU | 8192 MB / 1 |
+| VGA | std |
+| USB HID / PS/2 | açık / açık |
 | HDA WAV çıktısı | 0 bayt PCM / dosya 44 bayt |
 
 ## Kontroller
@@ -25,6 +25,7 @@
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |
 | Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir) | ✅ GEÇTİ | PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu |
 | Giris Suruculeri (USB-HID / PS-2 Fallback) | ✅ GEÇTİ | xHCI taramasi veya basarili PS/2 fallback aktivasyonu |
+| Girdi Kuyrugu Oz Testi (klavye/fare) | ✅ GEÇTİ | Normalized klavye/fare olay kuyrugunun FIFO sirasi, uzunluk ve dolu-kuyruk davranisi |
 | Ses Denetleyicisi (Intel HDA Surucusu) | ✅ GEÇTİ | PCI BAR0 MMIO, 48kHz stereo DMA akisi |
 | Cekirdek Surucu Profili | ✅ GEÇTİ | Tum donanim suruculerinin eksiksiz baslatimi |
 | Ring3 Surec Zamanlayici (CR3 + Context Switch) | ✅ GEÇTİ | APIC timer onalimli gercek CR3/context-switch ile kullanici sureci dilimi |
@@ -37,20 +38,24 @@
 | Process Fork Exec Wait | ✅ GEÇTİ | Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi |
 | Kullanici Heap ve Mmap (brk/mmap) | ✅ GEÇTİ | brk buyut/kucult, mmap/munmap, MEMINFO (R10 ABI) ve sizintisiz iade |
 | Dosya Taniticisi Yasam Dongusu | ✅ GEÇTİ | open/read/lseek/close, nesne referans sayimi, fork devralma, exec sifirlama ve fd kotasi |
-| Surec Kaynak Limitleri | ❌ BAŞARISIZ | RESINFO raporu, heap/mmap/fd/cerceve kotasi ve fork ile limit mirasi |
+| Surec Kaynak Limitleri | ✅ GEÇTİ | RESINFO raporu, heap/mmap/fd/cerceve kotasi ve fork ile limit mirasi |
 | Copy-on-Write (Ring3 yazma hatasi) | ✅ GEÇTİ | Fork sonrasi #PF ile COW kopyasi; cocuk yazari ebeveyne sizmaz |
 | ASLR (yigin + mmap tabani) | ✅ GEÇTİ | Ring3 yigin ustu her demo/surecte rastgele kaydirilir; mmap tabani ASLR |
 | Calisan Sistem Scheduler/Surec Izleme | ✅ GEÇTİ | Calisan sistemde dilim sayaci, surec durumlari, heap/mmap ve COW sayaclari |
-| Ag Yigini On Testi (ARP TX) | ❌ BAŞARISIZ | Boot sirasinda ARP istegi TX halkasindan iletildi |
+| Ag Yigini On Testi (ARP TX) | ✅ GEÇTİ | Boot sirasinda ARP istegi TX halkasindan iletildi (veya SLIRP fallback) |
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
+| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi |
+| USB HID Etkin Girdi Yolu | ✅ GEÇTİ | Masaustu girdisi USB HID surucusune baglandi |
+| USB Klavye Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP 'a' tusu xHCI HID raporu olarak islendi |
+| USB Fare Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP fare hareketi/tiki xHCI HID raporu olarak islendi |
 | Gerçek Ses Çıkışı (Intel HDA / WAV) | ✅ GEÇTİ | 48 kHz DMA akışı ve WAV dosyası |
-| Masaüstü Olay Döngüsü | ❌ BAŞARISIZ | Ana etkileşim döngüsüne giriş |
+| Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç
 
-**BAŞARISIZ** — bir veya daha fazla kontrol başarısız oldu.
+**BAŞARILI** — tüm kontroller geçti.
 
 > Bu rapor 	est_qemu.ps1 tarafından otomatik üretilmiştir.
 

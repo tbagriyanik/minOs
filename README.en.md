@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-161%2C768%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-162%2C097%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
@@ -16,7 +16,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Frozen-app monitoring now runs independently of the main loop, and the FPS 3D app reports real frame-rate measurements.
 - The FPS game has start and result menus; basic form controls support Tab navigation, Enter confirmation and Esc cancellation, including the Welcome screen.
 - Incomplete frames are no longer displayed when the render budget expires.
-- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 319 tests.
+- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 322 tests.
 - Deterministic host tests were added for `TimeBudget` and `OperationGuard`.
 - File Manager can open WAV files directly in Music Player, and Image Viewer can set an image as a tiled desktop wallpaper.
 - Settings includes three additional desktop images.

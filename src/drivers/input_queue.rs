@@ -137,6 +137,68 @@ impl Default for InputQueue {
     }
 }
 
+/// Normalized klavye/fare olay kuyruğu için boot öz-testi.
+///
+/// Global kuyruk yerine özel bir kuyruk kullanılır; böylece kesme bağlamındaki
+/// gerçek üreticiler test sonucunu etkilemez. Doğrulananlar: FIFO sırası,
+/// `len`/`is_empty`, kuyruk dolu olduğunda `push` davranışı ve her olay
+/// türünün (klavye, fare hareketi/tekerleği, dokunma) geri okunması.
+pub fn self_test() -> bool {
+    let queue = InputQueue::new();
+    let cases = [
+        InputEvent::KeyPress(0x1E),
+        InputEvent::KeyRelease(0x1E),
+        InputEvent::MouseMove {
+            dx: 12,
+            dy: -3,
+            buttons: 0b001,
+        },
+        InputEvent::MouseWheel(1),
+        InputEvent::TouchDown { x: 100, y: 200 },
+        InputEvent::TouchMove { dx: 4, dy: 5 },
+        InputEvent::TouchUp,
+        InputEvent::UsbHotplug {
+            connect: true,
+            kind: 1,
+            port: 2,
+        },
+    ];
+
+    for &event in cases.iter() {
+        if queue.push(event).is_some() {
+            return false;
+        }
+    }
+    if queue.len() != cases.len() || queue.is_empty() {
+        return false;
+    }
+    for &expected in cases.iter() {
+        match queue.pop() {
+            Some(actual) if actual == expected => {}
+            _ => return false,
+        }
+    }
+    if !queue.is_empty() {
+        return false;
+    }
+
+    // Dolu kuyruk davranışı: halka tamponu `INPUT_QUEUE_CAP - 1` olay tutar
+    // (dolu/boş ayrımı için bir yuva boş bırakılır); fazlası `Some(event)` döner.
+    for index in 0..(INPUT_QUEUE_CAP - 1) {
+        let wheel = (index % 127) as i8;
+        if queue.push(InputEvent::MouseWheel(wheel)).is_some() {
+            return false;
+        }
+    }
+    if queue.len() != INPUT_QUEUE_CAP - 1 {
+        return false;
+    }
+    if queue.push(InputEvent::TouchUp).is_none() {
+        return false;
+    }
+    true
+}
+
 /// The global input queue. Drivers push to it; the event loop drains it.
 pub static INPUT_QUEUE: InputQueue = InputQueue::new();
 

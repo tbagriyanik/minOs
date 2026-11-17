@@ -436,7 +436,12 @@ unsafe fn mmio_write32(off: u32, val: u32) {
 }
 
 pub fn is_ready() -> bool {
-    E1000_READY.load(Ordering::Relaxed)
+    if E1000_READY.load(Ordering::Relaxed) {
+        return true;
+    }
+    // PCI taraması kart bulamadığında NE2000 (ISA/PnP) sürücüsü devreye
+    // girebilir; `transmit`/`receive`/`poll` bu durumda NE2000'ye yönlenir.
+    net::active_bus() == BusKind::IsaPnp && crate::drivers::ne2000::is_ready()
 }
 
 /// Reports physical Ethernet link state.

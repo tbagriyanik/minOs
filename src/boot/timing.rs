@@ -121,6 +121,41 @@ pub fn report_total() {
     }
 }
 
+/// Basit bir geçiş-süreölçer (stopwatch). Uygulama başlangıç süresi gibi
+/// kod parçalarının çalışma süresini ölçmek için kullanılabilir.
+///
+/// `new()` ile oluşturulduğundan itibaren geçen milisaniyeyi `elapsed_ms()`
+/// döndürür. Seri konsola yazı yazmaz; çağrıcı sonuç istediği şekilde
+/// raporlayabilir (ör. GUI üzerinden veya `MEM-PROFILE` ile birlikte).
+pub struct Stopwatch {
+    start_ms: u64,
+}
+
+impl Stopwatch {
+    /// Yeni bir süreölçer başlatır.
+    pub fn new() -> Self {
+        Self {
+            start_ms: monotonic_ms(),
+        }
+    }
+
+    /// Oluşturulmasından bu yana geçen süre (ms).
+    pub fn elapsed_ms(&self) -> u64 {
+        monotonic_ms().saturating_sub(self.start_ms)
+    }
+
+    /// ÖLçümü sıfırlar ve yeniden başlatır.
+    pub fn restart(&mut self) {
+        self.start_ms = monotonic_ms();
+    }
+}
+
+impl Default for Stopwatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn monotonic_ms() -> u64 {
     crate::boot::time::monotonic_ms()
 }

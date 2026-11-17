@@ -163,9 +163,9 @@ mode.
 ### 5.3 Network Security
 **Problem**: HTTP/TLS without certificate validation by default.
 **Solution**:
-- Enforce certificate verification
-- Add HSTS support
-- Implement secure defaults
+- Enforce certificate verification — **Done**: `drivers::http::fetch_once`, the proxy/CONNECT path (`fetch_https`), the IPv6 dual-stack path, and `drivers::http2::Http2Connection::connect` now abort with the new `E_CERT` error when the server certificate is not verified against the embedded root CA store (`drivers/crypto/roots`, e.g. ISRG Root X1, DigiCert, GlobalSign, etc.). Host tests cover `verify_certificate_chain` trust-store behavior and TLS-level rejection of an unverified server certificate (`tests/host_driver_tests.rs`).
+- Add HSTS support — **Done**: `http_hsts_note` / `http_hsts_should_use_https` cache `Strict-Transport-Security: max-age` per host; `http://` URLs to HSTS hosts are upgraded to `https://` automatically (RFC 6797).
+- Implement secure defaults — HTTPS is the default transport for `https://` URLs; certificate verification failure closes the connection before any application data is sent.
 
 ---
 
@@ -174,7 +174,7 @@ mode.
 ### 6.1 Unit Tests
 - **Done (host suite)**: `tests/host_tests.rs` + `test_host.ps1` run ~300
   host-side unit tests covering allocator, VFS/fs (ext4/exfat), crypto,
-  TLS, JS engine, widgets/themes readability, drivers' pure logic.
+  TLS, JS engine, widgets/themes readability, drivers' pure logic (319 tests).
 - Remaining: in-kernel test coverage beyond boot self-tests, fuzzing.
 
 ### 6.2 Integration Tests
@@ -213,7 +213,7 @@ mode.
 
 ### 8.2 CI Pipeline
 - rustfmt/clippy checks — `cargo fmt` + `cargo clippy` run clean locally
-- Unit tests on host target — `test_host.ps1` (295+ tests passing)
+- Unit tests on host target — `test_host.ps1` (319 tests passing)
 - QEMU integration tests — `test_qemu.ps1`, `boot_check.ps1`
 - Binary size tracking
 
@@ -299,6 +299,18 @@ Notes:
 - **24h soak harness**: `test_stress_24h.ps1` — configurable-duration QEMU
   run with TCP-chardev serial capture, panic/exception/triple-fault/QEMU-exit
   auto-detection and `target/stress_report.txt` reporting.
+
+## 10. UI Polish & Accessibility (P3)
+
+Low-priority polish items tracked here; they do not block releases.
+
+| # | Item | Priority | Status |
+| :- | :--- | :- | :- |
+| 10.1 | UI tema ve erişilebilirlik testlerini artır | P3 | Todo — kontrast (WCAG AA/AAA), palet geçerliliği ve tema değiştirme testleri eklenecek (`tests/host_tests.rs` üzerinden `gui::theme`) |
+| 10.2 | Türkçe karakter ve font fallback testlerini otomatikleştir | P3 | Todo — `ğ, ü, ş, İ, ı, ö, ç` karakterleri ve yedek font tier'ları için `font_render.rs` testleri eklenecek |
+| 10.3 | Uygulama açılış süreleri ve bellek kullanımını ölç | P3 | Kısmi — `src/boot/timing.rs` `Stopwatch` eklendi (uygulama başlangıç süresi ölçümü); bellek ölçümü mevcut `MEM-PROFILE`/heap takibiyle |
+| 10.4 | Açılış, kapanış ve hata ekranlarını görsel olarak iyileştir | P3 | Todo — `src/gui/screens.rs` ekranları geliştirilecek |
+| 10.5 | Sürüm notlarında başarısız veya deneysel özellikleri açıkça işaretle | P3 | Todo — `docs/releases.md` deneysel/başarısız özellik etiketleri eklenecek |
 
 ## Success Metrics
 - Boot time < 3s kernel-side (currently ~3.5s to desktop-ready; welcome

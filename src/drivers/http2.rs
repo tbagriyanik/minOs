@@ -1291,6 +1291,19 @@ impl Http2Connection {
                             }
                         }
 
+                        // Sunucu sertifikasi gomulu kok CA'lara karsiyla dogrulanmamis
+                        // ise HTTPS baglantisi reddedilir (gidisimli / MITM engeli).
+                        if !session.is_cert_verified() {
+                            let err_txt = session
+                                .cert_error()
+                                .map(|e| alloc::format!("{:?}", e))
+                                .unwrap_or_else(|| "bilinmeyen hata".to_string());
+                            crate::serial_print(&alloc::format!(
+                                "[HTTPS] {host}: sertifika doğrulama başarısız: {err_txt}\n"
+                            ));
+                            return Err(super::http::E_CERT);
+                        }
+
                         // TLS session'ı sakla — istek gönderilirken şifreleme için kullanılacak.
                         Ok(Some(session))
                     };

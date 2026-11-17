@@ -3,8 +3,9 @@
 This file contains the detailed change lists for minOs releases.
 The README files only summarise the highlights; the full list lives here.
 
-## Current · v2.4.0
+## Current · v2.5.0
 
+- Process lifecycle test (`[PROC-TEST]`) updated for `SYS_ALLOC_FRAME` being disabled as a ring-3 security boundary (now returns `u64::MAX`): invalid syscall + NULL buffer + ownership limits, COW fork sharing/split, old-image and resource teardown after `exec`, wake of a blocked `wait` on child exit, and `SYS_FORK` error-path resource return are verified. A false-positive success pattern in `test_qemu.ps1` was fixed.
 - Watchdog frozen-app detection moved to the APIC timer interrupt (`watchdog::timer_tick()`); interrupt context uses a short `try_lock`-guarded section and termination is deferred to the main loop via `drain_frozen()`.
 - FPS 3D Game (app ID 16) reports real `fps`/`min_fps`/`frame_ms` metrics from completed frames (`[FPS3D-METRICS]`); launch is verified via the `[FPS3D] Uygulama açıldı` marker.
 - The FPS game has start and result menus, with options to restart or exit after a game ends.
@@ -13,7 +14,7 @@ The README files only summarise the highlights; the full list lives here.
 - On `RENDER_BUDGET_MS` expiry, half-drawn framebuffer content is no longer visible; the FPS 3D content region is backed up and restored when the render does not complete.
 - `TimeBudget` gained an injectable test clock and deterministic timeout tests.
 - TLS/X.509 chain validation is stricter: validity dates and CA BasicConstraints/pathLen are checked for every non-anchor chain certificate; CA `keyCertSign` and leaf KeyUsage/EKU extensions are enforced when present. Unknown critical extensions are rejected. The test-only validation bypass was removed; valid RSA/ECDSA handshakes and invalid intermediate CA cases are covered.
-- The host test suite contains 295 tests (295 passed / 0 failed).
+- The host test suite contains 319 tests (319 passed / 0 failed).
 - Double-clicking a WAV file plays the selected file directly in Music Player.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.

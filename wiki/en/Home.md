@@ -1,6 +1,6 @@
 # minOs Wiki – Welcome
 
-minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
+minOs (Sarman Edition) v2.5.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
 
 > 📄 **Project:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Language:** [English](/)| [Türkçe](../tr/)
@@ -23,13 +23,13 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 
 ---
 
-## Status Summary (v2.4.0)
+## Status Summary (v2.5.0)
 
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Raw Rust Lines** | 159,881 lines (`src/` + `tests/` + `build.rs`) |
-| **Unit Tests** | 295 passed / 0 failed |
+| **Total Raw Rust Lines** | 161,768 lines (`src/` + `tests/` + `build.rs`) |
+| **Unit Tests** | 319 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |

@@ -17,6 +17,8 @@ pub const E_URL: i32 = 1001;
 pub const E_TLS: i32 = 1002;
 pub const E_HTTP: i32 = 1003;
 pub const E_REDIRECT: i32 = 1004;
+/// Sunucu sertifikasi gomulu kok CA'lara karsiyla dogrulanamadi.
+pub const E_CERT: i32 = 1005;
 
 pub const MAX_REDIRECTS: usize = 3;
 pub const MAX_HOST: usize = 96;
@@ -167,6 +169,125 @@ static mut CONNECTION_POOL: Option<ConnectionPool> = None;
 
 fn connection_pool() -> &'static mut ConnectionPool {
     unsafe { CONNECTION_POOL.get_or_insert_with(ConnectionPool::new) }
+}
+
+// ---------------------------------------------------------------------------
+// HSTS (HTTP Strict Transport Security) önbelleği
+// ---------------------------------------------------------------------------
+/// Bir sunucu `Strict-Transport-Security` başlığıyla "ben sadece HTTPS"
+/// bildirdiginde bu önbellekte kaydedilir; sonraki http:// istekleri
+/// otomatik olarak https://'e yukseltilir.
+struct HstsEntry {
+    host: [u8; 64],
+    host_len: usize,
+    expiry_ms: u64,
+}
+
+static mut HSTS_CACHE: [Option<HstsEntry>; 16] = [const { None }; 16];
+
+/// `Strict-Transport-Security: max-age=<sn>` basligindan HSTS kaydi olusturur/gunceller.
+pub fn http_hsts_note(host: &[u8], max_age_secs: u64) {
+    let now = crate::monotonic_ms();
+    let expiry = now.saturating_add(max_age_secs.saturating_mul(1000));
+    let host_len = host.len().min(64);
+    unsafe {
+        // Ayni host varsa suresini uzat.
+        for entry in HSTS_CACHE.iter_mut().flatten() {
+            if entry.host_len == host_len && entry.host[..host_len] == host[..host_len] {
+                entry.expiry_ms = expiry;
+                return;
+            }
+        }
+        // Bos slot ara.
+        for entry in HSTS_CACHE.iter_mut() {
+            if entry.is_none() {
+                let mut e = HstsEntry {
+                    host: [0; 64],
+                    host_len: 0,
+                    expiry_ms: 0,
+                };
+                e.host[..host_len].copy_from_slice(&host[..host_len]);
+                e.host_len = host_len;
+                e.expiry_ms = expiry;
+                *entry = Some(e);
+                return;
+            }
+        }
+        // Tümü dolu: en erken expire olanin degistir.
+        let mut oldest_idx = 0;
+        let mut oldest_time = u64::MAX;
+        for (i, entry) in HSTS_CACHE.iter().enumerate() {
+            if let Some(ref e) = entry {
+                if e.expiry_ms < oldest_time {
+                    oldest_time = e.expiry_ms;
+                    oldest_idx = i;
+                }
+            }
+        }
+        if HSTS_CACHE[oldest_idx]
+            .as_ref()
+            .is_none_or(|e| e.expiry_ms <= now)
+        {
+            let mut e = HstsEntry {
+                host: [0; 64],
+                host_len: 0,
+                expiry_ms: 0,
+            };
+            e.host[..host_len].copy_from_slice(&host[..host_len]);
+            e.host_len = host_len;
+            e.expiry_ms = expiry;
+            HSTS_CACHE[oldest_idx] = Some(e);
+        }
+    }
+}
+
+/// `host` icin HSTS aktif ve suresi dolmamis ise true dondurur.
+pub fn http_hsts_should_use_https(host: &[u8]) -> bool {
+    let now = crate::monotonic_ms();
+    unsafe {
+        for entry in HSTS_CACHE.iter().flatten() {
+            if entry.host_len == host.len()
+                && entry.host[..host.len()] == host[..]
+                && entry.expiry_ms > now
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `Strict-Transport-Security: max-age=<sn>` basligindan max-age degerini ceker.
+fn hsts_max_age(headers: &[u8]) -> Option<u64> {
+    let raw = header_value(headers, b"strict-transport-security")?;
+    let s = core::str::from_utf8(raw).ok()?;
+    let mut max_age: Option<u64> = None;
+    for part in s.split(';') {
+        let part = part.trim();
+        if let Some(rest) = part.strip_prefix("max-age=") {
+            max_age = rest.trim().parse::<u64>().ok();
+        }
+    }
+    max_age
+}
+
+/// TLS el sıkışması tamamlandıktan sonra sunucu sertifikasının gömülü
+/// kök CA deposu (`drivers/crypto/roots`) ile doğrulanmış olduğundan emin olur.
+/// Doğrulama başarısız olursa HTTPS isteği `E_CERT` ile reddedilir (gidişimli /
+/// MITM bağlantıları engellenir).
+fn require_cert_verified(session: &TlsSession, host: &[u8]) -> Result<(), i32> {
+    if !session.is_cert_verified() {
+        let host_str = core::str::from_utf8(host).unwrap_or("");
+        let err_txt = session
+            .cert_error()
+            .map(|e| format!("{:?}", e))
+            .unwrap_or_else(|| "bilinmeyen hata".to_string());
+        crate::serial_print(&format!(
+            "[HTTPS] {host_str}: sertifika doğrulama başarısız: {err_txt}\n"
+        ));
+        return Err(E_CERT);
+    }
+    Ok(())
 }
 
 /// Proxy-Authorization başlığı oluşturur (Basic auth).
@@ -700,6 +821,10 @@ pub fn fetch_once(
                         }
                     }
 
+                    // Sunucu sertifikasi gomulu kok CA'lara karsiyla dogrulanmamis
+                    // ise HTTPS istegi reddedilir (gidisimli / MITM engeli).
+                    require_cert_verified(&session, host)?;
+
                     // ALPN sonucuna göre protokol yığını seç.
                     // Eğer sunucu h2 protokolünü seçerse, bağlantı HTTP/2 üzerinden devam eder;
                     // aksi takdirde klasik HTTP/1.1 isteği gönderilir.
@@ -1010,6 +1135,10 @@ fn fetch_https(
         }
     }
 
+    // Sunucu sertifikasi gomulu kok CA'lara karsiyla dogrulanmamis
+    // ise HTTPS istegi reddedilir (gidisimli / MITM engeli).
+    require_cert_verified(&session, host)?;
+
     // Şifreli HTTP isteğini gönder.
     let record = session.encrypt_app_data(&req[..reqlen]).ok_or(E_TLS)?;
     socket::send(fd, &record).map_err(|_| E_TLS)?;
@@ -1140,6 +1269,14 @@ pub(crate) fn http_get_impl(
         let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
         let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
 
+        // HSTS: daha önce Strict-Transport-Security basligi ile HTTPS-only
+        // bildirilen bir host'a gelen http:// istekleri otomatik olarak
+        // https://'e yukseltilir (RFC 6797).
+        if !is_https && http_hsts_should_use_https(&host[..host_len]) {
+            is_https = true;
+            port = 443;
+        }
+
         // IPv6 (AAAA) öncelikli, IPv4 (A) fallback — dual-stack destek.
         // Sonuç bir kez çözülür; çift DNS sorgusu engellenir.
         let v6_addr = socket::resolve_host_aaaa(host_str).ok();
@@ -1242,6 +1379,10 @@ pub(crate) fn http_get_impl(
                             }
                         }
 
+                        // Sunucu sertifikasi gomulu kok CA'lara karsiyla dogrulanmamis
+                        // ise HTTPS istegi reddedilir (gidisimli / MITM engeli).
+                        require_cert_verified(&session, &host[..host_len])?;
+
                         let mut req = [0u8; 768];
                         let reqlen = build_request_with_headers(
                             &mut req,
@@ -1301,6 +1442,10 @@ pub(crate) fn http_get_impl(
 
                 match v6_result {
                     Ok((status, hlen, total)) => {
+                        // Sunucu HSTS bildirdiyse sonraki http:// istekleri https://'e yonlendirilir.
+                        if let Some(max_age) = hsts_max_age(&resp_buf[..hlen]) {
+                            http_hsts_note(&host[..host_len], max_age);
+                        }
                         // IPv6 yanıtı: chunked çözüm ve redirect kontrolü (basit, döngüye devam et)
                         if (300..400).contains(&status) && hops < MAX_REDIRECTS {
                             let headers = &resp_buf[..hlen];
@@ -1369,6 +1514,10 @@ pub(crate) fn http_get_impl(
             cache_headers,
             &config,
         )?;
+        // Sunucu HSTS bildirdiyse sonraki http:// istekleri https://'e yonlendirilir.
+        if let Some(max_age) = hsts_max_age(&resp_buf[..hlen]) {
+            http_hsts_note(&host[..host_len], max_age);
+        }
         if (300..400).contains(&status) && hops < MAX_REDIRECTS {
             let headers = &resp_buf[..hlen];
             if let Some(loc) = header_value(headers, b"location") {

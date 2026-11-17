@@ -58,6 +58,9 @@ pub mod timefmt;
 #[path = "../src/gui/theme.rs"]
 pub mod theme;
 
+#[path = "../src/gui/font_render.rs"]
+pub mod font_render;
+
 #[path = "../src/drivers/rtc.rs"]
 pub mod rtc;
 
@@ -227,6 +230,22 @@ pub mod drivers {
     }
     pub mod video {
         pub static mut PANIC_FB_ADDR: usize = 0;
+
+        /// `font_render.rs`'deki `draw`/`blit_glyph` imzalarında kullanılan
+        /// minimal `Framebuffer` yurdu; font_render testleri bu yöntemi
+        /// çağırmıyor, sadece türün çözümlenmesi gerekir.
+        pub struct Framebuffer;
+
+        impl Framebuffer {
+            pub fn put_subpixel_text(
+                &mut self,
+                _x: usize,
+                _y: usize,
+                _color: u32,
+                _alpha: [u8; 3],
+            ) {
+            }
+        }
     }
     pub mod bluetooth {
         pub use crate::bluetooth_mod::*;

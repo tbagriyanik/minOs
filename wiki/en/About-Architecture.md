@@ -1,6 +1,6 @@
 # About & Architecture
 
-minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS (Legacy) environments.
+minOs (Sarman Edition) v2.5.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS (Legacy) environments.
 
 ---
 

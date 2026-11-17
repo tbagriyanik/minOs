@@ -2,12 +2,12 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-17 17:59:12 UTC |
+| Zaman | 2026-11-17 18:57:36 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |
-| VGA | vmware |
-| USB HID / PS/2 | açık / devre dışı |
+| VGA | virtio |
+| USB HID / PS/2 | kapalı / açık |
 | HDA WAV çıktısı | 0 bayt PCM / dosya 44 bayt |
 
 ## Kontroller
@@ -34,9 +34,9 @@
 | Ring3 Syscall Return | ✅ GEÇTİ | getpid sistem cagrisi ve Ring 3'ten Ring 0'a EXIT donusu |
 | Ring3 Kernel Memory Denial | ✅ GEÇTİ | Kullanici modundan cekirdek bellegi okuma girisiminin engellenmesi |
 | Ring3 Stack Guard Fault | ✅ GEÇTİ | Kullanici yigin guard sayfasi tasmasinin yakalanmasi |
-| Process Fork Exec Wait | ❌ BAŞARISIZ | Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi |
+| Process Fork Exec Wait | ✅ GEÇTİ | Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi |
 | Kullanici Heap ve Mmap (brk/mmap) | ✅ GEÇTİ | brk buyut/kucult, mmap/munmap, MEMINFO (R10 ABI) ve sizintisiz iade |
-| Dosya Taniticisi Yasam Dongusu | ❌ BAŞARISIZ | open/read/lseek/close, nesne referans sayimi, fork devralma, exec sifirlama ve fd kotasi |
+| Dosya Taniticisi Yasam Dongusu | ✅ GEÇTİ | open/read/lseek/close, nesne referans sayimi, fork devralma, exec sifirlama ve fd kotasi |
 | Surec Kaynak Limitleri | ❌ BAŞARISIZ | RESINFO raporu, heap/mmap/fd/cerceve kotasi ve fork ile limit mirasi |
 | Copy-on-Write (Ring3 yazma hatasi) | ✅ GEÇTİ | Fork sonrasi #PF ile COW kopyasi; cocuk yazari ebeveyne sizmaz |
 | ASLR (yigin + mmap tabani) | ✅ GEÇTİ | Ring3 yigin ustu her demo/surecte rastgele kaydirilir; mmap tabani ASLR |
@@ -45,11 +45,6 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
-| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi |
-| USB HID Etkin Girdi Yolu | ✅ GEÇTİ | Masaustu girdisi USB HID surucusune baglandi |
-| PS/2 Devre Disi (i8042 yok) | ✅ GEÇTİ | Girdi yalnizca USB HID uzerinden geliyor |
-| USB Klavye Raporu (QMP enjeksiyonu) | ❌ BAŞARISIZ | QMP 'a' tusu xHCI HID raporu olarak islendi |
-| USB Fare Raporu (QMP enjeksiyonu) | ❌ BAŞARISIZ | QMP fare hareketi/tiki xHCI HID raporu olarak islendi |
 | Gerçek Ses Çıkışı (Intel HDA / WAV) | ✅ GEÇTİ | 48 kHz DMA akışı ve WAV dosyası |
 | Masaüstü Olay Döngüsü | ❌ BAŞARISIZ | Ana etkileşim döngüsüne giriş |
 

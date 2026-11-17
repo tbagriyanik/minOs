@@ -3,8 +3,9 @@
 Bu dosya minOs sürümlerinin ayrıntılı değişiklik listelerini içerir.
 README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradadır.
 
-## Güncel · v2.4.0
+## Güncel · v2.5.0
 
+- Süreç yaşam döngüsü testi (`[PROC-TEST]`), `SYS_ALLOC_FRAME` çağrısının ring-3 güvenlik sınırı olarak devre dışı bırakılmasına (artık `u64::MAX` döner) göre güncellendi: geçersiz syscall + NULL tampon + sahiplik sınırları, COW fork paylaşımı/split, exec sonrası eski imaj ve kaynakların temizlenmesi, bloklanan `wait`'in çocuk çıkışıyla uyanması ve `SYS_FORK` hata yolunda kaynak iadesi doğrulanır. `test_qemu.ps1` içindeki yanlış-pozitif başarı kalıbı düzeltildi.
 - Watchdog donmuş uygulama tespiti APIC zamanlayıcı kesmesine taşındı (`watchdog::timer_tick()`); kesme bağlamında `try_lock` korumalı kısa kritik bölüm çalışır, sonlandırma ana döngüde `drain_frozen()` ile ertelenir.
 - FPS 3D Oyun (app ID 16) tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` metrikleri üretir (`[FPS3D-METRICS]`); açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
 - FPS Oyunu başlangıç ve sonuç menüleri sunar; oyun tamamlandığında menüden yeniden başlatma veya çıkış yapılabilir.
@@ -13,7 +14,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp tamamlanmazsa geri yüklenir.
 - `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi.
 - TLS/X.509 sertifika zinciri doğrulaması sıkılaştırıldı: güvenilmeyen zincir sertifikalarının tarihleri ve CA BasicConstraints/pathLen kısıtları; varsa CA `keyCertSign` ve yaprak KeyUsage/EKU uzantıları denetlenir. Bilinmeyen kritik uzantılar reddedilir. Host TLS testlerinde doğrulama kestirmesi kaldırıldı; geçerli RSA/ECDSA el sıkışmaları ile geçersiz ara CA senaryoları doğrulanır.
-- Host test paketi 295 test içerir (295 geçti / 0 hata).
+- Host test paketi 319 test içerir (319 geçti / 0 hata).
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

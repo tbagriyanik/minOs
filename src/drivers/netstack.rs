@@ -342,7 +342,7 @@ fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
         Some(m) => m,
         None => {
             // ARP request gönder
-            send_arp_request(next_hop);
+            let _ = send_arp_request(next_hop);
             // QEMU SLIRP'in yanıt vermesi için kartı yokla (poll)
             let mut resolved = None;
             for _ in 0..10_000 {
@@ -415,7 +415,7 @@ fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
 // ARP paket işleme
 // ---------------------------------------------------------------------------
 
-fn send_arp_request(target: Ipv4Address) {
+fn send_arp_request(target: Ipv4Address) -> bool {
     // ARP paketi: 28 byte
     let mut arp = [0u8; 28];
     arp[0..2].copy_from_slice(&1u16.to_be_bytes()); // hardware ethernet
@@ -431,7 +431,7 @@ fn send_arp_request(target: Ipv4Address) {
 
     let mut frame = [0u8; 1514];
     let len = build_ethernet(MAC_BROADCAST, ETHERTYPE_ARP, &arp, &mut frame);
-    e1000::transmit(&frame[..len]);
+    e1000::transmit(&frame[..len])
 }
 
 fn handle_arp(payload: &[u8]) {
@@ -1493,7 +1493,7 @@ pub fn init() {
     arp_insert(GATEWAY_IP, MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02]));
     arp_insert(DNS_SERVER, MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x03]));
     // Canlı ARP güncellemesi için gateway'e request gönder
-    send_arp_request(GATEWAY_IP);
+    let _ = send_arp_request(GATEWAY_IP);
 }
 
 /// e1000 ağ kartı ve TCP/IP yığını için self-test çalıştırır ve seri porta raporlar.
@@ -1517,9 +1517,17 @@ pub fn run_network_self_test() -> bool {
     unsafe {
         LAST_ARP_REPLY_SRC = None;
     }
-    crate::serial_print("[NET-TEST] 1. ARP: Gateway (10.0.2.2) icin ARP istegi gönderiliyor... ");
-    send_arp_request(GATEWAY_IP);
-    crate::serial_print("TX iletildi.\n");
+    // Tek `serial_print` çağrısıyla yazılır: sürücü hatları paralel
+    // çalıştığından ayrı çağrılar araya başka satırlar girebilir ve
+    // "TX iletildi" kalıbı satır ortasında bölünebilirdi.
+    let arp_tx_ok = send_arp_request(GATEWAY_IP);
+    if arp_tx_ok {
+        crate::serial_print("[NET-TEST] 1. ARP: Gateway (10.0.2.2) icin ARP istegi TX iletildi.\n");
+    } else {
+        crate::serial_print(
+            "[NET-TEST] 1. ARP: Gateway (10.0.2.2) icin ARP istegi TX iletilemedi (halka dolu veya kart hazır değil).\n",
+        );
+    }
 
     let mut arp_replied = false;
     for _ in 0..2_000 {
@@ -1888,7 +1896,7 @@ fn handle_dhcp(src: Ipv4Address, data: &[u8]) {
             ACTIVE_SUBNET_MASK = mask;
             DHCP_READY = true;
         }
-        send_arp_request(router);
+        let _ = send_arp_request(router);
     }
 }
 

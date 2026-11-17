@@ -244,6 +244,12 @@ $lastReportLength = 0
 $lastHeartbeat = [System.DateTime]::UtcNow
 $heartbeatMinutes = 15
 
+# Bellek sizintisi izlemi: cekirdek her 64 scheduler diliminde bir
+# `[SCHED-STAT] ... free_kb=N` satiri basar. Ornekler toplanir ve raporda
+# ilk/son/min/max olarak ozetlenir.
+$schedFreeKb = New-Object System.Collections.Generic.List[long]
+$schedFreeRegex = [regex]'\[SCHED-STAT\][^\r\n]*?free_kb=(\d+)'
+
 # --- Masaustune bekleme ------------------------------------------------------
 Write-Host "[3/4] Masaustune ulasiliyor..." -ForegroundColor Yellow
 $bootDeadline = [System.DateTime]::UtcNow.AddSeconds(180)
@@ -327,6 +333,9 @@ try {
                 $panicTimestamp = [System.DateTime]::UtcNow
                 break
             }
+            foreach ($mm in $schedFreeRegex.Matches($newText)) {
+                $schedFreeKb.Add([long]$mm.Groups[1].Value)
+            }
         }
 
         # Periyodik kalp atisi: ilerleme + son gorulen onemli isaretler.
@@ -385,11 +394,34 @@ if ($panicDetected) {
     $report += "Imza     : $panicSignature"
     if ($panicTimestamp) { $report += "Zaman    : $($panicTimestamp.ToString('yyyy-MM-dd HH:mm:ss'))" }
 }
+
+# Bellek egilimi ozeti (SCHED-STAT free_kb ornekleri)
+if ($schedFreeKb.Count -gt 0) {
+    $freeFirst = $schedFreeKb[0]
+    $freeLast = $schedFreeKb[$schedFreeKb.Count - 1]
+    $freeMin = ($schedFreeKb | Measure-Object -Minimum).Minimum
+    $freeMax = ($schedFreeKb | Measure-Object -Maximum).Maximum
+    $report += ""
+    $report += "--- Bellek Egitimi (SCHED-STAT free_kb) ---"
+    $report += ("Ornek sayisi : {0}" -f $schedFreeKb.Count)
+    $report += ("Ilk free_kb  : {0}" -f $freeFirst)
+    $report += ("Son free_kb  : {0}" -f $freeLast)
+    $report += ("Min free_kb  : {0}" -f $freeMin)
+    $report += ("Max free_kb  : {0}" -f $freeMax)
+    if ($freeLast -lt [math]::Floor($freeFirst * 0.5)) {
+        $report += "UYARI       : free_kb belirgin dustu; bellek sizintisi suphesi."
+    }
+}
+
 $report += ""
 $report += "--- Son 60 seri satiri ---"
 $report += $tailLines
 
 $report | Set-Content -Path $ReportPath -Encoding utf8
+
+# Tam seri akisini artifact/analiz icin ayri dosyaya dok.
+$serialLogPath = Join-Path $targetDir "stress_serial.log"
+Set-Content -LiteralPath $serialLogPath -Value $finalOut -Encoding utf8
 
 if ($panicDetected) {
     Write-Host "`n[FAIL] PANIK TESPIT EDILDI: $panicSignature" -ForegroundColor Red

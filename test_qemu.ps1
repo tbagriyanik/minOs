@@ -359,15 +359,49 @@ while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds
 # surucusu uzerinden islenebilir; seri gunlukte rapor dokumu gorunur.
 if ($UsbHid) {
     if ($qmp) {
-        Write-Host "[BILGI] QMP ile USB fare hareketi/tik ve 'a' tusu gonderiliyor..." -ForegroundColor DarkGray
-        Send-InputEvents $qmp '[{"type":"rel","data":{"axis":"x","value":60}},{"type":"rel","data":{"axis":"y","value":40}}]'
-        Send-InputEvents $qmp '[{"type":"btn","data":{"down":true,"button":"left"}}]'
-        Start-Sleep -Milliseconds 150
-        Send-InputEvents $qmp '[{"type":"btn","data":{"down":false,"button":"left"}}]'
-        Send-InputEvents $qmp '[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"a"}}}]'
-        Start-Sleep -Milliseconds 150
-        Send-InputEvents $qmp '[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"a"}}}]'
-        Start-Sleep -Milliseconds 800
+        # Kararlılık: enjeksiyon tek seferde degil, seri gunlukte beklenen
+        # rapor kaliplari gorulene kadar (sinirli sureyle) tekrarlanir. Yavas
+        # CI konuklarinda (TCG) HID kesme aktarimi veya masaustu olay dongusu
+        # geç baslayabilir; tek atimlik enjeksiyon bu durumda yanlis
+        # basarisizlik uretirdi.
+        Write-Host "[BILGI] USB HID enumeration ve QMP girdi enjeksiyonu dogrulaniyor..." -ForegroundColor DarkGray
+
+        # Once xHCI numaralandirmasinin bittiginden emin ol.
+        $enumDeadline = [System.DateTime]::UtcNow.AddSeconds(20)
+        while ([System.DateTime]::UtcNow -lt $enumDeadline) {
+            if ((Read-Serial) -match "\[USB-HID\] (Haz.r:|bulunamad)") { break }
+            if ($proc.HasExited) { break }
+            Start-Sleep -Milliseconds 250
+        }
+
+        $hidDeadline = [System.DateTime]::UtcNow.AddSeconds(30)
+        while ([System.DateTime]::UtcNow -lt $hidDeadline) {
+            $hidOut = Read-Serial
+            $needMouse = $hidOut -notmatch "\[USB-HID\] fare raporu:"
+            $needKbd = $hidOut -notmatch "\[USB-HID\] klavye raporu:"
+            if (-not $needMouse -and -not $needKbd) { break }
+            if ($proc.HasExited) { break }
+
+            if ($needMouse) {
+                Send-InputEvents $qmp '[{"type":"rel","data":{"axis":"x","value":60}},{"type":"rel","data":{"axis":"y","value":40}}]'
+                Send-InputEvents $qmp '[{"type":"btn","data":{"down":true,"button":"left"}}]'
+                Start-Sleep -Milliseconds 120
+                Send-InputEvents $qmp '[{"type":"btn","data":{"down":false,"button":"left"}}]'
+            }
+            if ($needKbd) {
+                Send-InputEvents $qmp '[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"a"}}}]'
+                Start-Sleep -Milliseconds 120
+                Send-InputEvents $qmp '[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"a"}}}]'
+            }
+            Start-Sleep -Milliseconds 400
+        }
+
+        $hidFinal = Read-Serial
+        if ($hidFinal -match "\[USB-HID\] (klavye|fare) raporu:") {
+            Write-Host "[BILGI] USB HID raporlari seri gunlukte dogrulandi." -ForegroundColor DarkGray
+        } else {
+            Write-Host "[UYARI] USB HID raporu zaman asimi icinde gorulemedi; ilgili kontroller basarisiz sayilacak." -ForegroundColor DarkYellow
+        }
     } else {
         Write-Host "[UYARI] QMP yok; USB klavye/fare enjeksiyonu dogrulanamadi." -ForegroundColor DarkYellow
     }
@@ -711,7 +745,7 @@ $checks = @(
     },
     @{
         Name = "Process Fork Exec Wait";
-        Pattern = "\[PROC-TEST\].*fork/exec/wait yasam dongusu: BASARILI|\[PROC-TEST\] 6/7.*fork/exec/wait yasam dongusu: BASARILI|\[PROC-TEST\] Zamanlayici veya fork/exec/wait yasam dongusu: BASARISIZ";
+        Pattern = "\[PROC-TEST\][^\r\n]*fork/exec/wait yasam dongusu: BASARILI";
         Description = "Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi"
     },
     @{

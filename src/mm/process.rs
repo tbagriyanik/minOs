@@ -1167,13 +1167,8 @@ impl ProcessManager {
         // referansları fork başarıyla tamamlandığında artırılır; bu sayede
         // ebeveyn ve çocuk aynı dosyayı bağımsız olarak kapatabilirler.
         child.fds = parent.fds;
-        for entry in child.fds.iter().skip(fd::FIRST_USER_FD) {
-            if entry.used {
-                if let Some(obj) = self.files.objects.get_mut(entry.object as usize) {
-                    obj.refs = obj.refs.saturating_add(1);
-                }
-            }
-        }
+        // Nesne referansları yalnızca fork tamamen başarılı olduktan sonra
+        // (aşağıda) artırılır; erken hata yollarında sayaç şişmez.
         // Grup/oturum, CPU yakınlığı ve sinyal dağıtımı fork ile devralınır.
         child.pgid = parent.pgid;
         child.sid = parent.sid;
@@ -3069,11 +3064,35 @@ pub fn test_process_lifecycle_and_fault_recovery(
     // 3. Hatali / Gecersiz Sistem cagrisi Testi (Gecersiz Syscall No)
     let invalid_res = syscall_dispatch(9999, 0, 0, 0, proc_mgr, pmm);
     let null_ptr_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 100, 0, proc_mgr, pmm);
+    // SYS_ALLOC_FRAME artik devre disi: fiziksel cerceve adresleri ring-3'e
+    // sizmaz (guvenlik siniri). Cagri `u64::MAX` ile reddedilmeli.
+    let alloc_frame_rejected =
+        syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm) == u64::MAX;
     let caller_pid = proc_mgr.current_pid;
     proc_mgr.current_pid = pid;
-    let syscall_frame = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
-    let owned_free = syscall_dispatch(sys_nos::SYS_FREE_FRAME, syscall_frame, 0, 0, proc_mgr, pmm);
-    let owned_free_succeeded = syscall_frame != 0 && owned_free == 0;
+    // Sahiplik siniri: teste surecine ait bir kullanici cercevesi dogrudan
+    // PMM'den ayrilir, kaynak defterine islenir ve SYS_FREE_FRAME ile geri
+    // alinmasi dogrulanir. Basarili iade serbest bellegi bir sayfa artirir.
+    let owned_frame = pmm.allocate_frame();
+    let owned_free_succeeded = match owned_frame {
+        Some(frame) => {
+            let recorded = proc_mgr
+                .processes
+                .iter_mut()
+                .find(|p| p.pid == pid)
+                .is_some_and(|p| p.resources.record_user_frame(frame));
+            if !recorded {
+                pmm.free_frame(frame);
+                false
+            } else {
+                let free_before_owned = pmm.free_memory_bytes;
+                let owned_free =
+                    syscall_dispatch(sys_nos::SYS_FREE_FRAME, frame, 0, 0, proc_mgr, pmm);
+                owned_free == 0 && pmm.free_memory_bytes == free_before_owned + PAGE_SIZE
+            }
+        }
+        None => false,
+    };
     proc_mgr.current_pid = 0;
     let free_before_unowned = pmm.free_memory_bytes;
     let unowned_free = syscall_dispatch(sys_nos::SYS_FREE_FRAME, frame2, 0, 0, proc_mgr, pmm);
@@ -3082,6 +3101,7 @@ pub fn test_process_lifecycle_and_fault_recovery(
     proc_mgr.current_pid = caller_pid;
     if invalid_res == u64::MAX
         && null_ptr_write == 0
+        && alloc_frame_rejected
         && owned_free_succeeded
         && unowned_free_rejected
     {
@@ -3397,6 +3417,9 @@ pub fn test_process_lifecycle_and_fault_recovery(
                             parent.address_space.pml4_phys == root_before_exec
                         });
 
+                    let old_image_frame = proc_mgr
+                        .get_process(parent_pid)
+                        .and_then(|parent| parent.address_space.translate_user(data_address));
                     let raw_image = [0x31, 0xFF, 0xB8, 1, 0, 0, 0, 0xCD, 0x80];
                     if let Some(parent) = proc_mgr.get_process(parent_pid) {
                         if let Some(physical) = parent.address_space.translate_user(data_address) {
@@ -3428,6 +3451,15 @@ pub fn test_process_lifecycle_and_fault_recovery(
                                     .is_some()
                                 && parent.kstack_top != 0
                         });
+                    // Basarili exec eski imajin kullanici eslemelerini koparir:
+                    // eski veri sayfasi (eski adres uzayina aitti) yeni imajda
+                    // eslenmemeli. Bu, "eski imaj ve kaynaklar temizlendi"
+                    // dogrulamasidir; exec eski cerceveleri serbest birakmazsa
+                    // asagidaki siza sizinti testi yakalar.
+                    let exec_cleared_old_image = old_image_frame.is_some()
+                        && proc_mgr.get_process(parent_pid).is_some_and(|parent| {
+                            parent.address_space.translate_user(data_address) != old_image_frame
+                        });
                     proc_mgr.current_pid = 0;
                     let parent_terminated = proc_mgr.terminate(parent_pid, 0, pmm);
                     proc_mgr.reap_terminated(pmm);
@@ -3438,7 +3470,8 @@ pub fn test_process_lifecycle_and_fault_recovery(
                         && status
                         && child_reaped
                         && failed_exec
-                        && exec_ok)
+                        && exec_ok
+                        && exec_cleared_old_image)
                     {
                         crate::serial_print("[PROC-TEST] fork/exec detay: cow_shared=");
                         crate::serial::print_dec(cow_shared as u64);
@@ -3456,6 +3489,8 @@ pub fn test_process_lifecycle_and_fault_recovery(
                         crate::serial::print_dec(failed_exec as u64);
                         crate::serial_print(" exec=");
                         crate::serial::print_dec(exec_ok as u64);
+                        crate::serial_print(" exec_cleared=");
+                        crate::serial::print_dec(exec_cleared_old_image as u64);
                         crate::serial_print("\n");
                     }
                     lifecycle_ok = cow_shared
@@ -3466,6 +3501,7 @@ pub fn test_process_lifecycle_and_fault_recovery(
                         && child_reaped
                         && failed_exec
                         && exec_ok
+                        && exec_cleared_old_image
                         && parent_terminated
                         && pmm.free_memory_bytes == lifecycle_free_before
                         && crate::mm::vmm::shared_frame_count() == 0;
@@ -3483,7 +3519,18 @@ pub fn test_process_lifecycle_and_fault_recovery(
         }
     }
 
-    if sched_ok && rr_ok && lifecycle_ok {
+    // Fork hata yolu: olmayan bir ebeveyn PID ile SYS_FORK, hicbir kaynak
+    // tahsis etmeden `u64::MAX` ile reddedilmeli ve serbest bellek degismemeli.
+    // (Basarisiz fork yollari kaynak iadesini zaten geri alma adimlarinda yapar;
+    // bu kontrol, hata donusunun siza sizinti yaratmadigini dogrular.)
+    let fork_err_free_before = pmm.free_memory_bytes;
+    let saved_pid = proc_mgr.current_pid;
+    proc_mgr.current_pid = usize::MAX;
+    let fork_err = syscall_dispatch(sys_nos::SYS_FORK, 0, 0, 0, proc_mgr, pmm);
+    proc_mgr.current_pid = saved_pid;
+    let fork_err_ok = fork_err == u64::MAX && pmm.free_memory_bytes == fork_err_free_before;
+
+    if sched_ok && rr_ok && lifecycle_ok && fork_err_ok {
         crate::serial_print(
             "[PROC-TEST] 6/7. Oncelik/round-robin ve fork/exec/wait yasam dongusu: BASARILI\n",
         );

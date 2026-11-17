@@ -122,6 +122,10 @@ fn main() {
             (0x0370, 0x03FF), // Greek and Coptic
             (0x0400, 0x04FF), // Cyrillic
             (0x0500, 0x052F), // Cyrillic Supplement
+            (0x0590, 0x05FF), // Hebrew
+            (0x0600, 0x06FF), // Arabic
+            (0x0750, 0x077F), // Arabic Supplement
+            (0x08A0, 0x08FF), // Arabic Extended-A
             (0x2000, 0x206F), // General Punctuation
             (0x2070, 0x209F), // Superscripts and Subscripts
             (0x20A0, 0x20CF), // Currency Symbols
@@ -135,6 +139,8 @@ fn main() {
             (0x2600, 0x26FF), // Miscellaneous Symbols
             (0x2700, 0x27BF), // Dingbats
             (0x2B00, 0x2BFF), // Miscellaneous Symbols and Arrows
+            (0xFB1D, 0xFDFF), // Hebrew/Arabic Presentation Forms-A
+            (0xFE70, 0xFEFF), // Arabic Presentation Forms-B
             (0xFF00, 0xFFEF), // Halfwidth and Fullwidth Forms
         ];
         let mut bitmap_data = Vec::new();

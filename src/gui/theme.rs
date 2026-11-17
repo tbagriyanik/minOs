@@ -633,3 +633,135 @@ pub fn get(idx: u32) -> u32 {
         0
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests (host only; `cargo test` on the kernel target is not supported,
+// see `tests/host_tests.rs` and `test_host.ps1`)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Her temanın paletinde geçerli (sıfırdan farklı ve birbiriyle
+    /// karşılaştırılabilir) renkler olmalı; metin rengi pencere zeminine
+    /// göre en az WCAG AA (4.5:1) kontrast sunmalı.
+    #[test]
+    fn all_themes_meet_wcag_aa_text_contrast() {
+        for &id in ThemeId::ALL.iter() {
+            let p = palette(id);
+            let bg = p[IDX_WINDOW_BG as usize];
+            let fg = p[IDX_TEXT_MAIN as usize];
+            let ratio = contrast_ratio(fg, bg);
+            assert!(
+                ratio >= 4.5,
+                "{:?}: metin/zemin kontrastı {ratio:.2} (WCAG AA için 4.5:1 gerekli)",
+                id
+            );
+        }
+    }
+
+    /// Yüksek kontrast (erişilebilirlik) teması WCAG AAA (~7:1+) hedefine
+    /// ulaşmalı.
+    #[test]
+    fn high_contrast_theme_meets_wcag_aaa() {
+        let p = palette(ThemeId::HighContrast);
+        let bg = p[IDX_WINDOW_BG as usize];
+        let fg = p[IDX_TEXT_MAIN as usize];
+        assert!(
+            contrast_ratio(fg, bg) >= 7.0,
+            "HighContrast metin/zemin kontrastı {}:1 (AAA için 7:1 gerekli)",
+            contrast_ratio(fg, bg)
+        );
+    }
+
+    /// Tüm tema jetonları aktif paletten doğru RGB değeriyle çözümlenmeli.
+    #[test]
+    fn resolve_token_maps_to_active_palette() {
+        set_theme(ThemeId::Nord);
+        let p = palette(ThemeId::Nord);
+        for idx in 0..PALETTE_LEN as u32 {
+            let token = token(idx);
+            assert!(is_token(token));
+            assert_eq!(resolve(token), p[idx as usize]);
+        }
+    }
+
+    /// Jeton işaretli olmayan (literal) RGB değerleri değişmeden geçmeli.
+    #[test]
+    fn resolve_literal_rgb_passthrough() {
+        assert_eq!(resolve(0x12_34_56), 0x12_34_56);
+        assert_eq!(resolve(0x00_00_00), 0x00_00_00);
+        assert_eq!(resolve(0xFF_FF_FF), 0xFF_FF_FF);
+        assert!(!is_token(0x12_34_56));
+    }
+
+    /// Sınır dışı jeton indeksi ham değeriyle dönülmeli (palete erişilmesin).
+    #[test]
+    fn resolve_out_of_bounds_token_returns_raw() {
+        assert_eq!(resolve(token(255)), token(255));
+        assert_eq!(
+            resolve(token(PALETTE_LEN as u32)),
+            token(PALETTE_LEN as u32)
+        );
+    }
+
+    /// Tema değiştirme, mevcut tema okuma ve döngü geçişi çalışmalı.
+    #[test]
+    fn set_theme_current_and_cycle() {
+        set_theme(ThemeId::Daylight);
+        assert_eq!(current(), ThemeId::Daylight);
+        assert_eq!(
+            get(IDX_TEXT_MAIN),
+            palette(ThemeId::Daylight)[IDX_TEXT_MAIN as usize]
+        );
+
+        let mut seen = alloc::vec![];
+        let mut id = current();
+        for _ in 0..ThemeId::ALL.len() + 1 {
+            seen.push(id);
+            id = cycle();
+        }
+        assert_eq!(seen[0], ThemeId::Daylight);
+        assert_eq!(seen[ThemeId::ALL.len()], ThemeId::Daylight); // tam döngü
+        assert_eq!(seen.windows(2).all(|w| w[1] == w[0].next()), true);
+    }
+
+    /// `preview_colors` paletle tutarlı olmalı.
+    #[test]
+    fn preview_colors_match_palette() {
+        for &id in ThemeId::ALL.iter() {
+            let p = palette(id);
+            let (bg, accent) = preview_colors(id);
+            assert_eq!(bg, p[IDX_DESKTOP_BG as usize]);
+            assert_eq!(accent, p[IDX_ACCENT_BLUE as usize]);
+        }
+    }
+
+    /// Palet indeks sabitleri sırayla 0..PALETTE_LEN'yi kapsamalı.
+    #[test]
+    fn palette_index_constants_are_in_order() {
+        let indices = [
+            IDX_DESKTOP_BG,
+            IDX_WINDOW_BG,
+            IDX_TITLEBAR,
+            IDX_TITLEBAR_INACTIVE,
+            IDX_TASKBAR_BG,
+            IDX_ACCENT_BLUE,
+            IDX_ACCENT_GREEN,
+            IDX_ACCENT_RED,
+            IDX_ACCENT_YELLOW,
+            IDX_ACCENT_PINK,
+            IDX_ACCENT_CAT,
+            IDX_TEXT_MAIN,
+            IDX_TEXT_MUTED,
+            IDX_CURSOR_FILL,
+            IDX_CURSOR_OUTLINE,
+            IDX_BORDER,
+            IDX_SHADOW,
+        ];
+        assert_eq!(indices.len(), PALETTE_LEN);
+        for (i, &idx) in indices.iter().enumerate() {
+            assert_eq!(idx, i as u32);
+        }
+    }
+}

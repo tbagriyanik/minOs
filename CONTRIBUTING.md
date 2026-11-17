@@ -70,7 +70,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 
 ## 🧪 Test Süreci
 
-### Host birim testleri (295 test)
+### Host birim testleri (319 test)
 
 Kriptografi, X.509, TLS, JavaScript motoru, HTML ayrıştırıcı ve GUI metin tamponu testleri:
 
@@ -196,7 +196,7 @@ Closes #123
 
 Yeni bir issue açarken aşağıdaki bilgileri ekleyin:
 
-- minOs sürümü (örn. v2.4.0)
+- minOs sürümü (örn. v2.5.0)
 - Donanım / emülatör (QEMU, VirtualBox, fiziksel laptop)
 - Adımları tekrar edebilir şekilde açıklayın
 - Beklenen ve gerçek davranış
@@ -310,7 +310,7 @@ For `run.ps1` options see `docs/building.md` and wiki pages.
 
 ## 🧪 Test Process
 
-### Host unit tests (295 tests)
+### Host unit tests (319 tests)
 
 Cryptography, X.509, TLS, JavaScript engine, HTML parser, and GUI text buffer tests:
 
@@ -318,7 +318,7 @@ Cryptography, X.509, TLS, JavaScript engine, HTML parser, and GUI text buffer te
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Expected result: **290 passed / 0 failed**
+Expected result: **319 passed / 0 failed**
 
 ### QEMU integration test
 
@@ -436,7 +436,7 @@ Closes #123
 
 When opening a new issue, include:
 
-- minOs version (e.g. v2.4.0)
+- minOs version (e.g. v2.5.0)
 - Hardware / emulator (QEMU, VirtualBox, physical laptop)
 - Reproducible steps
 - Expected and actual behavior

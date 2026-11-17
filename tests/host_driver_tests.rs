@@ -1,8 +1,12 @@
 //! Host unit testleri: VirtIO-GPU, ACPI AML & Battery, Bluetooth HCI, USB UHCI/OHCI.
 
+use alloc::vec::Vec;
+
 use crate::drivers::acpi_battery::*;
 use crate::drivers::bluetooth::*;
+use crate::drivers::crypto::x509::{self, CertValidationError};
 use crate::drivers::netstack::*;
+use crate::drivers::tls::{self, HANDSHAKE_CERTIFICATE, TLS_RECORD_HANDSHAKE, TLS_VERSION_1_2};
 use crate::drivers::usb::*;
 use crate::drivers::virtio_gpu::*;
 
@@ -664,4 +668,181 @@ fn test_touch_report_updates_two_contacts() {
     ];
     assert!(process_report(&release, &layout));
     assert!(read_all_touches().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// TLS / X.509 sertifika doğrulama testleri (HTTPS altyapısı)
+// ---------------------------------------------------------------------------
+
+/// RFC 6125 hostname eşleştirme: birebir eşleşme, harf büyüklüğü duyarsızlık,
+/// tek seviyeli joker (`*.example.com`) ve olumsuz durumlar.
+#[test]
+fn test_match_hostname() {
+    assert!(x509::match_hostname("minos.test", "minos.test"));
+    assert!(x509::match_hostname("MINOS.TEST", "minos.test"));
+    assert!(x509::match_hostname("*.minos.test", "www.minos.test"));
+    assert!(x509::match_hostname("*.example.com", "a.example.com"));
+    assert!(!x509::match_hostname("*.minos.test", "minos.test")); // tek seviyeli joker en az bir etiket ister
+    assert!(!x509::match_hostname("*.minos.test", "a.b.minos.test")); // çok seviyeli eşleşmez
+    assert!(!x509::match_hostname("www.minos.test", "minos.test"));
+    assert!(!x509::match_hostname("", "minos.test"));
+    assert!(!x509::match_hostname("minos.test", ""));
+}
+
+/// DER kodlama yardımcıları (sadece test amaçlı; imza doğrulanmaz).
+fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len() + 6);
+    out.push(tag);
+    if body.len() < 0x80 {
+        out.push(body.len() as u8);
+    } else if body.len() < 0x100 {
+        out.push(0x81);
+        out.push(body.len() as u8);
+    } else {
+        out.push(0x82);
+        out.push((body.len() >> 8) as u8);
+        out.push(body.len() as u8);
+    }
+    out.extend_from_slice(body);
+    out
+}
+
+/// DER SEQUENCE sarmalayıcı: verilen DER parçalarını bir SEQUENCE içine sarar.
+fn der_seq(parts: &[Vec<u8>]) -> Vec<u8> {
+    let mut inner = Vec::new();
+    for p in parts {
+        inner.extend_from_slice(p);
+    }
+    der_tlv(0x30, &inner)
+}
+
+fn der_name(cn: &[u8]) -> Vec<u8> {
+    let oid_cn = &[0x55, 0x04, 0x03];
+    let atv = der_tlv(0x31, &der_seq(&[der_tlv(0x06, oid_cn), der_tlv(0x13, cn)]));
+    der_tlv(0x30, &atv)
+}
+
+/// Test RSA ortak anahtarı (TEST_N modulusu). Gerçek imza gerekmeyen
+/// yapısal ayrıştırma/test senaryoları için yeterlidir.
+fn test_rsa_spki() -> Vec<u8> {
+    const TEST_N: [u8; 64] = [
+        0xb0, 0xea, 0xe6, 0x91, 0x0f, 0xea, 0x84, 0x1c, 0x20, 0x51, 0x68, 0xa0, 0xb8, 0x35, 0x0e,
+        0xb8, 0x95, 0xfc, 0x78, 0x8d, 0xdb, 0x3e, 0x3c, 0x10, 0xc2, 0x7b, 0xa5, 0xbf, 0xf8, 0x42,
+        0x70, 0xa7, 0x1b, 0x73, 0x4b, 0xb2, 0xa9, 0xbb, 0x95, 0x6c, 0x91, 0xdf, 0xa1, 0xfa, 0xa6,
+        0xd4, 0xf2, 0xe8, 0x42, 0xe9, 0xf6, 0x6d, 0xb5, 0xb0, 0x1b, 0x99, 0xe2, 0x05, 0x81, 0xc4,
+        0x18, 0x44, 0xa2, 0xbb,
+    ];
+    let mut modulus = Vec::with_capacity(TEST_N.len() + 1);
+    modulus.push(0);
+    modulus.extend_from_slice(&TEST_N);
+    let rsa_key_body = [der_tlv(0x02, &modulus), der_tlv(0x02, &[1, 0, 1])].concat();
+    let rsa_key = der_tlv(0x30, &rsa_key_body);
+    const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+    let alg_id = der_seq(&[der_tlv(0x06, RSA_OID), der_tlv(0x05, &[])]);
+    let mut bits = vec![0];
+    bits.extend_from_slice(&rsa_key);
+    der_tlv(0x30, &[alg_id, der_tlv(0x03, &bits)].concat())
+}
+
+/// `minos.test` konulu, kendinden imzalı ama gömülü kök CA deposunda
+/// bulunmayan bir sunucu sertifikası üretir.
+fn untrusted_self_signed_cert() -> Vec<u8> {
+    const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b]; // sha256WithRSAEncryption
+    let subject_name = der_name(b"minos.test");
+    let spki = test_rsa_spki();
+    let mut tbs = Vec::new();
+    tbs.extend_from_slice(&der_tlv(0xA0, &[0x02, 0x01, 0x02])); // v3
+    tbs.extend_from_slice(&der_tlv(0x02, &[0x01])); // serialNumber
+    tbs.extend_from_slice(&der_seq(&[der_tlv(0x06, RSA_OID), der_tlv(0x05, &[])]));
+    tbs.extend_from_slice(&subject_name); // issuer = subject (kendinden imzali)
+                                          // Gecerlilik: 2025-01-01 .. 2026-01-01 (host test simge saati 2025-06-01).
+    tbs.extend_from_slice(&der_seq(&[
+        der_tlv(0x17, b"250101000000Z"),
+        der_tlv(0x17, b"260101000000Z"),
+    ]));
+    tbs.extend_from_slice(&subject_name); // subject
+    tbs.extend_from_slice(&spki); // subjectPublicKeyInfo (uzantisiz)
+    let tbs = der_tlv(0x30, &tbs);
+    der_tlv(
+        0x30,
+        &[
+            tbs,
+            der_seq(&[der_tlv(0x06, RSA_OID), der_tlv(0x05, &[])]),
+            der_tlv(0x03, &[0x00]),
+        ]
+        .concat(),
+    )
+}
+
+/// Gömülü kök CA deposu davranışı: tek kök sertifikası yaprak olarak
+/// sunulursa reddedilir (CA:TRUE), boş zincir ve derinlik sınırı zorunlu
+/// kılınır; güvenilmeyen kendinden imzalı sertifika UntrustedRoot ile reddedilir.
+#[test]
+fn test_verify_certificate_chain_trust_store() {
+    // Gömülü kök (ISRG Root X1) güvenli listesindeyse tek basamakli zincir kabul edilir.
+    assert!(x509::verify_certificate_chain(&[x509::ISRG_ROOT_X1_DER]).is_ok());
+    // Boş zincir.
+    assert_eq!(
+        x509::verify_certificate_chain(&[]),
+        Err(CertValidationError::InvalidDer)
+    );
+    // Azami zincir derinliği (6) aşılırsa (7) ChainTooDeep.
+    let cok_derin = [x509::ISRG_ROOT_X1_DER; 7];
+    assert_eq!(
+        x509::verify_certificate_chain(&cok_derin),
+        Err(CertValidationError::ChainTooDeep)
+    );
+    // Güvenilmeyen kendinden imzalı sertifika (konu eşleşse bile kök güvenli değil).
+    assert_eq!(
+        x509::verify_certificate_chain(&[untrusted_self_signed_cert().as_slice()]),
+        Err(CertValidationError::UntrustedRoot)
+    );
+}
+
+/// TLS sunucusu güvenilmeyen bir sertifika sunduğunda el sıkışması
+/// durdurulur: `is_cert_verified()` false ve `cert_error()` dolu olur.
+/// Bu, `http::fetch_once` / `http2::Http2Connection::connect` tarafından
+/// HTTPS isteğinin `E_CERT` ile reddedilmesinin temelidir.
+#[test]
+fn tls_rejects_untrusted_server_certificate() {
+    let mut session = tls::TlsSession::new("minos.test", [0u8; 32]);
+    let cert = untrusted_self_signed_cert();
+
+    // TLS 1.2 Certificate mesajı: certificate_list<3 bayt> + CertificateEntry<3 bayt uzunluk + DER>
+    let mut body = Vec::new();
+    // certificate_list<3 bayt> = tek CertificateEntry: 3 bayt sertifika uzunlugu + DER
+    let list_len = 3 + cert.len();
+    body.extend_from_slice(&[
+        (list_len >> 16) as u8,
+        ((list_len >> 8) & 0xFF) as u8,
+        (list_len & 0xFF) as u8,
+    ]);
+    body.extend_from_slice(&[
+        (cert.len() >> 16) as u8,
+        ((cert.len() >> 8) & 0xFF) as u8,
+        (cert.len() & 0xFF) as u8,
+    ]);
+    body.extend_from_slice(&cert);
+
+    let mut record = Vec::new();
+    record.push(TLS_RECORD_HANDSHAKE);
+    record.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+    record.extend_from_slice(&((4 + body.len()) as u16).to_be_bytes());
+    record.push(HANDSHAKE_CERTIFICATE);
+    record.extend_from_slice(&[
+        (body.len() >> 16) as u8,
+        ((body.len() >> 8) & 0xFF) as u8,
+        (body.len() & 0xFF) as u8,
+    ]);
+    record.extend_from_slice(&body);
+
+    session.feed_tcp_data(&record);
+    let mut hs = Vec::new();
+    let mut app = Vec::new();
+    assert!(session.process_records(&mut hs, &mut app).is_err());
+    assert_eq!(
+        session.cert_error(),
+        Some(CertValidationError::UntrustedRoot)
+    );
+    assert!(!session.is_cert_verified());
 }

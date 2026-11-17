@@ -1,8 +1,8 @@
-# minOs (v2.4.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
+# minOs (v2.5.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 
-> Son senkron: 16 Kasım 2026 — v2.4.0: TLS 1.3 PSK session resumption (1-RTT), çoklu `key_share` (X25519 + secp256r1) ve OCSP stapling fail-closed doğrulaması tamamlandı; `gzip`/`deflate`/`br` içerik kodlaması ve HTTP/2 tarayıcı entegrasyonu aktif. Önceki: 13 Kasım 2026 — Watchdog ana döngüden bağımsız, FPS 3D Oyun gerçek ölçümler üretiyor, `TimeBudget`/`OperationGuard` host testleri eklendi. TLS 1.3 (ECDHE secp256r1 + HKDF) el sıkışması tamamlandı; RFC 8446 AAD/`Finished`/`close_notify` düzeltmeleriyle `https://` bağlantıları yanıt gövdesini işleyebiliyor. X.509 zaman/hostname/zincir doğrulaması ve kök CA deposu aktiftir.
+> Son senkron: 17 Kasım 2026 — v2.5.0: TLS 1.3 PSK session resumption (1-RTT), çoklu `key_share` (X25519 + secp256r1) ve OCSP stapling fail-closed doğrulaması tamamlandı; `gzip`/`deflate`/`br` içerik kodlaması ve HTTP/2 tarayıcı entegrasyonu aktif. Önceki: 13 Kasım 2026 — Watchdog ana döngüden bağımsız, FPS 3D Oyun gerçek ölçümler üretiyor, `TimeBudget`/`OperationGuard` host testleri eklendi. TLS 1.3 (ECDHE secp256r1 + HKDF) el sıkışması tamamlandı; RFC 8446 AAD/`Finished`/`close_notify` düzeltmeleriyle `https://` bağlantıları yanıt gövdesini işleyebiliyor. X.509 zaman/hostname/zincir doğrulaması ve kök CA deposu aktiftir.
 
 ---
 

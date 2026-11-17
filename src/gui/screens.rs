@@ -545,3 +545,71 @@ pub fn render_welcome_screen(
     fb.draw_rect_outline(pointer_x, pointer_y, 5, 5, Color::BLACK);
     fb.flush();
 }
+
+/// Sistem kapanış ekranı. Güç düğmesi / "Kapat" işlemi sırasında gösterilir;
+/// `phase` basit bir döngü sağlayıcıdır (ör. kare sayısı) ve `message`
+/// geçerli kapanış adımını açıklar.
+pub fn render_shutdown_screen(
+    fb: &mut Framebuffer,
+    width: usize,
+    height: usize,
+    phase: usize,
+    message: &str,
+) {
+    fb.draw_rect(0, 0, width, height, Color::DARK_BG);
+
+    let cx = width / 2;
+
+    // Üst kapanış şeridi
+    fb.draw_rect(0, 0, width, 52, Color::ACCENT_BLUE);
+    let title = "Sistem Kapatılıyor  /  Shutting down...";
+    let title_w = MinGuiCompositor::text_width(title, 2);
+    MinGuiCompositor::draw_string_scaled(
+        fb,
+        cx.saturating_sub(title_w / 2),
+        14,
+        title,
+        Color::WHITE,
+        2,
+    );
+
+    // Bilgi kutusu
+    let box_w = 560.min(width.saturating_sub(48)).max(320);
+    let box_h = 220.min(height.saturating_sub(96)).max(160);
+    let box_x = width.saturating_sub(box_w) / 2;
+    let box_y = 52 + (height.saturating_sub(52 + box_h)) / 2;
+    fb.draw_rounded_rect(box_x, box_y, box_w, box_h, 10, Color::WINDOW_BG);
+    fb.draw_rounded_rect_outline(box_x, box_y, box_w, box_h, 10, Color::ACCENT_BLUE);
+
+    // Basit dönen imleç/spinner (ASCII, her karakter birincil Latin yüzde var).
+    const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+    let spinner = SPINNER[phase % SPINNER.len()];
+    let spin_w = MinGuiCompositor::text_width(spinner, 1);
+    MinGuiCompositor::draw_string(
+        fb,
+        cx.saturating_sub(spin_w / 2),
+        box_y + 40,
+        spinner,
+        Color::ACCENT_BLUE,
+    );
+
+    MinGuiCompositor::draw_string(fb, box_x + 24, box_y + 78, message, Color::TEXT_MAIN);
+
+    let hint = if message.is_empty() {
+        "Lütfen bekleyiniz.  /  Please wait."
+    } else {
+        ""
+    };
+    if !hint.is_empty() {
+        let hint_w = MinGuiCompositor::text_width(hint, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            cx.saturating_sub(hint_w / 2),
+            box_y + box_h - 40,
+            hint,
+            Color::TEXT_MUTED,
+        );
+    }
+
+    fb.flush();
+}

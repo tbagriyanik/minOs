@@ -37,5 +37,17 @@ Now trampolines automatically load CR3 with PCID enabled since they use `KERNEL_
 
 This allows partial redraws even with >64 dirty rects.
 
+### 5. Process Fork/Exec/Wait test - `src/mm/process.rs` (`test_process_lifecycle_and_fault_recovery`)
+**Problem**: Commit `2e8c51f` disabled `SYS_ALLOC_FRAME` (physical frame addresses must not cross into ring‑3; it now returns `u64::MAX`), but the step‑3 test still expected a real frame. `owned_free_succeeded` was therefore always false, the test returned early with `Hatalı sistem çağrısı sınır koruması: BAŞARISIZ`, and the fork/exec/wait lifecycle (step 6/7) never ran — so the `Process Fork Exec Wait` check failed.
+
+**Fix**:
+- Step 3 now asserts the new security contract: `SYS_ALLOC_FRAME` must be rejected (`== u64::MAX`); ownership is tested by recording a PMM‑allocated user frame on the process and freeing it via `SYS_FREE_FRAME` (free count must rise by exactly one page).
+- Added `exec_cleared_old_image`: after a successful `exec`, the old data page is no longer mapped (old image torn down); combined with the existing `free_memory_bytes == lifecycle_free_before` and `shared_frame_count() == 0` leak checks.
+- Added `fork_err_ok`: `SYS_FORK` with a nonexistent parent returns `u64::MAX` with no allocation / no leak.
+- Removed a false‑positive pattern in `test_qemu.ps1` (it matched the `...BASARISIZ` line as a pass).
+
+Verified with a fresh QEMU run: `[PROC-TEST] ... fork/exec/wait yasam dongusu: BASARILI` and `[OK] Process Fork Exec Wait`.
+
 ## Build Status
 `cargo build -Zjson-target-spec --target x86_64-minos.json --release` - **SUCCESS**
+`cargo clippy --release` - **SUCCESS (0 warnings)**

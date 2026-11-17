@@ -62,7 +62,7 @@ minOs'ta kriptografik ilkeller ağırlıklı olarak **elle yazılmıştır** (`s
 - **Kriptografik kod `src/drivers/crypto/` altındadır.** Bu modüldeki değişiklikler güvenlik açısından
   kritik olarak değerlendirilmelidir.
 
-## Çekirdek Güvenlik Önlemleri (v2.4.0)
+## Çekirdek Güvenlik Önlemleri (v2.5.0)
 
 | Önlem | Durum |
 | :--- | :--- |

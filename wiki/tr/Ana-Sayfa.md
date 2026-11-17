@@ -1,6 +1,6 @@
 # minOs Wiki – Hoş Geldiniz
 
-minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
+minOs (Sarman Edition) v2.5.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
 
 > 📄 **Proje:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Dil:** [English](../en/)
@@ -23,12 +23,12 @@ minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 ---
 
-## Durum Özeti (v2.4.0)
+## Durum Özeti (v2.5.0)
 
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.102.0-nightly |
-| **Toplam Kod Satırı (ham)** | 161.133 satır (Rust: `src/` 158.035 + `tests/` 2.894 + `build.rs` 204); boşlukları hariç `src/` 144.858 satır |
+| **Toplam Kod Satırı (ham)** | 161.768 satır (Rust: `src/` 158.489 + `tests/` 3.075 + `build.rs` 204); boşlukları hariç `src/` 145.286 satır |
 | **P0/P1 Tamamlanma** | 13/23 görev tamamlandı (%57) — P0 bellek-kaldırma grubu bitti |
 | **Kritik Düzeltmeler** | Fork/COW delimiter, munmap gerçek sayfa kaldırma + PT/PD/PDPT iadesi, SHARED refcount, ARP table |
 | **Güvenilen Kök CA** | 51 sertifika |

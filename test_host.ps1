@@ -24,6 +24,27 @@ Set-Location $repoRoot
 $outDir = Join-Path $repoRoot "target\host-tests"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
+# `font_render.rs` host testlerinde derleme zamanı atlas kaynağı `env!("MINOS_FONT_ATLAS_DIR")`
+# ile bulunur. Build.rs tarafından üretilen `font_atlas.rs`'ın debug out dizinini
+# bulup ortam değişkenine yazın (yoksa font_render testleri derleme hatası verir).
+$atlasBuildRoot = Join-Path $repoRoot "target\x86_64-minos\debug\build\minos-kernel"
+$atlasDir = if (Test-Path -LiteralPath $atlasBuildRoot) {
+    # Birden fazla build hash dizini bulunabilir; en yeni atlas kaynagini
+    # secmek gerekir (eski bir OUT_DIR bayat glyph listesiyle testleri
+    # yanlis basarisiz kilar).
+    Get-ChildItem -LiteralPath $atlasBuildRoot -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter "out" -Directory -ErrorAction SilentlyContinue } |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "font_atlas.rs") } |
+        Sort-Object { (Get-Item -LiteralPath (Join-Path $_.FullName "font_atlas.rs")).LastWriteTime } -Descending |
+        Select-Object -First 1 | ForEach-Object { $_.FullName }
+} else { $null }
+if ($atlasDir) {
+    $env:MINOS_FONT_ATLAS_DIR = $atlasDir
+    Write-Host "[BILGI] Font atlası dizini: $atlasDir" -ForegroundColor Cyan
+} else {
+    Write-Host "[UYARI] font_atlas.rs bulunamadı (önce `cargo build` çalıştırın); font_render testleri derlenemeyebilir." -ForegroundColor Yellow
+}
+
 $harness = Join-Path $repoRoot "tests\host_tests.rs"
 $binary  = Join-Path $outDir "host_tests.exe"
 

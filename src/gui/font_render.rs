@@ -622,4 +622,60 @@ mod tests {
         assert!(glyph_tier(Face::Inria, c(0xFEE2)).is_some());
         assert!(glyph_tier(Face::Inria, 'م').is_some());
     }
+
+    /// Türkçe karakterler (ğ, ü, ş, İ, ı, ö, ç) birincil yüzde (tier 0)
+    /// mevcut olmalı; yedek fonta düşmemelidir.
+    #[test]
+    fn turkish_characters_available_in_primary_face() {
+        for ch in ['ğ', 'ü', 'ş', 'İ', 'ı', 'ö', 'ç', 'Ğ', 'Ü', 'Ş', 'Ö', 'Ç'] {
+            assert_eq!(
+                glyph_tier(Face::Inria, ch),
+                Some(0),
+                "Türkçe karakter '{ch}' birincil yüzde (tier 0) olmalı"
+            );
+        }
+    }
+
+    /// Türkçe metin soldan sağa (LTR) korunmalı, ters çevrilmemeli.
+    #[test]
+    fn turkish_text_stays_left_to_right() {
+        assert_eq!(
+            visual_order("İstanbul'da güler yüzler"),
+            alloc::vec![
+                'İ', 's', 't', 'a', 'n', 'b', 'u', 'l', '\'', 'd', 'a', ' ', 'g', 'ü', 'l', 'e',
+                'r', ' ', 'y', 'ü', 'z', 'l', 'e', 'r'
+            ]
+        );
+    }
+
+    /// `fallback_fonts()` yedek font tier adlarını döndürmelı; boşsa
+    /// (atlas üretilemediyse) test atlanır.
+    #[test]
+    fn fallback_fonts_return_tier_names() {
+        let tiers = fallback_fonts();
+        if tiers.is_empty() {
+            return; // Yedek fontlar indirilemedi: kapsam kontrolü atlanır.
+        }
+        // Tier 1 = Noto Sans (genel Latin dışı), tier 2 = Arapça, tier 3 = İbranice.
+        assert_eq!(tiers[0], "NotoSans-Regular.ttf");
+        assert!(tiers.len() >= 2);
+        assert_eq!(tiers[1], "NotoSansArabic-Regular.ttf");
+    }
+
+    /// Latin dışı bloklar (Kiril vb.) yedek fontlardan (tier > 0) gelmeli.
+    /// Bazı derlemelerde Arapça temel harfler atlasta olmayabilir (font
+    /// `has_glyph` denetimine bağlı), bu yüzden yalnızca mevcut olanlar
+    /// denetlenir.
+    #[test]
+    fn non_latin_blocks_use_fallback_tier() {
+        let tiers = fallback_fonts();
+        if tiers.is_empty() {
+            return; // Yedek fontlar indirilemedi: kapsam kontrolü atlanır.
+        }
+        assert!(glyph_tier(Face::Inria, 'П').is_some_and(|t| t > 0));
+        assert!(glyph_tier(Face::Geist, 'ж').is_some_and(|t| t > 0));
+        if let Some(tier) = glyph_tier(Face::Inria, 'م') {
+            assert!(tier > 0, "Arapça 'م' yedek fonttan (tier > 0) gelmeli");
+        }
+    }
 }

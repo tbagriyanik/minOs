@@ -50,6 +50,8 @@ devre dışı bırakır.
 ./test_host.ps1
 ```
 
+Beklenen sonuç: **319 passed / 0 failed**.
+
 ### 2) QEMU Entegrasyon Testi — `test_qemu.ps1`
 
 `minos.iso`'yu QEMU'da başlatır ve seri günlükteki **pozitif** sürücü/başlatma

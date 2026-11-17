@@ -148,7 +148,7 @@ cargo build --release -Zjson-target-spec --target x86_64-minos.json `
 ```
 
 #### 2. Birim ve Regresyon Testlerini Çalıştırma (Host Unit Tests)
-Host ortamında kriptografi, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, dosya sistemi, bellek ve GUI testlerini içeren 295 birim testi çalıştırmak için:
+Host ortamında kriptografi, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, dosya sistemi, bellek ve GUI testlerini içeren 319 birim testi çalıştırmak için:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1

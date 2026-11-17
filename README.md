@@ -6,17 +6,17 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-161%2C133%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Version](https://img.shields.io/badge/Version-v2.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-161%2C768%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Version](https://img.shields.io/badge/Version-v2.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Çekirdek `no_std` ve `no_main` kullanır; grafik masaüstü ve yerleşik uygulamalar sunar.
 
-## Güncel bilgiler · v2.4.0
+## Güncel bilgiler · v2.5.0
 
 - Donmuş uygulamaların izlenmesi ana döngüden bağımsız çalışır; FPS 3D uygulaması gerçek kare hızı ölçümleri üretir.
 - FPS Oyunu başlangıç ve sonuç menülerini içerir; temel form kontrollerinde Tab ile gezinme, Enter ile onaylama ve Esc ile vazgeçme desteği bulunur (Hoş Geldin ekranı dahil).
 - Render bütçesi aşılırsa tamamlanmamış kare ekranda bırakılmaz.
-- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 295 test içerir.
+- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 319 test içerir.
 - `TimeBudget` ve `OperationGuard` için deterministik host testleri eklendi.
 - Dosya Yöneticisi'nden WAV dosyalarını doğrudan oynatma ve görüntüyü döşeli masaüstü arka planı yapma eklendi.
 - Ayarlar'a üç yeni masaüstü görseli eklendi.

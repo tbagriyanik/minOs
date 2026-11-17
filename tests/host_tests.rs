@@ -208,6 +208,13 @@ pub mod random {
             offset += chunk;
         }
     }
+
+    // Host harness only: deterministic stub for crypto tests. Real kernel
+    // builds use random::secure_fill_bytes(), which requires hardware entropy.
+    pub fn secure_fill_bytes(buf: &mut [u8]) -> bool {
+        fill_bytes(buf);
+        true
+    }
 }
 
 // Kaynak moduller `crate::drivers::crypto::...` yoluyla birbirine bagli

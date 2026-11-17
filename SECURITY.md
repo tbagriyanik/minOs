@@ -73,8 +73,9 @@ minOs'ta kriptografik ilkeller ağırlıklı olarak **elle yazılmıştır** (`s
 | Syscall filtreleme | `SYS_SECCOMP` (28) — süreç başına geri döndürülemez izin maskesi, yalnızca daraltma, `SYS_EXIT` muaf |
 | Sinyal işleyici | `SYS_SIGACTION` işleyici adresi kullanıcı-yürütülebilir alanla sınırlı |
 
-Bilinen kalan yüzey: kernel pointer sızıntısı için kullanıcıya açık log/teşhis
-arayüzü yoktur; `SYS_ALLOC_FRAME` fiziksel adres döndürür (test amaçlı).
+Kullanıcıya fiziksel çerçeve adresi sızmasını önlemek için `SYS_ALLOC_FRAME`
+devre dışıdır; kullanıcı belleği yalnızca sanal adres döndüren `SYS_MMAP` ve
+`SYS_BRK` üzerinden alınır.
 
 ## Güvenlik ile İlgili Olmayan Konular
 

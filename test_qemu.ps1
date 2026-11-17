@@ -153,6 +153,8 @@ $serialProbe.Stop()
 $qemuArgs = @(
     "-m", "$($memMb)M",
     "-smp", "$smpCpus",
+    # TLS testleri için RDRAND/RDSEED özelliklerini konuğa sun.
+    "-cpu", "max",
     "-cdrom", $isoPath,
     "-boot", "d",
     "-display", "none",

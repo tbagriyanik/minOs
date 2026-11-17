@@ -1197,17 +1197,13 @@ pub struct Http2Connection {
     rx_pending: Vec<u8>,
 }
 
-/// TLS el sıkışması için tekrar eden istemci rastgeleliği üretir.
-fn make_client_random() -> [u8; 32] {
+/// TLS el sıkışması için istemci rastgeleliği üretir.
+fn make_client_random() -> Result<[u8; 32], i32> {
     let mut client_random = [0u8; 32];
-    let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-    for b in client_random.iter_mut() {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+    if !crate::random::secure_fill_bytes(&mut client_random) {
+        return Err(crate::drivers::http::E_TLS);
     }
-    client_random
+    Ok(client_random)
 }
 
 impl Http2Connection {
@@ -1226,7 +1222,7 @@ impl Http2Connection {
                         if !is_https {
                             return Ok(None);
                         }
-                        let client_random = make_client_random();
+                        let client_random = make_client_random()?;
 
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];

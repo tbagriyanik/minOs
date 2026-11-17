@@ -12,7 +12,7 @@
 
 use crate::drivers::crypto::gcm::Gcm;
 use crate::drivers::crypto::hmac::{HmacSha256, HmacSha384};
-use crate::drivers::crypto::rsa::{pkcs1_v1_5_encrypt, rsa_verify_pkcs1_sha256, RsaPublicKey};
+use crate::drivers::crypto::rsa::{rsa_verify_pkcs1_sha256, RsaPublicKey};
 use crate::drivers::crypto::sha256::Sha256;
 use crate::drivers::crypto::sha384::Sha384;
 use crate::drivers::crypto::x509::{parse_x509_ec_public_key, parse_x509_rsa_public_key};
@@ -659,6 +659,76 @@ pub struct TlsSession {
     pending_ticket: Option<Vec<u8>>,
     /// Sunucunun bildirdiği `ticket_age_add` (ms).
     ticket_age_add_ms: u64,
+}
+
+/// Best-effort zeroization that the optimizer cannot remove.
+fn wipe_bytes(bytes: &mut [u8]) {
+    for byte in bytes {
+        unsafe { core::ptr::write_volatile(byte, 0) };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+impl Drop for TlsSession {
+    fn drop(&mut self) {
+        if let Some(secret) = self.pre_master_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.master_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.tls13_handshake_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.tls13_master_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.tls13_client_hs_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.tls13_server_hs_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.tls13_server_hs_key.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.client_write_key.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.server_write_key.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.resumption_master_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.client_ecdhe_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(secret) = self.client_x25519_secret.as_mut() {
+            wipe_bytes(secret);
+        }
+        if let Some(iv) = self.tls13_server_hs_iv.as_mut() {
+            wipe_bytes(iv);
+        }
+        if let Some(iv) = self.client_write_iv.as_mut() {
+            wipe_bytes(iv);
+        }
+        if let Some(iv) = self.server_write_iv.as_mut() {
+            wipe_bytes(iv);
+        }
+        if let Some(iv) = self.client_base_iv.as_mut() {
+            wipe_bytes(iv);
+        }
+        if let Some(iv) = self.server_base_iv.as_mut() {
+            wipe_bytes(iv);
+        }
+        if let Some(ticket) = self.tls13_ticket.as_mut() {
+            wipe_bytes(ticket);
+        }
+        if let Some(ticket) = self.received_session_ticket.as_mut() {
+            wipe_bytes(ticket);
+        }
+    }
 }
 
 impl TlsSession {
@@ -1932,17 +2002,10 @@ impl TlsSession {
                 }
             }
         } else {
-            let mut pms = [0u8; 48];
-            pms[0] = (TLS_VERSION_1_2 >> 8) as u8;
-            pms[1] = (TLS_VERSION_1_2 & 0xFF) as u8;
-            // Donanım Rastgelelik kaynağından pms'yi doldur.
-            crate::random::fill_bytes(&mut pms[2..]);
-            let encrypted_pms = {
-                let rsa_key = self.rsa_key.as_ref().ok_or(())?;
-                pkcs1_v1_5_encrypt(rsa_key, &pms)?
-            };
-            self.pre_master_secret = Some(pms.to_vec());
-            cke_body.extend_from_slice(&encrypted_pms);
+            // RSA key exchange is intentionally disabled: it has no forward
+            // secrecy and exposes a PKCS#1 v1.5 decryption surface.
+            serial_print("[TLS] RSA key exchange reddedildi; ECDHE zorunlu.\n");
+            return Err(());
         }
 
         let cke_body_len = cke_body.len();
@@ -2718,8 +2781,6 @@ pub fn build_client_hello_with_alpn_psk(
         TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
         TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-        // TLS 1.2 RSA key exchange (eski sunucular, ileri secrecy yok).
-        TLS_RSA_WITH_AES_128_GCM_SHA256,
     ];
     if !fallback {
         // TLS 1.3 paketleri (sunucu TLS 1.3 secerse kullanilir).
@@ -2832,13 +2893,17 @@ pub fn build_client_hello_with_alpn_psk(
 
     // ECDHE anahtar çiftleri: secp256r1 (TLS 1.2 ECDHE ve TLS 1.3 key_share için)
     let mut ks_seed = [0u8; 32];
-    crate::random::fill_bytes(&mut ks_seed);
+    if !crate::random::secure_fill_bytes(&mut ks_seed) {
+        return;
+    }
     let p256_kp = crate::drivers::crypto::ecc::generate_keypair(&ks_seed);
     ecdhe_secret_out.copy_from_slice(&p256_kp.secret);
 
     // X25519 anahtar çifti (çoklu key_share desteği)
     let mut x_seed = [0u8; 32];
-    crate::random::fill_bytes(&mut x_seed);
+    if !crate::random::secure_fill_bytes(&mut x_seed) {
+        return;
+    }
     let (x25519_secret, x25519_public) = crate::drivers::crypto::x25519::generate_keypair(&x_seed);
     x25519_secret_out.copy_from_slice(&x25519_secret);
 

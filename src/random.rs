@@ -156,3 +156,12 @@ pub fn fill_bytes(buf: &mut [u8]) {
         offset += chunk;
     }
 }
+
+/// Cryptographic callers must not silently fall back to xorshift64*.
+/// Returns `false` when a hardware entropy source is unavailable or fails.
+pub fn secure_fill_bytes(buf: &mut [u8]) -> bool {
+    if !HW_RNG.load(Ordering::Acquire) {
+        return false;
+    }
+    fill_hw(buf)
+}

@@ -59,7 +59,7 @@ kopyalama `src/mm/uaccess.rs` üzerinden yapılır:
 | 0 | `SYS_YIELD` | — | — | — | — | `0` |
 | 1 | `SYS_EXIT` | `code: i32` | — | — | — | `0` (dönmez) |
 | 2 | `SYS_GETPID` | — | — | — | — | `pid` |
-| 3 | `SYS_ALLOC_FRAME` | — | — | — | — | fiziksel çerçeve veya `0` |
+| 3 | `SYS_ALLOC_FRAME` | — | — | — | — | desteklenmiyor (`MAX`) |
 | 4 | `SYS_FREE_FRAME` | `frame: u64` | — | — | — | `0` / `MAX` |
 | 5 | `SYS_WRITE` | `buf: ptr` | `len: usize` | — | — | yazılan bayt / `0` |
 | 6 | `SYS_READ` | `fd: usize` | `buf: ptr` | `len: usize` | — | okunan bayt / `MAX` |
@@ -106,17 +106,13 @@ işaretçisine yazılır. Kaynak iadesi sürecin kendi CR3'ü altında yapılmaz
 
 ### 2.4 `SYS_ALLOC_FRAME` (3) / `SYS_FREE_FRAME` (4)
 
-Fiziksel PMM ile çalışır; sayfa **kullanıcı adres uzayına eşlenmez**. Amaç
-DMA/donanım benzeri fiziksel erişimdir. Çerçeve ayrıca PMM'in `u64` değeri
-olarak döner (HHDM sanal adresi değil). `SYS_FREE_FRAME` yalnızca **çağıranın
-kendi kaynak defterinde** olan çerçeveleri kabul eder (`take_user_frame`);
-sahipsiz çerçeve `MAX` döner ve PMM'e dokunulmaz.
+Güvenlik nedeniyle kullanıcı süreçleri için devre dışıdır. Fiziksel çerçeve
+adresleri ring-3'e döndürülmez. Kullanıcı belleği için yalnızca sanal adres
+döndüren `SYS_MMAP` veya `SYS_BRK` kullanılmalıdır.
 
 | Durum | `ALLOC_FRAME` | `FREE_FRAME` |
 | :--- | :--- | :--- |
-| Başarı | fiziksel adres | `0` |
-| Bellek yok | `0` | — |
-| Sahiplik yok | — | `MAX` |
+| Her çağrı | `MAX` | `MAX` |
 
 ### 2.5 `SYS_WRITE` (5) / `SYS_READ` (6)
 

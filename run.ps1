@@ -112,6 +112,8 @@ $vgamem = if ($Minimal) { 16 } elseif ($HighEnd) { 256 } else { 64 }
 $qemuArgs = @(
     "-m", $Memory,
     "-smp", "$CpuCount",
+    # TLS için RDRAND/RDSEED özelliklerini konuğa sun.
+    "-cpu", "max",
     "-serial", "stdio",
     "-vga", "std",
     "-global", "VGA.vgamem_mb=$vgamem"

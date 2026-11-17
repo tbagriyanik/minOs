@@ -628,7 +628,9 @@ pub fn fetch_once(
                 if is_https {
                     // TLS el sıkışması — client_random donanım Rastgelelik kaynağından.
                     let mut client_random = [0u8; 32];
-                    crate::random::fill_bytes(&mut client_random);
+                    if !crate::random::secure_fill_bytes(&mut client_random) {
+                        return Err(E_TLS);
+                    }
 
                     let mut hello = Vec::new();
                     let mut ecdhe_secret = [0u8; 32];
@@ -930,14 +932,10 @@ fn fetch_https(
 ) -> Result<(u16, usize, usize), i32> {
     let host_str = core::str::from_utf8(host).map_err(|_| E_URL)?;
 
-    // İstemci rastgelelikleri.
+    // İstemci rastgeleliği ortak RNG katmanından alınır.
     let mut client_random = [0u8; 32];
-    let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-    for b in client_random.iter_mut() {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+    if !crate::random::secure_fill_bytes(&mut client_random) {
+        return Err(E_TLS);
     }
 
     let mut hello = Vec::new();
@@ -1172,13 +1170,8 @@ pub(crate) fn http_get_impl(
                     let (status, hlen, total) = if is_https {
                         // HTTPS üzerinden IPv6: TLS el sıkışması
                         let mut client_random = [0u8; 32];
-                        let mut state =
-                            crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-                        for b in client_random.iter_mut() {
-                            state ^= state >> 12;
-                            state ^= state << 25;
-                            state ^= state >> 27;
-                            *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+                        if !crate::random::secure_fill_bytes(&mut client_random) {
+                            return Err(E_TLS);
                         }
 
                         let mut hello = Vec::new();
@@ -2118,13 +2111,9 @@ impl WebSocketConnection {
                             return Ok(None);
                         }
                         let mut client_random = [0u8; 32];
-                        let mut state =
-                            crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-                        for b in client_random.iter_mut() {
-                            state ^= state >> 12;
-                            state ^= state << 25;
-                            state ^= state >> 27;
-                            *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+                        if !crate::random::secure_fill_bytes(&mut client_random) {
+                            socket::close(fd);
+                            return Err(E_TLS);
                         }
 
                         let mut hello = Vec::new();
@@ -2239,7 +2228,10 @@ impl WebSocketConnection {
         // WebSocket Upgrade isteği gönder.
         let key = crate::drivers::tls::TlsSession::new("", [0u8; 32]); // dummy for random
         let _ = key;
-        let ws_key = generate_ws_key();
+        let Some(ws_key) = generate_ws_key() else {
+            socket::close(fd);
+            return Err(E_TLS);
+        };
         let upgrade_req =
             websocket::build_upgrade_request(host.as_bytes(), path.as_bytes(), ws_key.as_bytes());
 
@@ -2435,15 +2427,11 @@ impl WebSocketConnection {
 }
 
 /// WebSocket anahtarı üretir (Base64-encoded 16-byte random değer).
-fn generate_ws_key() -> String {
+fn generate_ws_key() -> Option<String> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut key_bytes = [0u8; 16];
-    let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-    for b in key_bytes.iter_mut() {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+    if !crate::random::secure_fill_bytes(&mut key_bytes) {
+        return None;
     }
     let mut out = String::new();
     for i in (0..16).step_by(3) {
@@ -2472,5 +2460,5 @@ fn generate_ws_key() -> String {
             out.push('=');
         }
     }
-    out
+    Some(out)
 }

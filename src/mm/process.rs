@@ -2559,18 +2559,10 @@ pub fn syscall_dispatch_abi(
         }
         sys_nos::SYS_GETPID => proc_mgr.current_pid as u64,
         sys_nos::SYS_ALLOC_FRAME => {
-            if let Some(frame) = pmm.allocate_frame() {
-                let current = proc_mgr.current_pid;
-                if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == current) {
-                    if p.resources.record_user_frame(frame) {
-                        return frame;
-                    }
-                }
-                pmm.free_frame(frame);
-                0
-            } else {
-                0
-            }
+            // Physical addresses must never cross the ring-3 boundary.
+            // Use SYS_MMAP/SYS_BRK for user memory instead.
+            let _ = pmm;
+            u64::MAX
         }
         sys_nos::SYS_FREE_FRAME => {
             let frame = arg1;

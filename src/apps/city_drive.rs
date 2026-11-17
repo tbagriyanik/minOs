@@ -1,8 +1,10 @@
 //! 3D şehir sürüş oyunu.
 //!
 //! Raycasting tabanlı şehir motoru: ızgara düzeninde cadde, kaldırım, park ve
-//! farklı yükseklikte binalar; direksiyon/fram/hız fiziği; trafik araçları,
-//! toplanabilir hedefler, mini harita, hız göstergesi ve motor sesi.
+//! farklı yükseklikte binalar; bisiklet modeline dayalı direksiyon/fram/hız
+//! fiziği; sağdan trafik kuralına uyan, kavşaklarda dönen, birbirini takip
+//! eden trafik araçları; toplanabilir ödüller, mini harita, hız göstergesi
+//! ve motor sesi.
 //!
 //! `no_std` + `alloc` ortamında çalışır; çizim framebuffer üzerine yapılır,
 //! ses çekirdek ses cihazı (PC speaker / HDA) üzerinden üretilir.
@@ -20,41 +22,59 @@ use crate::time_budget::TimeBudget;
 // ---------------------------------------------------------------------------
 
 /// Şehir ızgara genişliği (hücre).
-pub const CITY_W: usize = 64;
+pub const CITY_W: usize = 60;
 /// Şehir ızgara yüksekliği (hücre).
-pub const CITY_H: usize = 64;
+pub const CITY_H: usize = 60;
 
-/// Cadde periyodu: her 8 hücrede bir cadde koridoru.
-const ROAD_PERIOD: usize = 8;
-/// Cadde koridorunun genişliği (hücre).
-const ROAD_HALF: usize = 2;
+/// Cadde periyodu: her 10 hücrede bir cadde koridoru.
+const ROAD_PERIOD: usize = 10;
+/// Cadde koridorunun genişliği (hücre) — 4 m'lik iki şeritli yol.
+const ROAD_HALF: usize = 4;
+/// Yol ekseninin koridor içindeki konumu (hücre).
+const ROAD_AXIS_OFF: f32 = 2.0;
+/// Şerit merkezinin yol eksenine uzaklığı (metre).
+const LANE_OFF: f32 = 1.0;
 /// Bir binanın kat yüksekliği (dünya birimi).
 const STOREY_H: f32 = 2.6;
 /// Sürücü gözü / kamera yüksekliği (dünya birimi).
 const CAM_H: f32 = 1.25;
 /// Aracın çarpışma yarıçapı.
 const CAR_RADIUS: f32 = 0.42;
-/// Azami ileri hız (dünya birimi/s).
+/// Azami ileri hız (metre/s).
 const MAX_SPEED: f32 = 24.0;
-/// Azami geri hız (dünya birimi/s).
-const MAX_REVERSE: f32 = 7.0;
-/// Gaz ivmesi.
-const ACCEL: f32 = 8.5;
-/// Fren ivmesi.
-const BRAKE: f32 = 14.0;
-/// Doğrusal sürtünme katsayısı.
-const DRAG: f32 = 0.9;
-/// Azami direksiyon açısı hızı (rad/s).
-const TURN_RATE: f32 = 1.9;
+/// Azami geri hız (metre/s).
+const MAX_REVERSE: f32 = 6.0;
+/// Gaz ivmesi (m/s²).
+const ACCEL: f32 = 4.6;
+/// Fren ivmesi (m/s²).
+const BRAKE: f32 = 9.0;
+/// El freni ivmesi (m/s²).
+const HANDBRAKE: f32 = 11.0;
+/// Rölanti direnci (m/s²).
+const DRAG_BASE: f32 = 0.32;
+/// Hava direncinin karesel katsayısı.
+const DRAG_K: f32 = 0.0022;
+/// Bisiklet modeli: dingil mesafesi (metre).
+const WHEELBASE: f32 = 2.72;
+/// Tam kilitte, düşük hızda minimum dönüş yarıçapı (metre).
+const TURN_R_MIN: f32 = 4.2;
+/// Hıza bağlı dönüş yarıçapı artış katsayısı (yüksek hızda geniş yay).
+const TURN_R_SPEED_K: f32 = 0.030;
+/// Direksiyon kolunun dönme hızı (komut birimi/s).
+const STEER_RATE: f32 = 2.4;
+/// Kavşak dönüş yayı yarıçapı (metre).
+const TURN_ARC_R: f32 = 2.5;
+/// Kavşakta dönüş hızı (metre/s).
+const TURN_SPEED: f32 = 7.0;
 /// Görüş uzaklığı (dünya birimi).
 const MAX_VIEW: f32 = 70.0;
 /// Kamera düzlem uzunluğu (görüş açısı).
 const PLANE_LEN: f32 = 0.72;
 
 /// Trafik aracı sayısı.
-const MAX_TRAFFIC: usize = 10;
-/// Toplanabilir hedef (kubbe) sayısı.
-const MAX_ORBS: usize = 10;
+const MAX_TRAFFIC: usize = 16;
+/// Toplanabilir ödül sayısı.
+const MAX_REWARDS: usize = 14;
 /// Render bütçesi (ms).
 const RENDER_BUDGET_MS: u64 = 80;
 
@@ -75,7 +95,32 @@ const WINDOW_LIT_COLOR: u32 = 0xF0DFA0;
 /// Bina tonları (gölgelendirilerek kullanılır).
 const BUILDING_TONES: [u32; 6] = [0x8A8F99, 0x6E7A8C, 0x9A8E7C, 0x7E8C7A, 0x8C7E8E, 0x9EA3AC];
 
-// Tuş maske bayrakları.
+/// Gerçekçi araç boyaları (gümüş, antrasit, beyaz, mavi, kırmızı, ...).
+const CAR_PAINT: [u32; 12] = [
+    0xB8BDC4, // gümüş
+    0x2B3038, // antrasit
+    0xE8EAED, // beyaz
+    0x1B3A6B, // koyu mavi
+    0x8C1F26, // koyu kırmızı
+    0x1F5138, // koyu yeşil
+    0xC9C3B6, // bej
+    0x4A4E56, // gri
+    0x9C6B1E, // bronz
+    0x14171C, // siyah
+    0x2E6E8E, // metal mavi
+    0x7A3E12, // bakır
+];
+
+/// Taksi sarısı.
+const TAXI_COLOR: u32 = 0xE3B32B;
+/// Taksi şerit rengi.
+const TAXI_STRIPE: u32 = 0x24282E;
+///polis aracı gövde rengi.
+const POLICE_COLOR: u32 = 0xE6E8EC;
+/// polis aracı mavi bandı.
+const POLICE_BLUE: u32 = 0x1D4E9C;
+
+// Tuş maska bayrakları.
 const KEY_UP: u16 = 1 << 0;
 const KEY_DOWN: u16 = 1 << 1;
 const KEY_LEFT: u16 = 1 << 2;
@@ -115,6 +160,19 @@ fn absf(x: f32) -> f32 {
     } else {
         x
     }
+}
+
+/// no_std çekirdekte `f32::sqrt` yok; Newton yöntemiyle yaklaşık değer.
+#[inline(always)]
+fn sqrtf(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let mut g = if x > 1.0 { x * 0.5 } else { x };
+    for _ in 0..24 {
+        g = 0.5 * (g + x / g);
+    }
+    g
 }
 
 /// no_std çekirdekte `f32::floor` yok; elle taban değer.
@@ -179,7 +237,7 @@ pub struct CityMap {
 }
 
 impl CityMap {
-    /// Şehri üretir: her 8x8 blokta 2 hücre geniş cadde, kaldırım çemberi ve
+    /// Şehri üretir: her 10x10 blokta 4 hücre geniş cadde, kaldırım çemberi ve
     /// 2x2 hücrelik binalar; blokların bir kısmı park olarak bırakılır.
     pub fn generate() -> Self {
         let n = CITY_W * CITY_H;
@@ -252,26 +310,230 @@ impl CityMap {
 }
 
 // ---------------------------------------------------------------------------
-// Trafik ve hedefler
+// Trafik ve ödüller
 // ---------------------------------------------------------------------------
+
+/// Trafik aracının hareket ekseni.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LaneAxis {
+    /// Yatay cadde (x ekseni).
+    Horizontal,
+    /// Dikey cadde (y ekseni).
+    Vertical,
+}
+
+/// Kavşak dönüş yayı — araç yayın çevresinde döner.
+#[derive(Clone, Copy)]
+pub struct TurnArc {
+    /// Yay merkezi.
+    pub cx: f32,
+    pub cy: f32,
+    /// Yay yarıçapı.
+    pub r: f32,
+    /// Merkezden araca olan vektör.
+    pub rx: f32,
+    pub ry: f32,
+    /// Dönülen toplam açı (rad).
+    pub swept: f32,
+    /// Dönüş yönü: +1 saat yönünün tersi, -1 saat yönü.
+    pub rot: f32,
+    /// Yayın bittiği kesin nokta (yeni şerit üzerinde).
+    pub exit_x: f32,
+    pub exit_y: f32,
+    /// Yay sonundaki kesin yön (şerit yönü).
+    pub end_dir_x: f32,
+    pub end_dir_y: f32,
+    /// Dönüş sonundaki şerit.
+    pub new_axis: LaneAxis,
+    pub new_road: usize,
+    pub new_lane_dir: f32,
+}
+
+/// Trafik aracı tipi — gerçekçi gövde ölçüleri ve karakteristik davranış.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VehicleKind {
+    /// Şehir kompakti.
+    Compact,
+    /// Sedan.
+    Sedan,
+    /// SUV / arazi aracı.
+    Suv,
+    /// Panelvan.
+    Van,
+    /// Pickup.
+    Pickup,
+    /// Taksi.
+    Taxi,
+    /// Polis aracı.
+    Police,
+}
+
+impl VehicleKind {
+    /// Gövde ölçüleri: (uzunluk, genişlik, yükseklik) — metre.
+    pub fn dims(self) -> (f32, f32, f32) {
+        match self {
+            VehicleKind::Compact => (3.80, 1.68, 1.48),
+            VehicleKind::Sedan => (4.62, 1.78, 1.45),
+            VehicleKind::Suv => (4.72, 1.86, 1.70),
+            VehicleKind::Van => (5.20, 1.94, 2.15),
+            VehicleKind::Pickup => (5.30, 1.90, 1.82),
+            VehicleKind::Taxi => (4.70, 1.80, 1.50),
+            VehicleKind::Police => (4.90, 1.84, 1.52),
+        }
+    }
+
+    /// Sürüş hızı (metre/s).
+    pub fn cruise(self) -> f32 {
+        match self {
+            VehicleKind::Compact => 11.0,
+            VehicleKind::Sedan => 13.5,
+            VehicleKind::Suv => 12.5,
+            VehicleKind::Van => 10.5,
+            VehicleKind::Pickup => 11.0,
+            VehicleKind::Taxi => 14.5,
+            VehicleKind::Police => 16.0,
+        }
+    }
+
+    /// İvme (m/s²).
+    pub fn accel(self) -> f32 {
+        match self {
+            VehicleKind::Compact => 2.6,
+            VehicleKind::Sedan => 2.8,
+            VehicleKind::Suv => 2.6,
+            VehicleKind::Van => 1.9,
+            VehicleKind::Pickup => 2.2,
+            VehicleKind::Taxi => 3.1,
+            VehicleKind::Police => 3.6,
+        }
+    }
+
+    /// Gövde rengi.
+    pub fn paint(self, h: u32) -> u32 {
+        match self {
+            VehicleKind::Taxi => TAXI_COLOR,
+            VehicleKind::Police => POLICE_COLOR,
+            _ => CAR_PAINT[(h % CAR_PAINT.len() as u32) as usize],
+        }
+    }
+
+    /// Araç tipini hash'ten seçer (trafik karışımı).
+    pub fn pick(h: u32) -> Self {
+        match h % 100 {
+            0..=17 => VehicleKind::Compact,
+            18..=44 => VehicleKind::Sedan,
+            45..=60 => VehicleKind::Suv,
+            61..=72 => VehicleKind::Van,
+            73..=82 => VehicleKind::Pickup,
+            83..=93 => VehicleKind::Taxi,
+            _ => VehicleKind::Police,
+        }
+    }
+}
 
 /// Cadde üzerinde ilerleyen trafik aracı.
 #[derive(Clone, Copy)]
 pub struct TrafficCar {
     pub x: f32,
     pub y: f32,
+    /// Yön birim vektörü.
     pub dir_x: f32,
     pub dir_y: f32,
     pub speed: f32,
+    pub target_speed: f32,
     pub color: u32,
+    pub kind: VehicleKind,
+    /// Gövde ölçüleri (metre).
+    pub length: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Fren lambası yoğunluğu (0..1).
+    pub brake: f32,
+    /// Hareket ekseni.
+    pub axis: LaneAxis,
+    /// Yol indeksi.
+    pub road: usize,
+    /// Şerit yönü (+1 / -1).
+    pub lane_dir: f32,
+    /// Aktif kavşak dönüşü.
+    pub turn: Option<TurnArc>,
 }
 
-/// Toplanabilir hedef.
+impl TrafficCar {
+    /// Aracın şerit üzerindeki ileri konumu (yön işaretli).
+    #[inline(always)]
+    pub fn along(&self) -> f32 {
+        match self.axis {
+            LaneAxis::Horizontal => self.x * self.lane_dir,
+            LaneAxis::Vertical => self.y * self.lane_dir,
+        }
+    }
+}
+
+/// Toplanabilir ödül türü.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RewardKind {
+    /// Madeni para.
+    Coin,
+    /// Banknot.
+    Banknote,
+    /// Yakıt bidonu.
+    Fuel,
+    /// Madalya.
+    Medal,
+}
+
+impl RewardKind {
+    /// Puan değeri.
+    pub fn score(self) -> u32 {
+        match self {
+            RewardKind::Coin => 25,
+            RewardKind::Banknote => 50,
+            RewardKind::Fuel => 75,
+            RewardKind::Medal => 100,
+        }
+    }
+
+    /// Görünür boyut: (yükseklik, genişlik) — metre.
+    pub fn dims(self) -> (f32, f32) {
+        match self {
+            RewardKind::Coin => (0.44, 0.44),
+            RewardKind::Banknote => (0.32, 0.66),
+            RewardKind::Fuel => (0.62, 0.34),
+            RewardKind::Medal => (0.68, 0.38),
+        }
+    }
+
+    /// Harita / HUD rengi.
+    pub fn tint(self) -> u32 {
+        match self {
+            RewardKind::Coin => 0xF2C53D,
+            RewardKind::Banknote => 0x62C97A,
+            RewardKind::Fuel => 0xE05B4A,
+            RewardKind::Medal => 0xFFD24A,
+        }
+    }
+
+    /// Ödül türünü hash'ten seçer.
+    pub fn pick(h: u32) -> Self {
+        match h % 100 {
+            0..=54 => RewardKind::Coin,
+            55..=79 => RewardKind::Banknote,
+            80..=91 => RewardKind::Fuel,
+            _ => RewardKind::Medal,
+        }
+    }
+}
+
+/// Toplanabilir ödül.
 #[derive(Clone, Copy)]
-pub struct Orb {
+pub struct Reward {
     pub x: f32,
     pub y: f32,
     pub active: bool,
+    pub kind: RewardKind,
+    /// Animasyon fazı.
+    pub phase: f32,
 }
 
 /// Oyun durumu.
@@ -283,6 +545,57 @@ pub enum CityState {
     Driving,
     /// Duraklatıldı.
     Paused,
+}
+
+// ---------------------------------------------------------------------------
+// Yol ağı yardımcıları
+// ---------------------------------------------------------------------------
+
+/// Şeridin yol eksenine göre merkez noktası (x, y).
+fn lane_point(axis: LaneAxis, road: usize, lane_dir: f32) -> (f32, f32) {
+    let center = road as f32 * ROAD_PERIOD as f32 + ROAD_AXIS_OFF;
+    match axis {
+        // Yatay cadde: şerit merkezi eksenin altında (sağdan trafik).
+        LaneAxis::Horizontal => (0.0, center - lane_dir * LANE_OFF),
+        // Dikey cadde: şerit merkezi eksenin sağında.
+        LaneAxis::Vertical => (center + lane_dir * LANE_OFF, 0.0),
+    }
+}
+
+/// Şerit yön birim vektörü.
+fn lane_dir_vec(axis: LaneAxis, lane_dir: f32) -> (f32, f32) {
+    match axis {
+        LaneAxis::Horizontal => (lane_dir, 0.0),
+        LaneAxis::Vertical => (0.0, lane_dir),
+    }
+}
+
+/// Yönün sağ vektörü (dik yönde, saat yönünün tersi).
+#[inline(always)]
+fn right_vec(dx: f32, dy: f32) -> (f32, f32) {
+    (dy, -dx)
+}
+
+/// Verilen konumdan sonraki kavşak merkezinin koordinatı.
+fn next_intersection(pos: f32, lane_dir: f32) -> f32 {
+    let period = ROAD_PERIOD as f32;
+    let base = floorf((pos - ROAD_AXIS_OFF) / period) * period + ROAD_AXIS_OFF;
+    if lane_dir > 0.0 {
+        if base > pos {
+            base
+        } else {
+            base + period
+        }
+    } else if base < pos {
+        base
+    } else {
+        base - period
+    }
+}
+
+/// Kavşak merkezinin yol indeksi.
+fn intersection_index(center: f32) -> usize {
+    (((center - ROAD_AXIS_OFF) / ROAD_PERIOD as f32) + 0.5) as usize
 }
 
 // ---------------------------------------------------------------------------
@@ -298,11 +611,15 @@ pub struct CityDriveApp {
     pub heading: f32,
     pub speed: f32,
     pub cam_dir: f32,
+    /// Direksiyon kolu konumu (-1..1): yumuşatılmış direksiyon komutu.
+    pub steer_cmd: f32,
     // Girdi
     pub key_mask: u16,
     // Dünya
     pub traffic: [TrafficCar; MAX_TRAFFIC],
-    pub orbs: [Orb; MAX_ORBS],
+    pub rewards: [Reward; MAX_REWARDS],
+    // Animasyon saati (s).
+    pub anim_t: f32,
     // İstatistik
     pub score: u32,
     pub collected: u32,
@@ -317,11 +634,12 @@ impl CityDriveApp {
     pub fn new() -> Self {
         let mut app = CityDriveApp {
             map: CityMap::generate(),
-            car_x: 1.5,
-            car_y: 9.5,
+            car_x: 12.5,
+            car_y: 11.0,
             heading: 0.0,
             speed: 0.0,
             cam_dir: 0.0,
+            steer_cmd: 0.0,
             key_mask: 0,
             traffic: [TrafficCar {
                 x: 0.0,
@@ -329,13 +647,26 @@ impl CityDriveApp {
                 dir_x: 1.0,
                 dir_y: 0.0,
                 speed: 0.0,
+                target_speed: 0.0,
                 color: 0,
+                kind: VehicleKind::Sedan,
+                length: 4.62,
+                width: 1.78,
+                height: 1.45,
+                brake: 0.0,
+                axis: LaneAxis::Horizontal,
+                road: 0,
+                lane_dir: 1.0,
+                turn: None,
             }; MAX_TRAFFIC],
-            orbs: [Orb {
+            rewards: [Reward {
                 x: 0.0,
                 y: 0.0,
                 active: false,
-            }; MAX_ORBS],
+                kind: RewardKind::Coin,
+                phase: 0.0,
+            }; MAX_REWARDS],
+            anim_t: 0.0,
             score: 0,
             collected: 0,
             distance: 0.0,
@@ -348,64 +679,140 @@ impl CityDriveApp {
         app
     }
 
-    /// Araç, trafik ve hedefleri başlangıç durumuna döndürür.
+    /// Araç, trafik ve ödülleri başlangıç durumuna döndürür.
     pub fn reset_world(&mut self) {
-        self.car_x = 1.5;
-        self.car_y = 9.5;
+        self.car_x = 12.5;
+        self.car_y = 11.0;
         self.heading = 0.0;
         self.cam_dir = 0.0;
         self.speed = 0.0;
+        self.steer_cmd = 0.0;
         self.key_mask = 0;
+        self.anim_t = 0.0;
         self.distance = 0.0;
         self.crashes = 0;
         self.crash_flash = 0;
 
-        // Trafik araçları cadde şeritlerine yerleştirilir.
-        for (i, traffic) in self.traffic.iter_mut().enumerate().take(MAX_TRAFFIC) {
+        self.spawn_traffic();
+        self.spawn_rewards();
+    }
+
+    /// Trafik araçlarını şeritlere yerleştirir.
+    ///
+    /// Araçlar sağdan trafik kuralına uyar: şerit merkezi yol ekseninin
+    /// sağındadır ve her araç kendi tipine uygun hızda sürer.
+    fn spawn_traffic(&mut self) {
+        // Yerleştirilen araçların konumları (çakışmayı önlemek için).
+        let mut placed = [(0.0f32, 0.0f32); MAX_TRAFFIC];
+        let mut placed_count = 0usize;
+
+        for (i, traffic) in self.traffic.iter_mut().enumerate() {
             let h = hash4(i, 3, 5, 17);
-            let corridor = (h % (CITY_W / ROAD_PERIOD) as u32) as usize;
-            let lane = ((h >> 8) & 1) as usize;
-            let horizontal = ((h >> 12) & 1) == 0;
-            let start = ((h >> 16) % (CITY_W as u32 - 4)) as f32 + 2.0;
-            let speed = 3.0 + ((h >> 24) % 40) as f32 * 0.1;
-            let color = TRAFFIC_COLORS[(h % TRAFFIC_COLORS.len() as u32) as usize];
-            let (x, y, dx, dy) = if horizontal {
-                (
-                    start,
-                    (corridor * ROAD_PERIOD) as f32 + 0.5 + lane as f32,
-                    if lane == 0 { 1.0 } else { -1.0 },
-                    0.0,
-                )
+            let kind = VehicleKind::pick(h);
+            let (length, width, height) = kind.dims();
+            let color = kind.paint(h >> 5);
+
+            let axis = if (h >> 12) & 1 == 0 {
+                LaneAxis::Horizontal
             } else {
-                (
-                    (corridor * ROAD_PERIOD) as f32 + 0.5 + lane as f32,
-                    start,
-                    0.0,
-                    if lane == 0 { -1.0 } else { 1.0 },
-                )
+                LaneAxis::Vertical
             };
+            let lane_dir = if (h >> 8) & 1 == 0 { 1.0 } else { -1.0 };
+            let road_count = match axis {
+                LaneAxis::Horizontal => CITY_H / ROAD_PERIOD,
+                LaneAxis::Vertical => CITY_W / ROAD_PERIOD,
+            };
+            let road = ((h >> 4) % road_count as u32) as usize;
+            let (dx, dy) = lane_dir_vec(axis, lane_dir);
+            let (rx, ry) = right_vec(dx, dy);
+            let center = road as f32 * ROAD_PERIOD as f32 + ROAD_AXIS_OFF;
+            // Şerit merkezi: yol ekseninin sağ tarafı.
+            let (lane_x, lane_y) = match axis {
+                LaneAxis::Horizontal => (0.0, center + ry * LANE_OFF),
+                LaneAxis::Vertical => (center + rx * LANE_OFF, 0.0),
+            };
+
+            // Cadde boyunca oyuncuya ve diğer araçlara uzak bir nokta seç.
+            let limit = match axis {
+                LaneAxis::Horizontal => CITY_W,
+                LaneAxis::Vertical => CITY_H,
+            };
+            let mut pos = 4.0;
+            let mut found = false;
+            for attempt in 0..12usize {
+                let t = hash4(i, attempt, 23, 29);
+                let cand = 3.0 + (t % (limit as u32 - 6)) as f32;
+                let (cx, cy) = match axis {
+                    LaneAxis::Horizontal => (cand, lane_y),
+                    LaneAxis::Vertical => (lane_x, cand),
+                };
+                if (cx - self.car_x).abs() < 9.0 && (cy - self.car_y).abs() < 9.0 {
+                    continue;
+                }
+                let mut ok = true;
+                for p in placed.iter().take(placed_count) {
+                    if (cx - p.0).abs() < 8.0 && (cy - p.1).abs() < 8.0 {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    pos = cand;
+                    found = true;
+                    break;
+                }
+            }
+            let _ = found;
+            let (x, y) = match axis {
+                LaneAxis::Horizontal => (pos, lane_y),
+                LaneAxis::Vertical => (lane_x, pos),
+            };
+            placed[placed_count] = (x, y);
+            placed_count += 1;
+
             *traffic = TrafficCar {
                 x,
                 y,
                 dir_x: dx,
                 dir_y: dy,
-                speed,
+                speed: kind.cruise() * 0.6,
+                target_speed: kind.cruise(),
                 color,
+                kind,
+                length,
+                width,
+                height,
+                brake: 0.0,
+                axis,
+                road,
+                lane_dir,
+                turn: None,
             };
         }
+    }
 
-        // Hedefler cadde üzerine dağıtılır.
-        for (i, orb) in self.orbs.iter_mut().enumerate().take(MAX_ORBS) {
-            let h = hash4(i, 29, 31, 37);
-            let corridor = (h % (CITY_W / ROAD_PERIOD) as u32) as usize;
-            let along = ((h >> 8) % (CITY_W as u32 - 4)) as f32 + 2.0;
+    /// Ödülleri cadde üzerine dağıtır.
+    fn spawn_rewards(&mut self) {
+        let round = self.collected as usize;
+        for (i, reward) in self.rewards.iter_mut().enumerate() {
+            let h = hash4(i, 29, 31, 37 + round.wrapping_mul(7));
+            let kind = RewardKind::pick(h);
+            let road = ((h >> 4) % (CITY_W / ROAD_PERIOD) as u32) as usize;
+            let along = ((h >> 8) % (CITY_W as u32 - 6)) as f32 + 3.0;
             let horizontal = ((h >> 16) & 1) == 0;
+            let center = road as f32 * ROAD_PERIOD as f32 + ROAD_AXIS_OFF;
             let (x, y) = if horizontal {
-                (along, (corridor * ROAD_PERIOD) as f32 + 1.0)
+                (along, center + 0.45)
             } else {
-                ((corridor * ROAD_PERIOD) as f32 + 1.0, along)
+                (center - 0.45, along)
             };
-            *orb = Orb { x, y, active: true };
+            *reward = Reward {
+                x,
+                y,
+                active: true,
+                kind,
+                phase: (h % 628) as f32 * 0.01,
+            };
         }
     }
 
@@ -506,6 +913,7 @@ impl CityDriveApp {
             self.engine_freq = 0;
             return;
         }
+        self.anim_t += dt;
 
         // Basılı tutulan fizik tuşları (W/A/S/D, ok tuşları, Space).
         // Tuş yalnızca basılı tutulduğu sürece etkilidir; tek basışla
@@ -529,6 +937,7 @@ impl CityDriveApp {
             self.key_mask |= KEY_HAND;
         }
 
+        // --- Gaz ve fren ---
         let throttle =
             (self.key_mask & KEY_UP != 0) as i32 - (self.key_mask & KEY_DOWN != 0) as i32;
         if throttle > 0 {
@@ -545,28 +954,50 @@ impl CityDriveApp {
             }
         }
 
-        // Sürtünme ve el freni.
-        self.speed -= self.speed * DRAG * dt;
-        if self.key_mask & KEY_HAND != 0 {
-            self.speed -= self.speed * 3.2 * dt;
+        // --- Rölanti ve hava direnci (karesel) ---
+        let v_abs = absf(self.speed);
+        if v_abs > 0.01 {
+            let sgn = if self.speed > 0.0 { 1.0 } else { -1.0 };
+            let coast = DRAG_BASE + DRAG_K * v_abs * v_abs;
+            // Gaz basılıyken direncin yalnızca küçük bir kısmı uygulanır.
+            let factor = if throttle == 0 { 1.0 } else { 0.22 };
+            self.speed -= sgn * coast * factor * dt;
+        }
+
+        // --- El freni ---
+        if self.key_mask & KEY_HAND != 0 && v_abs > 0.05 {
+            let sgn = if self.speed > 0.0 { 1.0 } else { -1.0 };
+            self.speed -= sgn * HANDBRAKE * dt;
+        }
+        if absf(self.speed) < 0.05 {
+            self.speed = 0.0;
         }
         self.speed = self.speed.clamp(-MAX_REVERSE, MAX_SPEED);
 
-        // Direksiyon: yalnızca araç hareket ederken etkilidir.
-        let steer =
+        // --- Direksiyon: bisiklet modeli ---
+        // Direksiyon kolu hedef konuma doğru sınırlı hızda gider; böylece
+        // yön değişimi ani olmaz.
+        let steer_input =
             (self.key_mask & KEY_RIGHT != 0) as i32 - (self.key_mask & KEY_LEFT != 0) as i32;
-        if steer != 0 {
-            let factor = ((absf(self.speed) + 0.10) / MAX_SPEED).min(1.0);
-            let dir = if self.speed < 0.0 { -1.0 } else { 1.0 };
-            self.heading += steer as f32 * TURN_RATE * factor * dir * dt;
-            if self.heading > core::f32::consts::PI {
-                self.heading -= core::f32::consts::TAU;
-            } else if self.heading < -core::f32::consts::PI {
-                self.heading += core::f32::consts::TAU;
-            }
+        let steer_target = steer_input as f32;
+        let max_delta = STEER_RATE * dt;
+        self.steer_cmd += (steer_target - self.steer_cmd).clamp(-max_delta, max_delta);
+
+        // Sarma yarıçapı hıza bağlıdır: yüksek hızda direksiyon açısı
+        // daralır, dönüş çapı büyür (gerçek araç davranışı).
+        let speed_abs = absf(self.speed);
+        let r_min = TURN_R_MIN + TURN_R_SPEED_K * speed_abs * speed_abs;
+        let tan_max = WHEELBASE / r_min; // tan(δ_max)
+                                         // Yaw hızı: ω = v · tan(δ) / dingil mesafesi.
+        let yaw = self.speed * self.steer_cmd * tan_max / WHEELBASE;
+        self.heading += yaw * dt;
+        if self.heading > core::f32::consts::PI {
+            self.heading -= core::f32::consts::TAU;
+        } else if self.heading < -core::f32::consts::PI {
+            self.heading += core::f32::consts::TAU;
         }
 
-        // İlerleme ve çarpışma.
+        // --- İlerleme ve çarpışma ---
         let fx = cos(self.heading);
         let fy = sin(self.heading);
         let nx = self.car_x + fx * self.speed * dt;
@@ -576,7 +1007,7 @@ impl CityDriveApp {
                 self.crashes += 1;
                 self.crash_flash = 14;
             }
-            self.speed *= -0.22;
+            self.speed *= -0.18;
         } else {
             self.car_x = nx;
             self.car_y = ny;
@@ -585,7 +1016,7 @@ impl CityDriveApp {
         self.car_y = self.car_y.clamp(0.4, CITY_H as f32 - 0.4);
         self.distance += absf(self.speed) * dt;
 
-        // Kamera yönü araca hafif gecikmeyle takip eder.
+        // --- Kamera yönü araca hafif gecikmeyle takip eder ---
         let mut diff = self.heading - self.cam_dir;
         while diff > core::f32::consts::PI {
             diff -= core::f32::consts::TAU;
@@ -593,12 +1024,135 @@ impl CityDriveApp {
         while diff < -core::f32::consts::PI {
             diff += core::f32::consts::TAU;
         }
-        self.cam_dir += diff * (7.0 * dt).min(1.0);
+        self.cam_dir += diff * (8.0 * dt).min(1.0);
 
-        // Trafik hareketi ve oyuncuyla çarpışma.
-        for car in self.traffic.iter_mut() {
-            car.x += car.dir_x * car.speed * dt;
-            car.y += car.dir_y * car.speed * dt;
+        // --- Trafik ---
+        self.update_traffic(dt);
+        for i in 0..MAX_TRAFFIC {
+            let car = self.traffic[i];
+            let dx = car.x - self.car_x;
+            let dy = car.y - self.car_y;
+            let r = CAR_RADIUS + car.width * 0.5;
+            if dx * dx + dy * dy < r * r {
+                self.speed *= 0.25;
+                self.crash_flash = 10;
+                // Çarpan araç biraz geri itilir.
+                let mut c = car;
+                c.x -= c.dir_x * 0.08;
+                c.y -= c.dir_y * 0.08;
+                self.traffic[i] = c;
+            }
+        }
+
+        // --- Ödül toplama ---
+        let mut remaining = 0u32;
+        for i in 0..MAX_REWARDS {
+            let reward = self.rewards[i];
+            if !reward.active {
+                remaining += 1;
+                continue;
+            }
+            let dx = reward.x - self.car_x;
+            let dy = reward.y - self.car_y;
+            if dx * dx + dy * dy < 1.7 {
+                let mut r = reward;
+                r.active = false;
+                self.rewards[i] = r;
+                self.score += reward.kind.score();
+                self.collected += 1;
+            } else {
+                remaining += 1;
+            }
+        }
+        if remaining == MAX_REWARDS as u32 {
+            // Tüm ödüller toplandı: yenileri belirir.
+            self.spawn_rewards();
+        }
+
+        if self.crash_flash > 0 {
+            self.crash_flash -= 1;
+        }
+
+        // --- Motor sesi: hıza göre frekans ---
+        let ratio = (absf(self.speed) / MAX_SPEED).min(1.0);
+        self.engine_freq = 40 + (ratio * 150.0) as u32;
+    }
+
+    // -----------------------------------------------------------------------
+    // Trafik simülasyonu
+    // -----------------------------------------------------------------------
+
+    /// Trafik akışını günceller: şerit sürüşü, kavşak dönüşleri ve takip.
+    fn update_traffic(&mut self, dt: f32) {
+        for i in 0..MAX_TRAFFIC {
+            let mut car = self.traffic[i];
+            // Bu karede harcanacak süre (yaya geçişte kalan süreye düşer).
+            let mut move_dt = dt;
+
+            if car.turn.is_none() {
+                // Düz hatta sürüş ve kavşak planı.
+                if let Some((entry_along, arc)) = self.plan_turn(i, &car) {
+                    let remaining = entry_along - car.along();
+                    if remaining > 0.0 {
+                        let t_to_entry = remaining / car.speed.max(0.5);
+                        if t_to_entry <= dt {
+                            // Kavşağa kadar düz gidip kalan süreyi yaya harcar.
+                            car.x += car.dir_x * car.speed * t_to_entry;
+                            car.y += car.dir_y * car.speed * t_to_entry;
+                            car.turn = Some(arc);
+                            move_dt = dt - t_to_entry;
+                        }
+                    }
+                }
+                if car.turn.is_none() {
+                    car.x += car.dir_x * car.speed * move_dt;
+                    car.y += car.dir_y * car.speed * move_dt;
+                }
+            }
+
+            // Yay üzerindeki hareket.
+            if let Some(mut arc) = car.turn {
+                let step = car.speed * move_dt / arc.r;
+                let (s, c) = (sin(step), cos(step));
+                let (rx, ry) = (arc.rx, arc.ry);
+                if arc.rot > 0.0 {
+                    // Saat yönünün tersi.
+                    arc.rx = rx * c - ry * s;
+                    arc.ry = rx * s + ry * c;
+                } else {
+                    // Saat yönü.
+                    arc.rx = rx * c + ry * s;
+                    arc.ry = -rx * s + ry * c;
+                }
+                arc.swept += step;
+                car.x = arc.cx + arc.rx;
+                car.y = arc.cy + arc.ry;
+                // Yön: yaya teğet.
+                let (tx, ty) = if arc.rot > 0.0 {
+                    (-arc.ry, arc.rx)
+                } else {
+                    (arc.ry, -arc.rx)
+                };
+                let inv = 1.0 / arc.r;
+                car.dir_x = tx * inv;
+                car.dir_y = ty * inv;
+                if arc.swept >= core::f32::consts::FRAC_PI_2 {
+                    // Dönüş bitti: araç kesin çıkış noktasına oturur ve
+                    // yeni şerit yönüne tam hizalanır (kayma oluşmaz).
+                    car.x = arc.exit_x;
+                    car.y = arc.exit_y;
+                    car.dir_x = arc.end_dir_x;
+                    car.dir_y = arc.end_dir_y;
+                    car.axis = arc.new_axis;
+                    car.road = arc.new_road;
+                    car.lane_dir = arc.new_lane_dir;
+                    car.turn = None;
+                } else {
+                    car.turn = Some(arc);
+                }
+            }
+
+            // Şehir sınırı: yol devam eder, araç karşı tarafa sarar.
             if car.x < 0.0 {
                 car.x += CITY_W as f32;
             } else if car.x >= CITY_W as f32 {
@@ -609,58 +1163,196 @@ impl CityDriveApp {
             } else if car.y >= CITY_H as f32 {
                 car.y -= CITY_H as f32;
             }
-            let dx = car.x - self.car_x;
-            let dy = car.y - self.car_y;
-            if dx * dx + dy * dy < 0.85 {
-                self.speed *= 0.25;
-                self.crash_flash = 10;
-                // Çarpan araç biraz geri itilir.
-                car.x -= car.dir_x * 0.05;
-                car.y -= car.dir_y * 0.05;
-            }
+
+            self.traffic[i] = car;
         }
 
-        // Hedef toplama.
-        let mut remaining = 0u32;
-        for orb in self.orbs.iter_mut() {
-            if !orb.active {
-                remaining += 1;
+        self.update_traffic_speed(dt);
+    }
+
+    /// Araçların hızını takip mesafesine ve hedef hıza göre ayarlar.
+    fn update_traffic_speed(&mut self, dt: f32) {
+        for i in 0..MAX_TRAFFIC {
+            let car = self.traffic[i];
+            let mut c = car;
+
+            if c.turn.is_some() {
+                // Kavşakta yavaşla, direksiyon düzelt.
+                c.speed = c.speed.min(TURN_SPEED);
+                c.brake = 0.6;
+                self.traffic[i] = c;
                 continue;
             }
-            let dx = orb.x - self.car_x;
-            let dy = orb.y - self.car_y;
-            if dx * dx + dy * dy < 1.6 {
-                orb.active = false;
-                self.score += 25;
-                self.collected += 1;
-            } else {
-                remaining += 1;
-            }
-        }
-        if remaining == MAX_ORBS as u32 {
-            // Tüm hedefler toplandı: yeni hedefler belirir.
-            for (i, orb) in self.orbs.iter_mut().enumerate() {
-                let h = hash4(i, self.collected as usize, 41, 43);
-                let corridor = (h % (CITY_W / ROAD_PERIOD) as u32) as usize;
-                let along = ((h >> 8) % (CITY_W as u32 - 4)) as f32 + 2.0;
-                if ((h >> 16) & 1) == 0 {
-                    orb.x = along;
-                    orb.y = (corridor * ROAD_PERIOD) as f32 + 1.0;
-                } else {
-                    orb.x = (corridor * ROAD_PERIOD) as f32 + 1.0;
-                    orb.y = along;
+
+            // Aynı şeritte öndeki araç.
+            let mut gap = 60.0f32;
+            let mut lead_speed = 30.0f32;
+            for (j, other) in self.traffic.iter().enumerate() {
+                if i == j {
+                    continue;
                 }
-                orb.active = true;
+                if other.axis != c.axis || other.road != c.road || other.lane_dir != c.lane_dir {
+                    continue;
+                }
+                let d = (other.along() - c.along()) * c.lane_dir;
+                if d > 0.0 && d < gap {
+                    gap = d;
+                    lead_speed = other.speed;
+                }
             }
-        }
 
-        if self.crash_flash > 0 {
-            self.crash_flash -= 1;
-        }
+            // Oyuncu da öndeki engeldir.
+            let player_lateral = match c.axis {
+                LaneAxis::Horizontal => self.car_y,
+                LaneAxis::Vertical => self.car_x,
+            };
+            let (_, lane_y) = lane_point(c.axis, c.road, c.lane_dir);
+            let lane_center = match c.axis {
+                LaneAxis::Horizontal => lane_y,
+                LaneAxis::Vertical => lane_point(c.axis, c.road, c.lane_dir).0,
+            };
+            if absf(player_lateral - lane_center) < 1.6 {
+                let player_along = match c.axis {
+                    LaneAxis::Horizontal => self.car_x * c.lane_dir,
+                    LaneAxis::Vertical => self.car_y * c.lane_dir,
+                };
+                let d = (player_along - c.along()) * c.lane_dir;
+                if d > 0.0 && d < gap {
+                    gap = d;
+                    lead_speed = 0.0;
+                }
+            }
 
-        // Motor sesi: hıza göre frekans.
-        let ratio = (absf(self.speed) / MAX_SPEED).min(1.0);
-        self.engine_freq = 40 + (ratio * 150.0) as u32;
+            // Takip mesafesine göre hız.
+            let safe = 5.0 + c.speed * 0.9;
+            if gap < safe {
+                c.speed -= 8.0 * dt;
+                c.brake = 1.0;
+            } else if gap < safe * 2.5 && c.speed > lead_speed {
+                c.speed -= 4.0 * dt;
+                c.brake = 0.55;
+            } else {
+                c.speed += c.kind.accel() * dt;
+                c.brake = 0.0;
+            }
+            c.speed = c.speed.clamp(0.0, c.target_speed);
+            self.traffic[i] = c;
+        }
+    }
+
+    /// Bir aracın sonraki kavşakta yapacağı manevrayı planlar.
+    ///
+    /// Deterministik bir seçimle (düz / sağa / sola) kavşak dönüş yayını
+    /// üretir; giriş noktası aracın önündeyse `Some` döner.
+    fn plan_turn(&self, index: usize, car: &TrafficCar) -> Option<(f32, TurnArc)> {
+        let pos = match car.axis {
+            LaneAxis::Horizontal => car.x,
+            LaneAxis::Vertical => car.y,
+        };
+        let center = next_intersection(pos, car.lane_dir);
+        let dist = (center - pos) * car.lane_dir;
+        if dist > 20.0 || dist < -2.0 {
+            return None;
+        }
+        let inter = intersection_index(center);
+        let road_count = match car.axis {
+            LaneAxis::Horizontal => CITY_W / ROAD_PERIOD,
+            LaneAxis::Vertical => CITY_H / ROAD_PERIOD,
+        };
+        if inter >= road_count {
+            return None;
+        }
+        let roll = hash4(index, car.road, inter, 91) % 100;
+        let right_turn = if roll < 64 {
+            return None; // Düz git
+        } else {
+            roll < 82
+        };
+        let arc = self.build_turn(car, inter, right_turn)?;
+
+        // Giriş noktası araçtan ileride olmalı.
+        let entry_x = arc.cx + arc.rx;
+        let entry_y = arc.cy + arc.ry;
+        let entry_along = match car.axis {
+            LaneAxis::Horizontal => entry_x * car.lane_dir,
+            LaneAxis::Vertical => entry_y * car.lane_dir,
+        };
+        if entry_along < car.along() - 0.5 {
+            return None;
+        }
+        Some((entry_along, arc))
+    }
+
+    /// Kavşak dönüş yayını üretir.
+    ///
+    /// Mevcut şerit ile hedef şeritin kesiştiği köşeye, dönüş yarıçapı kadar
+    /// uzaklıkta bir yay merkezi yerleştirilir.
+    fn build_turn(&self, car: &TrafficCar, inter: usize, right_turn: bool) -> Option<TurnArc> {
+        let (ax, ay) = lane_point(car.axis, car.road, car.lane_dir);
+        let (dx, dy) = lane_dir_vec(car.axis, car.lane_dir);
+        let (rtx, rty) = right_vec(dx, dy);
+
+        let new_axis = match car.axis {
+            LaneAxis::Horizontal => LaneAxis::Vertical,
+            LaneAxis::Vertical => LaneAxis::Horizontal,
+        };
+        // Yeni yön: sağa dönüşte sağ vektörü, sola dönüşte onun tersi.
+        let (ndx, ndy) = if right_turn { (rtx, rty) } else { (-rtx, -rty) };
+        let new_lane_dir = match new_axis {
+            LaneAxis::Horizontal => ndx,
+            LaneAxis::Vertical => ndy,
+        };
+        let (bx, by) = lane_point(new_axis, inter, new_lane_dir);
+        let (nrx, nry) = right_vec(ndx, ndy);
+
+        // Giriş noktası: iki şerit arasındaki açıklığı kapatacak konum.
+        let r = TURN_ARC_R;
+        let (mut ex, mut ey) = (bx - ax, by - ay);
+        if right_turn {
+            ex += r * (nrx - rtx);
+            ey += r * (nry - rty);
+        } else {
+            ex += r * (rtx - nrx);
+            ey += r * (rty - nry);
+        }
+        let t = ex * dx + ey * dy;
+        let entry_x = ax + dx * t;
+        let entry_y = ay + dy * t;
+
+        // Yayın çıkış noktası: yeni şerit üzerindeki kesin konum.
+        let s = -(ex * ndx + ey * ndy);
+        let exit_x = bx + ndx * s;
+        let exit_y = by + ndy * s;
+
+        // Yay merkezi ve başlangıç yarıçap vektörü.
+        let (cx, cy, rx, ry, rot) = if right_turn {
+            (
+                entry_x + rtx * r,
+                entry_y + rty * r,
+                -rtx * r,
+                -rty * r,
+                -1.0,
+            )
+        } else {
+            (entry_x - rtx * r, entry_y - rty * r, rtx * r, rty * r, 1.0)
+        };
+
+        Some(TurnArc {
+            cx,
+            cy,
+            r,
+            rx,
+            ry,
+            swept: 0.0,
+            rot,
+            exit_x,
+            exit_y,
+            end_dir_x: ndx,
+            end_dir_y: ndy,
+            new_axis,
+            new_road: inter,
+            new_lane_dir,
+        })
     }
 
     /// Motor sesini üretir (çağıran ses cihazına yazar).
@@ -919,19 +1611,15 @@ impl CityDriveApp {
             }
         }
 
-        // 4) Sprite'lar: hedef kubbeleri ve trafik araçları.
-        for orb in self.orbs.iter() {
-            if !orb.active {
+        // 4) Sprite'lar: ödüller ve trafik araçları.
+        for reward in self.rewards.iter() {
+            if !reward.active {
                 continue;
             }
-            self.draw_sprite(
-                fb, top, win_w, horizon, focal, &zbuf, orb.x, orb.y, 0.55, 0xF5D442, true,
-            );
+            self.draw_reward(fb, top, win_w, horizon, focal, &zbuf, reward);
         }
         for car in self.traffic.iter() {
-            self.draw_sprite(
-                fb, top, win_w, horizon, focal, &zbuf, car.x, car.y, 1.0, car.color, false,
-            );
+            self.draw_vehicle(fb, top, win_w, horizon, focal, &zbuf, car);
         }
 
         // 5) HUD.
@@ -962,42 +1650,32 @@ impl CityDriveApp {
             T_PARK => PARK_COLOR,
             _ => ROAD_COLOR,
         };
-        // Yol şeridi: koridorun ortasında kesikli sarı çizgi.
-        let lx = modf(fx, ROAD_PERIOD as f32);
+        // Yol orta çizgisi: iki yönü ayıran kesikli sarı çizgi.
         let ly = modf(fy, ROAD_PERIOD as f32);
-        let dashed_x = modf(fx, 3.0) < 1.7;
-        let dashed_y = modf(fy, 3.0) < 1.7;
-        if ly < ROAD_HALF as f32 && absf(ly - 1.0) < 0.16 && dashed_x {
+        let lx = modf(fx, ROAD_PERIOD as f32);
+        if absf(ly - ROAD_AXIS_OFF) < 0.15 && modf(fx, 3.2) < 1.9 {
             return shade(LANE_COLOR, shade_f);
         }
-        if lx < ROAD_HALF as f32 && absf(lx - 1.0) < 0.16 && dashed_y {
+        if absf(lx - ROAD_AXIS_OFF) < 0.15 && modf(fy, 3.2) < 1.9 {
             return shade(LANE_COLOR, shade_f);
         }
-        // Hücreye bağlı az karartma: düz zemini parçalı bir doku gibi gösterir,
-        // ek çizim maliyeti yok.
         let mut color = shade(base, shade_f);
-        if (cx + cy) & 1 == 0 {
-            color = shade(color, 0.88);
+        // Kaldırım taş dokusu (1 m plaka); asfalt düz kalır.
+        if kind == T_SIDEWALK && (cx + cy) & 1 == 0 {
+            color = shade(color, 0.90);
         }
         color
     }
 
-    /// Dünya koordinatındaki bir nesneyi ekrana bilboard olarak çizer.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_sprite(
+    /// Bir dünya noktasının ekran projeksiyonunu hesaplar (derinlik testi ile).
+    fn project(
         &self,
-        fb: &mut Framebuffer,
-        win_y: usize,
-        win_w: usize,
-        horizon: usize,
-        focal: f32,
-        zbuf: &[f32; 1024],
         world_x: f32,
         world_y: f32,
-        world_h: f32,
-        color: u32,
-        round: bool,
-    ) {
+        win_w: usize,
+        focal: f32,
+        zbuf: &[f32; 1024],
+    ) -> Option<(i32, f32, f32)> {
         let dir_x = cos(self.cam_dir);
         let dir_y = sin(self.cam_dir);
         let plane_x = -dir_y * PLANE_LEN;
@@ -1006,81 +1684,368 @@ impl CityDriveApp {
         let rel_y = world_y - self.car_y;
         let depth = rel_x * dir_x + rel_y * dir_y;
         if depth <= 0.25 {
-            return;
+            return None;
         }
         let lateral = rel_x * plane_x + rel_y * plane_y;
         let cam_x = lateral / depth;
         if cam_x < -1.0 || cam_x > 1.0 {
-            return;
+            return None;
         }
         let screen_x = ((cam_x + 1.0) * 0.5 * win_w as f32) as i32;
         if screen_x < 0 || screen_x as usize >= win_w.min(1024) {
-            return;
+            return None;
         }
         let depth = depth.min(MAX_VIEW);
         if depth >= zbuf[screen_x as usize] {
+            return None;
+        }
+        Some((screen_x, depth, focal / depth))
+    }
+
+    /// Trafik aracını bilboard olarak çizer.
+    ///
+    /// Araç yönü ile görüş yönüne göre ön / arka / yan görünüş seçilir:
+    /// önde farlar, arkada stop lambaları, yanda tekerlekler görünür.
+    fn draw_vehicle(
+        &self,
+        fb: &mut Framebuffer,
+        win_y: usize,
+        win_w: usize,
+        horizon: usize,
+        focal: f32,
+        zbuf: &[f32; 1024],
+        car: &TrafficCar,
+    ) {
+        let (screen_x, depth, scale) = match self.project(car.x, car.y, win_w, focal, zbuf) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Görüş yönü ile araç yönü arasındaki açı.
+        let rel_x = car.x - self.car_x;
+        let rel_y = car.y - self.car_y;
+        let dist = sqrtf(rel_x * rel_x + rel_y * rel_y);
+        if dist < 0.01 {
             return;
         }
-        let scale = focal / depth;
-        let size_y = (world_h * scale).max(2.0) as i32;
-        let size_x = if round {
-            size_y
-        } else {
-            (world_h * 1.9 * scale).max(3.0) as i32
-        };
-        let center_y = horizon as f32 + (CAM_H - world_h * 0.5) * scale;
-        let top = (center_y - size_y as f32 * 0.5).max(0.0) as i32;
-        let left = screen_x - size_x / 2;
-        let bottom = top + size_y;
+        let cos_a = (car.dir_x * rel_x + car.dir_y * rel_y) / dist;
+        let sin_a = absf(car.dir_x * rel_y - car.dir_y * rel_x) / dist;
+        let rear = cos_a > 0.55;
+        let front = cos_a < -0.55;
+        let side_view = !rear && !front;
 
-        if round {
-            // Kubbe: parlak merkezli halka.
-            for row in top..bottom {
-                let dy = row - (top + bottom) / 2;
-                let half = (size_x / 2) as f32;
-                let dx = half - absf(dy as f32);
-                let w = (dx * 2.0) as i32;
-                if w <= 0 {
-                    continue;
-                }
-                let edge = dx < half * 0.35;
-                let c = if edge { 0xFFF0A0 } else { color };
+        // Görünen genişlik: araç uzunluğu ile genişliğinin izdüşümü.
+        let proj_len = car.length * sin_a + car.width * absf(cos_a);
+        let size_y = (car.height * scale).max(3.0) as i32;
+        let size_x = (proj_len * scale).max(3.0) as i32;
+
+        let bottom = horizon as f32 + CAM_H * scale;
+        let top = bottom - size_y as f32;
+        let y0 = (win_y as f32 + top).max(0.0) as usize;
+        let y1 = (win_y as f32 + bottom).max(0.0) as usize;
+        let h = y1.saturating_sub(y0).max(1);
+        let left = screen_x - size_x / 2;
+        let lx = left.max(0) as usize;
+        let lw = size_x.max(1) as usize;
+
+        let factor = 0.42 + 0.58 * (1.0 - (depth / MAX_VIEW).clamp(0.0, 1.0));
+        let body = shade(car.color, factor);
+        let dark = shade(car.color, factor * 0.62);
+        let glass = shade(0x2C3A44, factor);
+        let tire = shade(0x14161A, factor);
+
+        // Zemin gölgesi.
+        fb.draw_rect(lx, y1.saturating_sub(1), lw, 1, shade(0x000000, 0.45));
+
+        // Gövde.
+        fb.draw_rect(lx, y0, lw, h, body);
+
+        // Alt koyu şerit (plaka / tampon hizası).
+        let skirt = (h * 18 / 100).max(1);
+        fb.draw_rect(lx, y1.saturating_sub(skirt), lw, skirt, dark);
+
+        // Cam bandı.
+        let glass_h = if side_view {
+            (h * 34 / 100).max(1)
+        } else {
+            (h * 38 / 100).max(1)
+        };
+        let glass_y = y0 + (h * 12 / 100).max(1);
+        let glass_x = if side_view {
+            lx + (lw * 10 / 100).max(1)
+        } else {
+            lx + 1
+        };
+        let glass_w = if side_view {
+            (lw * 80 / 100).max(1)
+        } else {
+            lw.saturating_sub(2).max(1)
+        };
+        fb.draw_rect(glass_x, glass_y, glass_w, glass_h.min(h), glass);
+        // Cam üst kenarında ışık yansıması.
+        fb.draw_rect(glass_x, glass_y, glass_w, 1, shade(0x9FC6D8, factor * 0.8));
+
+        if side_view {
+            // Tekerlekler (yan görünüş).
+            let wheel_h = (h * 26 / 100).max(2);
+            let wheel_w = (lw * 18 / 100).max(2);
+            let wheel_y = y1.saturating_sub(wheel_h);
+            fb.draw_rect(lx + (lw * 8 / 100), wheel_y, wheel_w, wheel_h, tire);
+            fb.draw_rect(
+                lx + (lw * 74 / 100).min(lx.saturating_add(lw)),
+                wheel_y,
+                wheel_w,
+                wheel_h,
+                tire,
+            );
+            // Kapı çizgisi.
+            fb.draw_rect(
+                lx + (lw * 46 / 100),
+                y0 + (h * 30 / 100),
+                1,
+                (h * 45 / 100).max(1),
+                dark,
+            );
+        }
+
+        if front {
+            // Farlar.
+            let lamp_h = (h * 13 / 100).max(2);
+            let lamp_w = (lw * 20 / 100).max(2);
+            let lamp_y = y1.saturating_sub(skirt + lamp_h + 1);
+            fb.draw_rect(
+                lx + (lw * 12 / 100),
+                lamp_y,
+                lamp_w,
+                lamp_h,
+                shade(0xFFF4D2, factor),
+            );
+            fb.draw_rect(
+                lx + (lw * 68 / 100).min(lx.saturating_add(lw)),
+                lamp_y,
+                lamp_w,
+                lamp_h,
+                shade(0xFFF4D2, factor),
+            );
+            // Ön tampon.
+            fb.draw_rect(lx, y1.saturating_sub(skirt), lw, 1, shade(0x2A2E34, factor));
+        }
+        if rear {
+            // Stop lambaları (fren sırasında parlak).
+            let lamp_h = (h * 15 / 100).max(2);
+            let lamp_w = (lw * 20 / 100).max(2);
+            let lamp_y = y1.saturating_sub(skirt + lamp_h + 1);
+            let lamp = if car.brake > 0.2 {
+                shade(0xFF5A4A, factor.min(1.1))
+            } else {
+                shade(0xB02A22, factor)
+            };
+            fb.draw_rect(lx + (lw * 12 / 100), lamp_y, lamp_w, lamp_h, lamp);
+            fb.draw_rect(
+                lx + (lw * 68 / 100).min(lx.saturating_add(lw)),
+                lamp_y,
+                lamp_w,
+                lamp_h,
+                lamp,
+            );
+            // Plaka.
+            fb.draw_rect(
+                lx + (lw * 42 / 100),
+                y1.saturating_sub(skirt + 1),
+                (lw * 16 / 100).max(1),
+                1,
+                shade(0xE8E4D8, factor),
+            );
+        }
+
+        // Tür karakteristikleri: taksi tabelası ve polis lambası.
+        match car.kind {
+            VehicleKind::Taxi => {
+                let sign_w = (lw * 34 / 100).max(3);
+                let sign_h = (h * 9 / 100).max(2);
+                let sign_x = screen_x.saturating_sub((sign_w / 2) as i32).max(0) as usize;
                 fb.draw_rect(
-                    (left + half as i32 - w / 2).max(0) as usize,
-                    (win_y as i32 + row).max(0) as usize,
-                    w as usize,
+                    sign_x,
+                    y0.saturating_sub(sign_h),
+                    sign_w,
+                    sign_h,
+                    shade(0xF2E4B0, factor),
+                );
+                fb.draw_rect(
+                    sign_x,
+                    y0.saturating_sub(sign_h),
+                    sign_w,
                     1,
-                    c,
+                    shade(TAXI_STRIPE, factor),
                 );
             }
-        } else {
-            // Trafik aracı: gövde + cam bandı.
-            fb.draw_rect(
-                left.max(0) as usize,
-                (win_y as i32 + top).max(0) as usize,
-                size_x.max(1) as usize,
-                size_y.max(1) as usize,
-                color,
-            );
-            let glass_h = (size_y / 4).max(1) as usize;
-            fb.draw_rect(
-                (left + size_x / 6).max(0) as usize,
-                (win_y as i32 + top + size_y / 4).max(0) as usize,
-                (size_x * 2 / 3).max(1) as usize,
-                glass_h,
-                0x9FD4E8,
-            );
-            fb.draw_rect(
-                left.max(0) as usize,
-                (win_y as i32 + bottom - size_y / 5).max(0) as usize,
-                size_x.max(1) as usize,
-                (size_y / 5).max(1) as usize,
-                0x1A1C20,
-            );
+            VehicleKind::Police => {
+                let bar_w = (lw * 52 / 100).max(4);
+                let bar_h = (h * 9 / 100).max(2);
+                let bar_x = screen_x.saturating_sub((bar_w / 2) as i32).max(0) as usize;
+                let bar_y = y0.saturating_sub(bar_h);
+                fb.draw_rect(bar_x, bar_y, bar_w / 2, bar_h, shade(0xE03A3A, factor));
+                fb.draw_rect(
+                    bar_x + bar_w / 2,
+                    bar_y,
+                    bar_w - bar_w / 2,
+                    bar_h,
+                    shade(0x3A6BE0, factor),
+                );
+                // Gövde üzerindeki mavi kaplama bandı.
+                let band_y = y0 + (h * 52 / 100);
+                fb.draw_rect(
+                    lx,
+                    band_y,
+                    lw,
+                    (h * 14 / 100).max(1),
+                    shade(POLICE_BLUE, factor),
+                );
+            }
+            _ => {}
         }
     }
 
-    /// HUD: hız göstergesi, skor, mini harita, kontrol ipuçları.
+    /// Toplanabilir ödülü bilboard olarak çizer.
+    fn draw_reward(
+        &self,
+        fb: &mut Framebuffer,
+        win_y: usize,
+        win_w: usize,
+        horizon: usize,
+        focal: f32,
+        zbuf: &[f32; 1024],
+        reward: &Reward,
+    ) {
+        let (screen_x, depth, scale) = match self.project(reward.x, reward.y, win_w, focal, zbuf) {
+            Some(v) => v,
+            None => return,
+        };
+        let (h_world, w_world) = reward.kind.dims();
+        // Havada hafif salınım.
+        let bob = sin(self.anim_t * 2.0 + reward.phase) * 0.07;
+        let size_y = (h_world * scale).max(4.0) as usize;
+        let size_x = (w_world * scale).max(4.0) as usize;
+        let bottom = horizon as f32 + (CAM_H - (0.32 + bob)) * scale;
+        let top = bottom - size_y as f32;
+        let y0 = (win_y as f32 + top).max(0.0) as usize;
+        let left = screen_x - (size_x / 2) as i32;
+        let lx = left.max(0) as usize;
+        let lw = size_x.max(1);
+        let factor = 0.55 + 0.45 * (1.0 - (depth / MAX_VIEW).clamp(0.0, 1.0));
+
+        match reward.kind {
+            RewardKind::Coin => {
+                // Madeni para: altın disk, kalın kenar ve parlak merkez.
+                let r = size_y as f32 * 0.5;
+                let base = shade(0xD9A62B, factor);
+                let rim = shade(0xF7DE8C, factor);
+                let shine = shade(0xFFF4C8, factor);
+                for row in 0..size_y {
+                    let dy = row as f32 + 0.5 - r;
+                    let hw = sqrtf((r * r - dy * dy).max(0.0));
+                    if hw < 0.5 {
+                        continue;
+                    }
+                    let w = (hw * 2.0) as usize;
+                    let x0 = screen_x.saturating_sub((w as i32) / 2).max(0) as usize;
+                    let color = if hw > r * 0.80 {
+                        rim
+                    } else if dy < -r * 0.25 && hw < r * 0.45 {
+                        shine
+                    } else {
+                        base
+                    };
+                    fb.draw_rect(x0, y0 + row, w, 1, color);
+                }
+            }
+            RewardKind::Banknote => {
+                // Banknot: yeşil kâğıt, açık kenar ve orta oval.
+                let body = shade(0x5FBF78, factor);
+                let edge = shade(0xA8E6B6, factor);
+                let inner = shade(0x3E9E58, factor);
+                fb.draw_rect(lx, y0, lw, size_y, body);
+                fb.draw_rect(lx, y0, lw, 1, edge);
+                fb.draw_rect(lx, y0 + size_y - 1, lw, 1, edge);
+                fb.draw_rect(lx + 1, y0, 1, size_y, edge);
+                fb.draw_rect(lx + lw - 2, y0, 1, size_y, edge);
+                let iw = (lw * 44 / 100).max(1);
+                let ih = (size_y * 44 / 100).max(1);
+                fb.draw_rect(
+                    screen_x.saturating_sub((iw as i32) / 2).max(0) as usize,
+                    y0 + (size_y - ih) / 2,
+                    iw,
+                    ih,
+                    inner,
+                );
+            }
+            RewardKind::Fuel => {
+                // Yakıt bidonu: kırmızı gövde, koyu kapak ve tutamak.
+                let body = shade(0xD2503F, factor);
+                let edge = shade(0x9C3629, factor);
+                let cap = shade(0x2A2E34, factor);
+                fb.draw_rect(lx, y0, lw, size_y, body);
+                fb.draw_rect(lx, y0 + size_y - 1, lw, 1, edge);
+                fb.draw_rect(lx, y0, 1, size_y, edge);
+                fb.draw_rect(lx + lw - 2, y0, 1, size_y, edge);
+                // Kapak.
+                fb.draw_rect(
+                    screen_x.saturating_sub(lw as i32 * 15 / 100).max(0) as usize,
+                    y0.saturating_sub(2),
+                    (lw * 30 / 100).max(2),
+                    2,
+                    cap,
+                );
+                // Tutamak.
+                let handle = (size_y * 18 / 100).max(2);
+                fb.draw_rect(
+                    lx + (lw * 32 / 100),
+                    y0.saturating_sub(handle),
+                    (lw * 30 / 100).max(2),
+                    handle,
+                    cap,
+                );
+            }
+            RewardKind::Medal => {
+                // Madalya: kurşun şeritler ve altın disk.
+                let ribbon = shade(0xD0402E, factor);
+                let ribbon2 = shade(0x2C5FA8, factor);
+                let base = shade(0xD9A62B, factor);
+                let rim = shade(0xF7DE8C, factor);
+                let r = size_y as f32 * 0.36;
+                let disc_top = y0 + (size_y as f32 * 0.30) as usize;
+                // Şeritler.
+                fb.draw_rect(
+                    lx + (lw * 14 / 100),
+                    y0,
+                    (lw * 14 / 100).max(2),
+                    disc_top.saturating_sub(y0),
+                    ribbon,
+                );
+                fb.draw_rect(
+                    lx + (lw * 72 / 100),
+                    y0,
+                    (lw * 14 / 100).max(2),
+                    disc_top.saturating_sub(y0),
+                    ribbon2,
+                );
+                // Disk.
+                for row in 0..((r * 2.0) as usize) {
+                    let dy = row as f32 + 0.5 - r;
+                    let hw = sqrtf((r * r - dy * dy).max(0.0));
+                    if hw < 0.5 {
+                        continue;
+                    }
+                    let w = (hw * 2.0) as usize;
+                    let x0 = screen_x.saturating_sub((w as i32) / 2).max(0) as usize;
+                    let color = if hw > r * 0.78 { rim } else { base };
+                    fb.draw_rect(x0, disc_top + row, w, 1, color);
+                }
+            }
+        }
+    }
+
+    /// HUD: hız göstergesi, dönüş yarıçapı, skor, mini harita, kontrol ipuçları.
     fn render_hud(
         &self,
         fb: &mut Framebuffer,
@@ -1089,23 +2054,24 @@ impl CityDriveApp {
         win_w: usize,
         win_h: usize,
     ) {
-        // Hız göstergesi (sol alt).
-        let panel_w = 190.min(win_w.saturating_sub(20));
-        let panel_h = 54;
+        // Hız ve dönüş yarıçapı paneli (sol alt).
+        let panel_w = 250.min(win_w.saturating_sub(20));
+        let panel_h = 74;
         let px = win_x + 10;
         let py = win_y + win_h.saturating_sub(panel_h + 10);
         fb.draw_rect(px, py, panel_w, panel_h, 0x141922);
         fb.draw_rect_outline(px, py, panel_w, panel_h, 0x2E3A4A);
 
-        let speed_kmh = (absf(self.speed) * 7.2) as u32;
+        let speed_kmh = (absf(self.speed) * 3.6) as u32;
         let mut label = crate::gui::TextBuf::new();
         label.push_usize(speed_kmh as usize);
-        label.push_str(" km/s");
+        label.push_str(" ");
+        label.push_str(crate::gui::ui_text("km/sa", "km/h"));
         MinGuiCompositor::draw_string(fb, px + 10, py + 8, label.as_str(), Color::TEXT_MAIN);
 
         // Hız çubuğu.
         let bar_x = px + 10;
-        let bar_y = py + 28;
+        let bar_y = py + 26;
         let bar_w = panel_w - 20;
         let bar_h = 12;
         fb.draw_rect(bar_x, bar_y, bar_w, bar_h, 0x232A35);
@@ -1120,13 +2086,29 @@ impl CityDriveApp {
         };
         fb.draw_rect(bar_x, bar_y, fill_w, bar_h, fill_color);
 
-        // Skor ve mesafe (sol üst).
+        // Dönüş yarıçapı göstergesi (bisiklet modeli).
+        let mut radius_buf = crate::gui::TextBuf::new();
+        radius_buf.push_str(crate::gui::ui_text("Dönüş yarıçapı: ", "Turn radius: "));
+        if absf(self.steer_cmd) > 0.08 {
+            let speed_abs = absf(self.speed);
+            let r_min = TURN_R_MIN + TURN_R_SPEED_K * speed_abs * speed_abs;
+            radius_buf.push_usize((r_min / absf(self.steer_cmd)) as usize);
+            radius_buf.push_str(" m");
+        } else {
+            radius_buf.push_str(crate::gui::ui_text("düz", "straight"));
+        }
+        MinGuiCompositor::draw_string(fb, px + 10, py + 46, radius_buf.as_str(), Color::TEXT_MUTED);
+
+        // Skor, mesafe ve toplanan ödül (sol üst).
         let mut score_buf = crate::gui::TextBuf::new();
-        score_buf.push_str("Skor: ");
+        score_buf.push_str(crate::gui::ui_text("Skor: ", "Score: "));
         score_buf.push_usize(self.score as usize);
-        score_buf.push_str("  Mesafe: ");
+        score_buf.push_str("  ");
+        score_buf.push_str(crate::gui::ui_text("Mesafe: ", "Distance: "));
         score_buf.push_usize((self.distance * 10.0) as usize);
-        score_buf.push_str(" m");
+        score_buf.push_str(" m  ");
+        score_buf.push_str(crate::gui::ui_text("Ödül: ", "Prizes: "));
+        score_buf.push_usize(self.collected as usize);
         MinGuiCompositor::draw_string(
             fb,
             win_x + 10,
@@ -1174,12 +2156,12 @@ impl CityDriveApp {
                     "W/S throttle-brake · A/D steer · Space handbrake",
                 );
                 let goal = crate::gui::ui_text(
-                    "Sarı kubbeleri topla, trafikten kaç!",
-                    "Collect yellow orbs, dodge traffic!",
+                    "Madeni paraları ve ödülleri topla, trafikten kaç!",
+                    "Collect coins and prizes, dodge traffic!",
                 );
                 let cx = win_x + win_w / 2;
                 let cy = win_y + win_h / 2;
-                let bw = 320.min(win_w.saturating_sub(20));
+                let bw = 340.min(win_w.saturating_sub(20));
                 let bh = 150.min(win_h.saturating_sub(20));
                 fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, bh, 0x0E1218);
                 fb.draw_rect_outline(cx - bw / 2, cy - bh / 2, bw, bh, 0x4DABF7);
@@ -1235,11 +2217,10 @@ impl CityDriveApp {
         fb.draw_rect_outline(x, y, size, size, 0x2E3A4A);
         let view_cells = 26.0f32;
         let scale = size as f32 / view_cells;
-        let half = view_cells * 0.5;
 
         // Caddeler.
         for i in 0..(CITY_W / ROAD_PERIOD) {
-            let road = (i * ROAD_PERIOD) as f32;
+            let road = (i * ROAD_PERIOD) as f32 + ROAD_AXIS_OFF;
             let vx = x as f32 + (road - self.car_x) * scale;
             if vx >= x as f32 && vx < (x + size) as f32 {
                 fb.draw_rect(vx as usize, y, 3, size, 0x39414D);
@@ -1250,16 +2231,16 @@ impl CityDriveApp {
             }
         }
 
-        // Hedefler.
-        for orb in self.orbs.iter() {
-            if !orb.active {
+        // Ödüller.
+        for reward in self.rewards.iter() {
+            if !reward.active {
                 continue;
             }
-            let px = x as f32 + (orb.x - self.car_x) * scale;
-            let py = y as f32 + (orb.y - self.car_y) * scale;
+            let px = x as f32 + (reward.x - self.car_x) * scale;
+            let py = y as f32 + (reward.y - self.car_y) * scale;
             if px >= x as f32 && px < (x + size) as f32 && py >= y as f32 && py < (y + size) as f32
             {
-                fb.draw_rect(px as usize, py as usize, 3, 3, 0xF5D442);
+                fb.draw_rect(px as usize, py as usize, 3, 3, reward.kind.tint());
             }
         }
 
@@ -1267,7 +2248,7 @@ impl CityDriveApp {
         for car in self.traffic.iter() {
             let px = x as f32 + (car.x - self.car_x) * scale;
             let py = y as f32 + (car.y - self.car_y) * scale;
-            if px >= x as f32 && px < (x + size) as f32 && py >= y as f32 && py < (y + size) as f32
+            if px >= x as f32 && px < (x + size) as f32 && py >= y as f32 && py < (x + size) as f32
             {
                 fb.draw_rect(px as usize, py as usize, 3, 3, car.color);
             }
@@ -1284,12 +2265,8 @@ impl CityDriveApp {
             let py = (cy as f32 + fy * step as f32 * 1.6) as usize;
             fb.draw_rect(px, py, 2, 2, 0xFFD0D0);
         }
-        let _ = half;
     }
 }
-
-/// Trafik araçları için renk paleti.
-const TRAFFIC_COLORS: [u32; 6] = [0xD94F4F, 0x4F8FD9, 0xE0C04F, 0x5FD98F, 0xD9D9D9, 0x9A5FD9];
 
 impl Default for CityDriveApp {
     fn default() -> Self {

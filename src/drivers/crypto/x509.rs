@@ -866,6 +866,43 @@ pub fn verify_certificate_fields(
     Ok(())
 }
 
+/// Sertifika geçerlilik süresine izin verilen tolerans (±48 saat).
+/// RTC saati doğru ayarlı değilse (ör. QEMU/çekim donanımında) tüm HTTPS
+/// bağlantılarının sertifika süresi hatasıyla reddedilmesini önler.
+const CERT_VALIDITY_TOLERANCE_SECONDS: u64 = 48 * 3600;
+
+/// X509Time'ı 2000-01-01 00:00:00 UTC referansından saniyeye çevirir.
+fn x509_time_to_seconds(t: &X509Time) -> u64 {
+    let mut days: u64 = 0;
+    for y in 2000..t.year {
+        days += if is_leap_year(y) { 366 } else { 365 };
+    }
+    for m in 1..t.month {
+        days += days_in_month(t.year, m);
+    }
+    days += (t.day - 1) as u64;
+    days * 86_400 + (t.hour as u64) * 3_600 + (t.minute as u64) * 60 + (t.second as u64)
+}
+
+fn is_leap_year(year: u16) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn days_in_month(year: u16, month: u8) -> u64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
 fn verify_validity(info: &CertificateInfo, now: &X509Time) -> Result<(), CertValidationError> {
     let not_before = info
         .not_before
@@ -878,10 +915,16 @@ fn verify_validity(info: &CertificateInfo, now: &X509Time) -> Result<(), CertVal
     if not_before > not_after {
         return Err(CertValidationError::InvalidDer);
     }
-    if now < not_before {
+
+    let now_secs = x509_time_to_seconds(now);
+    let nb_secs = x509_time_to_seconds(not_before);
+    let na_secs = x509_time_to_seconds(not_after);
+    let tolerance = CERT_VALIDITY_TOLERANCE_SECONDS;
+
+    if now_secs < nb_secs && nb_secs - now_secs > tolerance {
         return Err(CertValidationError::NotYetValid);
     }
-    if now > not_after {
+    if now_secs > na_secs && now_secs - na_secs > tolerance {
         return Err(CertValidationError::Expired);
     }
     Ok(())
@@ -1422,6 +1465,14 @@ pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
 pub const OID_SHA384_WITH_RSA_ENCRYPTION: &[u8] =
     &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C];
 
+/// SHA-1 with RSA Encryption OID: 1.2.840.113549.1.1.5
+///
+/// SHA-1 artık çökme karşıtı olarak zayıf sayılsa da, bazı eski/intermediate
+/// CA sertifikaları hala sha1WithRSAEncryption ile imzalanıyor. Bu OID'i
+/// desteklemek daha fazla HTTPS sitesine erişim sağlar.
+pub const OID_SHA1_WITH_RSA_ENCRYPTION: &[u8] =
+    &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05];
+
 /// ECDSA with SHA-256 OID: 1.2.840.10045.4.3.2
 pub const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
 /// ECDSA with SHA-384 OID: 1.2.840.10045.4.3.3
@@ -1553,6 +1604,15 @@ impl<'a> ParsedX509Cert<'a> {
             let issuer_rsa_key = parse_spki_rsa_public_key(issuer_spki)
                 .map_err(|_| CertValidationError::InvalidDer)?;
             crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha256(
+                &issuer_rsa_key,
+                self.tbs_raw,
+                self.signature,
+            )
+            .map_err(|_| CertValidationError::InvalidSignature)
+        } else if self.sig_alg_oid == OID_SHA1_WITH_RSA_ENCRYPTION {
+            let issuer_rsa_key = parse_spki_rsa_public_key(issuer_spki)
+                .map_err(|_| CertValidationError::InvalidDer)?;
+            crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha1(
                 &issuer_rsa_key,
                 self.tbs_raw,
                 self.signature,
@@ -1979,25 +2039,39 @@ mod tests {
             Err(CertValidationError::HostnameMismatch)
         );
 
-        // Henüz geçerli değil
+        // Henüz geçerli değil (tolerans penceresi dışında: 4 gün önce)
         let too_early = X509Time {
             year: 2023,
             month: 12,
-            day: 31,
-            hour: 23,
-            minute: 59,
-            second: 59,
+            day: 28,
+            hour: 0,
+            minute: 0,
+            second: 0,
         };
         assert_eq!(
             verify_certificate_fields(&der, "XX", &too_early),
             Err(CertValidationError::NotYetValid)
         );
 
-        // Süresi dolmuş
+        // Tolerans penceresinin içinde (48 saat içinde) → kabul edilir
+        let within_tolerance = X509Time {
+            year: 2023,
+            month: 12,
+            day: 31,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(
+            verify_certificate_fields(&der, "XX", &within_tolerance),
+            Ok(())
+        );
+
+        // Süresi dolmuş (tolerans penceresi dışında: 4 gün sonra)
         let too_late = X509Time {
             year: 2025,
             month: 1,
-            day: 2,
+            day: 5,
             hour: 0,
             minute: 0,
             second: 0,

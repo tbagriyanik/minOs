@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
+use crate::drivers::crypto::sha1::Sha1;
 use crate::drivers::crypto::sha256::Sha256;
 
 /// Counter used to vary the PKCS#1 padding between calls.
@@ -241,6 +242,15 @@ fn mod_pow_limbs_big(base: &[u32], exp: &[u32], m: &[u32]) -> Vec<u32> {
     result
 }
 
+/// SHA-1 DigestInfo prefix used by PKCS#1 v1.5 signatures (1.3.14.3.2.26).
+///
+/// Bazı eski/intermediate CA sertifikaları hala sha1WithRSAEncryption ile
+/// imzalanıyor; yalnızca SHA-256/384 desteklendiğinde bu zincirler
+/// `UnsupportedSignatureAlgorithm` ile reddediliyordu.
+const SHA1_DIGEST_INFO_PREFIX: [u8; 15] = [
+    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
+];
+
 /// SHA-256 DigestInfo prefix used by PKCS#1 v1.5 signatures.
 const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
     0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
@@ -299,6 +309,19 @@ pub fn rsa_verify_pkcs1_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Re
     h.update(msg);
     let digest = h.finalize();
     rsa_verify_pkcs1_digest_info(key, sig, &SHA256_DIGEST_INFO_PREFIX, &digest)
+}
+
+/// PKCS#1 v1.5 + SHA-1 imza doğrulaması.
+///
+/// Eski/intermediate CA sertifikaları (ve bazı TLS sunucu sertifikaları)
+/// hala sha1WithRSAEncryption ile imzalanabiliyor. SHA-1 artık çökme
+/// karşıtı olarak zayıf sayılsa da, sertifika zinciri doğrulamasında
+/// kabul edilmesi daha fazla HTTPS sitesine erişim sağlar.
+pub fn rsa_verify_pkcs1_sha1(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+    let mut h = Sha1::new();
+    h.update(msg);
+    let digest = h.finalize();
+    rsa_verify_pkcs1_digest_info(key, sig, &SHA1_DIGEST_INFO_PREFIX, &digest)
 }
 
 /// SHA-384 DigestInfo prefix used by PKCS#1 v1.5 signatures.

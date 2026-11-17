@@ -53,8 +53,6 @@ jobs:
 
       - name: Install ISO Creation Tools
         run: |
-          # Fix apt sources - ensure standard Ubuntu repositories are present
-          sudo sed -i 's/^# *//' /etc/apt/sources.list 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y xorriso mtools build-essential git qemu-system-x86
           # Limine binary utility (for limine bios-install)

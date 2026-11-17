@@ -3318,7 +3318,7 @@ impl BrowserApp {
         if self.request_deadline == 0 {
             self.request_deadline = now.wrapping_add(15000);
         }
-        if now.wrapping_sub(self.request_deadline) < usize::MAX / 2 {
+        if now.wrapping_sub(self.request_deadline) >= usize::MAX / 2 {
             self.request_pending = false;
             self.status = crate::gui::ui_text(
                 "Ağ isteği zaman aşımına uğradı.",
@@ -3331,6 +3331,18 @@ impl BrowserApp {
             // içeriği temizlenmez, yüklenmiş kısmı ekranda kalır.
             if self.request_is_resource {
                 self.fail_resource_request();
+            }
+            // TLS hata detaylarını logla
+            if let Some(ref tls) = self.tls_session {
+                let alert = tls.last_alert();
+                let context = tls.diagnostic_context();
+                let mut s: heapless::String<256> = heapless::String::new();
+                let _ = writeln!(
+                    s,
+                    "TLS handshake timeout after 15s; alert={:?}, context={:?}",
+                    alert, context
+                );
+                crate::serial_print(&s);
             }
             return;
         }
@@ -3556,6 +3568,7 @@ impl BrowserApp {
                                 "TLS el sıkışması ve yanıt bekleniyor...",
                                 "Waiting for TLS handshake & response...",
                             );
+                            // El sıkışma başarıyla başlatıldı; sırasıyle TCP verilerini işle.
                         } else {
                             self.finish_network_error(crate::gui::ui_text(
                                 "TLS ClientHello gönderilemedi.",
@@ -3577,6 +3590,15 @@ impl BrowserApp {
             }
             2 => {
                 // TCP verisini al ve TLS oturumuna besle (https için).
+                crate::serial_print("[HTTP] request_state=2, response_len=");
+                crate::serial::print_dec(self.response_len as u64);
+                crate::serial_print(", tls_session=");
+                crate::serial_print(if self.tls_session.is_some() {
+                    "Some"
+                } else {
+                    "None"
+                });
+                crate::serial_print("\n");
                 if self.response_data.len() < RESPONSE_BUF_MIN {
                     self.response_data.resize(RESPONSE_BUF_MIN, 0);
                 }
@@ -3668,6 +3690,14 @@ impl BrowserApp {
                     self.tls_app_data.extend_from_slice(&app_out);
                 }
                 if let Some((alert, detail)) = tls_failed {
+                    crate::serial_print("[HTTPS] TLS hata alert=");
+                    let alert_str = if let Some((level, desc)) = alert {
+                        format!("level={},desc={}", level, desc)
+                    } else {
+                        "None".to_string()
+                    };
+                    crate::serial_print(alert_str.as_str());
+                    crate::serial_print("\n");
                     let status = match alert {
                         Some((_, desc)) => crate::drivers::tls::alert_description_text(desc),
                         None => crate::gui::ui_text(

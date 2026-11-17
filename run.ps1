@@ -129,7 +129,7 @@ if ($Minimal) {
         # Yalnızca çıkış codec'i: DirectSoundCapture / mikrofon başlatılmaz.
         "-device", "hda-output,audiodev=snd0",
         # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
-        "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
+        "-netdev", "user,id=n0,hostfwd=tcp::8082-:80",
         "-device", "e1000,netdev=n0"
     )
     if ($HighEnd) {
@@ -228,19 +228,28 @@ if ($NoPs2) {
 # QEMU 11'in varsayılan 'pc' makinesinde i8042 PS/2 denetleyicisi vardır ancak
 # ona bağlı PS/2 klavye/fare aygıtı yoktur (ps2-keyboard/ps2-mouse cihaz
 # modeli mevcut değil). Dolayısıyla klavye/fare girişini garanti etmek için
-# varsayılan olarak USB HID (xHCI + usb-kbd + usb-mouse) eklenir; bu yöntem
+# varsayılan olarak USB HID (xHCI + usb-kbd + usb-tablet) eklenir; bu yöntem
 # çekirdeğin `usb_hid` sürücüsü ile eventi döngüsünde işlenir.
+# usb-tablet absolute pointing device olarak çalışır ve hem fare hem dokunmatik
+# olarak algılanır, QEMU'da daha iyi çalışır.
 if ($UsbHid -or (-not $NoPs2)) {
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-mouse,bus=xhci.0"
+        "-device", "usb-tablet,bus=xhci.0"
     )
     if ($UsbHid) {
-        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-tablet" -ForegroundColor Yellow
     } else {
-        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-tablet" -ForegroundColor Yellow
     }
+}
+
+if ($NoPs2) {
+    # -machine pc: varsayılan i440FX makinesi; i8042=off ile PS/2 denetleyicisi
+    # hiç oluşturulmaz. Girdi tamamen USB HID üzerinden gelir.
+    $qemuArgs += @("-machine", "pc,i8042=off")
+    Write-Host "PS/2 (i8042) devre disi: girdi yalnizca USB HID uzerinden." -ForegroundColor Yellow
 }
 
 if ($NoPs2) {

@@ -1958,10 +1958,27 @@ unsafe fn load_report_layout(
 
     candidate.touch_layout = touch_layout;
 
-    // Digitizer (Usage Page 0x0D) arayüzü klavye/fare değil, dokunmatik
-    // ekrandır. X/Y alanları ayrıştırılabildiyse bu arayüzü öyle sınıflandır.
+    // Absolute pointer ile digitizer ayrımı:
+    // - Eğer digitizer ise → Touchscreen
+    // - Eğer absolute pointer VEYA button varsa → Mouse (usb-tablet)
+    // - Eğer absolute pointer VEYA button yoksa → Touchscreen
     if touch_layout.is_digitizer() {
+        // Digitizer ama eğer button varsa fare olarak kabul et (QEMU usb-tablet gibi)
+        if layout.buttons > 0 {
+            candidate.kind = Some(HidKind::Mouse);
+            candidate.layout = layout;
+            candidate.custom = true;
+            return true;
+        }
         candidate.kind = Some(HidKind::Touchscreen);
+        candidate.custom = true;
+        return true;
+    }
+
+    // Absolute pointer digitizer değilse fare olarak sınıflandır
+    if layout.x_absolute && layout.y_absolute {
+        candidate.kind = Some(HidKind::Mouse);
+        candidate.layout = layout;
         candidate.custom = true;
         return true;
     }

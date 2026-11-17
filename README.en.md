@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-159%2C881%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-161%2C133%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
@@ -21,6 +21,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - File Manager can open WAV files directly in Music Player, and Image Viewer can set an image as a tiled desktop wallpaper.
 - Settings includes three additional desktop images.
 - `munmap` now performs real page teardown: realized frames are dropped from the resource ledger and returned to the PMM, and emptied page-table frames (PT/PD/PDPT) are reclaimed; middle splits are rejected without removing any mapping when the region table is full. A shared-frame reference leak on process exit and fork-failure paths was also fixed.
+- Keyboard and mouse now work in default QEMU runs: `run.ps1` now attaches `qemu-xhci + usb-kbd + usb-mouse` (USB HID) by default. QEMU 11's default `pc` machine had the i8042 controller but no PS/2 keyboard/mouse device attached, so previous releases never received desktop input events; this is fixed.
 
 See the [full changelog](docs/CHANGELOG.en.md) for details.
 

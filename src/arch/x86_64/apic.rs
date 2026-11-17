@@ -217,17 +217,28 @@ pub fn enable_bsp_idle() -> bool {
 
 /// Boşta bekleme noktası: doğrulanmışsa sonraki kesmeye kadar CPU'yu uyutur.
 ///
-/// `hlt` yalnızca `enable_bsp_idle()` başarılıysa çalıştırılır; aksi halde
-/// yalnızca `pause` yürütülür ve eski yoklamalı davranış korunur.
+/// Timer doğrulanamasa bile masaüstünü sonsuza kadar durdurmamak için sınırlı
+/// TSC beklemesi uygularız. HLT burada kullanılmaz: timer kesmesi gerçekten
+/// yoksa HLT'den geri dönüş garantisi yoktur.
 pub fn idle_pause() {
     if BSP_IDLE_HLT.load(Ordering::Acquire) {
-        // STI+HLT klasik boşta bekleme dizisi: bekleyen kesme HLT'yi uyandırır,
-        // kesme maskesi açık kalır. `cli` yok — kesme sonrası iretq IF'i geri yükler.
         unsafe {
             core::arch::asm!("sti", "hlt", options(nomem, nostack, preserves_flags));
         }
     } else {
-        core::hint::spin_loop();
+        // enable_bsp_idle() başarısız olduğunda özgün IF durumu kapalı
+        // olabilir. Masaüstü polling yapsa bile PS/2/USB IRQ'larının ve ağ
+        // olaylarının teslim edilebilmesi için burada tekrar açılır.
+        unsafe {
+            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+        }
+        let start = crate::boot::time::read_cpu_cycles();
+        let wait = unsafe { crate::boot::time::TSC_CYCLES_PER_US }
+            .saturating_mul(1_000)
+            .max(1);
+        while crate::boot::time::read_cpu_cycles().wrapping_sub(start) < wait {
+            core::hint::spin_loop();
+        }
     }
 }
 

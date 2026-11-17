@@ -1105,6 +1105,44 @@ impl FpsGameApp {
                     if cancelled {
                         break;
                     }
+                    // 3D üst yüz ve sağ yan yüz (kutu hacmi).
+                    let top_h = (sprite_h * 6 / 100).max(1);
+                    let ty0 = cy0.saturating_sub(top_h);
+                    let top_col = MinGuiCompositor::shade(color, 40);
+                    for yy in ty0..cy0 {
+                        if budget.is_expired() {
+                            cancelled = true;
+                            break;
+                        }
+                        for xx in 0..sw {
+                            let px = cx.saturating_sub(sw / 2) + xx;
+                            let local_x = px.saturating_sub(render_x);
+                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
+                                fb.put_pixel(px, yy, top_col);
+                            }
+                        }
+                    }
+                    if cancelled {
+                        break;
+                    }
+                    let side_w = (sprite_w * 14 / 100).max(1);
+                    let side_col = MinGuiCompositor::shade(color, -70);
+                    for yy in cy0..cy1 {
+                        if budget.is_expired() {
+                            cancelled = true;
+                            break;
+                        }
+                        for xx in 0..side_w {
+                            let px = cx.saturating_add(sw / 2) + xx;
+                            let local_x = px.saturating_sub(render_x);
+                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
+                                fb.put_pixel(px, yy, side_col);
+                            }
+                        }
+                    }
+                    if cancelled {
+                        break;
+                    }
                     // Kontrastlı gözler/nişan alınabilir merkez.
                     let eye_y = cy0 + (cy1.saturating_sub(cy0) / 5);
                     fb.draw_rect(cx.saturating_sub(sw / 4), eye_y, 3, 3, 0xFFF1C1);

@@ -610,9 +610,6 @@ unsafe fn driver_lane_usb(arg: *mut u8) {
 /// `usb::init`'ten bağımsızdır: kendi PCI taramasını yapar.
 unsafe fn driver_lane_hid(arg: *mut u8) {
     let args = unsafe { &*(arg as *const DriverLaneArgs) };
-    if args.e1000_dma.is_none() {
-        return;
-    }
     serial_print("[DRIVER] Starting USB HID (xHCI) driver...\n");
     // SAFETY: `args->pmm` `parallel_run` çağrısı süresince tek erişimlidir;
     // PMM metodları iç kilitle korunur.

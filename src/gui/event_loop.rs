@@ -548,8 +548,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     }
 
     loop {
-        // APIC timer doğrulaması başarılıysa HLT ile CPU'yu uyutun;
-        // aksi halde spin poll yap.
+        // Timer doğrulansa da doğrulanmasa da güvenli idle fallback'i kullan.
         arch::x86_64::apic::idle_pause();
         // Bir onceki turda yakalanan uygulama hatasini raporla ve yalnizca
         // hatali uygulamayi kapat; masaustu ve diger uygulamalar yasamaya
@@ -8961,17 +8960,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             && !buttons_changed
             && !force_render
         {
-            // Boşta bekleme: CPU'yu spin ederek tüketme. HLT kullanılmaz çünkü
-            // PIC devre dışı bırakılmış ve periyodik timer kesmesi yapılandırılmamış;
-            // VMware gibi hipervizörlerde HLT sonsuza kadar bekleyip sistemi donabilir.
-            // Bekleme süresi 2.5 ms → 20 ms olarak çıkarıldı; boşta CPU kullanımı
-            // yaklaşık 8 kat azalır.
+            // Boşta bekleme: timer doğrulanmışsa veya cihaz kesmeleri mevcutsa
+            // APIC katmanı HLT ile uyutur; sürekli spin-polling CPU'yu tüketmez.
 
             let wait_start = read_cpu_cycles();
 
             let browser_waiting = browser_app.take_net_idle_hint();
 
-            if arch::x86_64::apic::bsp_idle_hlt_enabled() && !browser_waiting {
+            if !browser_waiting {
                 // APIC timer ~100 Hz: HLT en geç ~10 ms içinde uyanır. PS/2 veya
                 // USB girdi kesmesi geldiğinde daha erken uyanıp olayı işleriz.
                 // Böylece boşta CPU döngüsü yerine gerçek uyku kullanılır.

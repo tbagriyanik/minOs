@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-159%2C881%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-161%2C133%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Çekirdek `no_std` ve `no_main` kullanır; grafik masaüstü ve yerleşik uygulamalar sunar.
@@ -21,6 +21,7 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - Dosya Yöneticisi'nden WAV dosyalarını doğrudan oynatma ve görüntüyü döşeli masaüstü arka planı yapma eklendi.
 - Ayarlar'a üç yeni masaüstü görseli eklendi.
 - `munmap` artık gerçek sayfa kaldırma yapar: gerçekleşmiş çerçeveler kaynak defterinden düşülüp PMM'e iade edilir, boşalan sayfa tabloları (PT/PD/PDPT) geri kazanılır; bölge tablosu doluyken ortadan bölme hiçbir eşleme kaldırılmadan reddedilir. Süreç çıkışı ve fork hata yollarındaki paylaşımlı çerçeve referans sızıntısı da giderildi.
+- QEMU varsayılan çalıştırmasında klavye ve fare artık çalışıyor: `run.ps1` artık varsayılan olarak `qemu-xhci + usb-kbd + usb-mouse` (USB HID) bağlar. QEMU 11'in varsayılan `pc` makinesinde i8042 denetleyicisi olduğuna karşın PS/2 klavye/fare aygıtı bağlı gelmediği için önceki sürümlerde masaüstü giriş olayları gelmemişti.
 
 Değişikliklerin tam listesi: [Sürüm günlüğü](docs/CHANGELOG.md).
 

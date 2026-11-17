@@ -191,28 +191,15 @@ pub fn draw(fb: &mut Framebuffer) {
                 let c = SOLID_COLORS[(cur_id as usize - 1).min(5)];
                 fb.draw_vgradient(0, 0, w, h, c, shade(c, -14));
             }
-            7 => draw_png_tile(fb, w, h, include_bytes!("../../public/desktop1.png")),
-            8 => draw_png_tile(fb, w, h, include_bytes!("../../public/desktop2.png")),
-            9 => draw_png_tile(fb, w, h, include_bytes!("../../public/desktop3.png")),
+            7 => draw_png_cover(fb, w, h, include_bytes!("../../public/desktop1.png")),
+            8 => draw_png_cover(fb, w, h, include_bytes!("../../public/desktop2.png")),
+            9 => draw_png_cover(fb, w, h, include_bytes!("../../public/desktop3.png")),
             _ => draw_geometric(fb, w, h),
         }
         unsafe {
             let custom_rgb = CUSTOM_RGB.clone();
             if let (Some(rgb), true) = (custom_rgb, CUSTOM_W > 0 && CUSTOM_H > 0) {
-                for y in 0..h {
-                    for x in 0..w {
-                        let i = ((y % CUSTOM_H) * CUSTOM_W + (x % CUSTOM_W)) * 3;
-                        if i + 2 < rgb.len() {
-                            fb.put_pixel(
-                                x,
-                                y,
-                                ((rgb[i] as u32) << 16)
-                                    | ((rgb[i + 1] as u32) << 8)
-                                    | rgb[i + 2] as u32,
-                            );
-                        }
-                    }
-                }
+                draw_rgb_cover(fb, w, h, &rgb, CUSTOM_W, CUSTOM_H);
             }
         }
 
@@ -341,24 +328,41 @@ fn draw_thumb_preview(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usi
     }
 }
 
-fn draw_png_tile(fb: &mut Framebuffer, w: usize, h: usize, data: &[u8]) {
+fn draw_png_cover(fb: &mut Framebuffer, w: usize, h: usize, data: &[u8]) {
     if let Some(decoded) = crate::apps::imgdecode::decode_png(data) {
         let (iw, ih) = (decoded.width, decoded.height);
         if iw == 0 || ih == 0 {
             return;
         }
-        for y in 0..h {
-            for x in 0..w {
-                let i = ((y % ih) * iw + (x % iw)) * 3;
-                if i + 2 < decoded.rgb.len() {
-                    fb.put_pixel(
-                        x,
-                        y,
-                        ((decoded.rgb[i] as u32) << 16)
-                            | ((decoded.rgb[i + 1] as u32) << 8)
-                            | decoded.rgb[i + 2] as u32,
-                    );
-                }
+        draw_rgb_cover(fb, w, h, &decoded.rgb, iw, ih);
+    }
+}
+
+/// Duvar kağıdını oranını koruyarak ekranı tamamen doldurur (cover).
+/// Ekran oranı farklıysa yalnızca merkezden taşan bölüm kırpılır; görüntü
+/// döşenmez ve gerilmez.
+fn draw_rgb_cover(fb: &mut Framebuffer, w: usize, h: usize, rgb: &[u8], iw: usize, ih: usize) {
+    if w == 0 || h == 0 || iw == 0 || ih == 0 {
+        return;
+    }
+    let (crop_w, crop_h, x0, y0) = if iw.saturating_mul(h) > ih.saturating_mul(w) {
+        let cw = (ih.saturating_mul(w) / h).max(1).min(iw);
+        (cw, ih, (iw - cw) / 2, 0)
+    } else {
+        let ch = (iw.saturating_mul(h) / w).max(1).min(ih);
+        (iw, ch, 0, (ih - ch) / 2)
+    };
+    for y in 0..h {
+        let sy = y0 + y.saturating_mul(crop_h) / h;
+        for x in 0..w {
+            let sx = x0 + x.saturating_mul(crop_w) / w;
+            let i = sy.saturating_mul(iw).saturating_add(sx).saturating_mul(3);
+            if i + 2 < rgb.len() {
+                fb.put_pixel(
+                    x,
+                    y,
+                    ((rgb[i] as u32) << 16) | ((rgb[i + 1] as u32) << 8) | rgb[i + 2] as u32,
+                );
             }
         }
     }

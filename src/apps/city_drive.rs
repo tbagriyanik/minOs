@@ -26,14 +26,14 @@ pub const CITY_W: usize = 60;
 /// Şehir ızgara yüksekliği (hücre).
 pub const CITY_H: usize = 60;
 
-/// Cadde periyodu: her 10 hücrede bir cadde koridoru.
-const ROAD_PERIOD: usize = 10;
-/// Cadde koridorunun genişliği (hücre) — 4 m'lik iki şeritli yol.
-const ROAD_HALF: usize = 4;
+/// Cadde periyodu: her 12 hücrede bir cadde koridoru.
+const ROAD_PERIOD: usize = 12;
+/// Cadde koridorunun genişliği (hücre) — 6 m'lik iki şeritli yol.
+const ROAD_HALF: usize = 6;
 /// Yol ekseninin koridor içindeki konumu (hücre).
-const ROAD_AXIS_OFF: f32 = 2.0;
-/// Şerit merkezinin yol eksenine uzaklığı (metre).
-const LANE_OFF: f32 = 1.0;
+const ROAD_AXIS_OFF: f32 = 3.0;
+/// Şerit merkezinin yol eksenine uzaklığı (metre) — 3 m'lik şeritler.
+const LANE_OFF: f32 = 1.5;
 /// Bir binanın kat yüksekliği (dünya birimi).
 const STOREY_H: f32 = 2.6;
 /// Sürücü gözü / kamera yüksekliği (dünya birimi).
@@ -598,6 +598,64 @@ fn intersection_index(center: f32) -> usize {
     (((center - ROAD_AXIS_OFF) / ROAD_PERIOD as f32) + 0.5) as usize
 }
 
+/// Sprite'ın duvar arkasında kalmayan sütun aralıklarını hesaplar.
+///
+/// Bir bilboard sprite'ın bütün sütunları aynı derinlikte olduğundan duvar
+/// tamponu (`zbuf`) sütun bazında kırpılabilir. Böylece araç önündeki
+/// binanın arkasında kalır, binanın üstüne binmez — yolda kalan araç.
+fn visible_runs(
+    zbuf: &[f32; 1024],
+    depth: f32,
+    left: i32,
+    right: i32,
+) -> ([(usize, usize); 8], usize) {
+    let mut runs = [(0usize, 0usize); 8];
+    let mut count = 0usize;
+    let mut col = left.max(0) as usize;
+    let end = right.max(0) as usize;
+    while col < end && col < zbuf.len() {
+        if zbuf[col] > depth {
+            let start = col;
+            while col < end && col < zbuf.len() && zbuf[col] > depth {
+                col += 1;
+            }
+            if count < runs.len() {
+                runs[count] = (start, col);
+                count += 1;
+            }
+        } else {
+            col += 1;
+        }
+    }
+    (runs, count)
+}
+
+/// Dikdörtgeni yalnızca sprite'ın görünür sütunlarına çizer.
+#[allow(clippy::too_many_arguments)]
+fn draw_clipped(
+    fb: &mut Framebuffer,
+    runs: &[(usize, usize); 8],
+    count: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: u32,
+) {
+    if count == 0 {
+        return;
+    }
+    let x_end = x.saturating_add(w);
+    for run in runs.iter().take(count) {
+        let (rx0, rx1) = *run;
+        let a = x.max(rx0);
+        let b = x_end.min(rx1);
+        if b > a {
+            fb.draw_rect(a, y, b - a, h, color);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Uygulama
 // ---------------------------------------------------------------------------
@@ -634,8 +692,8 @@ impl CityDriveApp {
     pub fn new() -> Self {
         let mut app = CityDriveApp {
             map: CityMap::generate(),
-            car_x: 12.5,
-            car_y: 11.0,
+            car_x: 20.5,
+            car_y: 13.5,
             heading: 0.0,
             speed: 0.0,
             cam_dir: 0.0,
@@ -681,8 +739,8 @@ impl CityDriveApp {
 
     /// Araç, trafik ve ödülleri başlangıç durumuna döndürür.
     pub fn reset_world(&mut self) {
-        self.car_x = 12.5;
-        self.car_y = 11.0;
+        self.car_x = 20.5;
+        self.car_y = 13.5;
         self.heading = 0.0;
         self.cam_dir = 0.0;
         self.speed = 0.0;
@@ -1748,6 +1806,12 @@ impl CityDriveApp {
         let lx = left.max(0) as usize;
         let lw = size_x.max(1) as usize;
 
+        // Duvar arkasında kalan sütunları kırp (araç binanın üstüne binmez).
+        let (runs, run_count) = visible_runs(zbuf, depth, left, left + size_x);
+        if run_count == 0 {
+            return;
+        }
+
         let factor = 0.42 + 0.58 * (1.0 - (depth / MAX_VIEW).clamp(0.0, 1.0));
         let body = shade(car.color, factor);
         let dark = shade(car.color, factor * 0.62);
@@ -1755,14 +1819,56 @@ impl CityDriveApp {
         let tire = shade(0x14161A, factor);
 
         // Zemin gölgesi.
-        fb.draw_rect(lx, y1.saturating_sub(1), lw, 1, shade(0x000000, 0.45));
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx,
+            y1.saturating_sub(1),
+            lw,
+            1,
+            shade(0x000000, 0.45),
+        );
 
-        // Gövde.
-        fb.draw_rect(lx, y0, lw, h, body);
+        // Gövde (ön yüz).
+        draw_clipped(fb, &runs, run_count, lx, y0, lw, h, body);
+
+        // 3D hacim: üst yüz (kabin) ve sağ yan yüz.
+        let top_h = (h * 6 / 100).max(1);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx,
+            y0.saturating_sub(top_h),
+            lw,
+            top_h,
+            shade(0xE8E8EC, factor.min(1.2)),
+        );
+        let side_w = (lw * 14 / 100).max(1);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx + lw.saturating_sub(side_w),
+            y0,
+            side_w,
+            h,
+            shade(dark, 0.85),
+        );
 
         // Alt koyu şerit (plaka / tampon hizası).
         let skirt = (h * 18 / 100).max(1);
-        fb.draw_rect(lx, y1.saturating_sub(skirt), lw, skirt, dark);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx,
+            y1.saturating_sub(skirt),
+            lw,
+            skirt,
+            dark,
+        );
 
         // Cam bandı.
         let glass_h = if side_view {
@@ -1781,17 +1887,47 @@ impl CityDriveApp {
         } else {
             lw.saturating_sub(2).max(1)
         };
-        fb.draw_rect(glass_x, glass_y, glass_w, glass_h.min(h), glass);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            glass_x,
+            glass_y,
+            glass_w,
+            glass_h.min(h),
+            glass,
+        );
         // Cam üst kenarında ışık yansıması.
-        fb.draw_rect(glass_x, glass_y, glass_w, 1, shade(0x9FC6D8, factor * 0.8));
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            glass_x,
+            glass_y,
+            glass_w,
+            1,
+            shade(0x9FC6D8, factor * 0.8),
+        );
 
         if side_view {
             // Tekerlekler (yan görünüş).
             let wheel_h = (h * 26 / 100).max(2);
             let wheel_w = (lw * 18 / 100).max(2);
             let wheel_y = y1.saturating_sub(wheel_h);
-            fb.draw_rect(lx + (lw * 8 / 100), wheel_y, wheel_w, wheel_h, tire);
-            fb.draw_rect(
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
+                lx + (lw * 8 / 100),
+                wheel_y,
+                wheel_w,
+                wheel_h,
+                tire,
+            );
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
                 lx + (lw * 74 / 100).min(lx.saturating_add(lw)),
                 wheel_y,
                 wheel_w,
@@ -1799,7 +1935,10 @@ impl CityDriveApp {
                 tire,
             );
             // Kapı çizgisi.
-            fb.draw_rect(
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
                 lx + (lw * 46 / 100),
                 y0 + (h * 30 / 100),
                 1,
@@ -1813,14 +1952,20 @@ impl CityDriveApp {
             let lamp_h = (h * 13 / 100).max(2);
             let lamp_w = (lw * 20 / 100).max(2);
             let lamp_y = y1.saturating_sub(skirt + lamp_h + 1);
-            fb.draw_rect(
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
                 lx + (lw * 12 / 100),
                 lamp_y,
                 lamp_w,
                 lamp_h,
                 shade(0xFFF4D2, factor),
             );
-            fb.draw_rect(
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
                 lx + (lw * 68 / 100).min(lx.saturating_add(lw)),
                 lamp_y,
                 lamp_w,
@@ -1828,7 +1973,16 @@ impl CityDriveApp {
                 shade(0xFFF4D2, factor),
             );
             // Ön tampon.
-            fb.draw_rect(lx, y1.saturating_sub(skirt), lw, 1, shade(0x2A2E34, factor));
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
+                lx,
+                y1.saturating_sub(skirt),
+                lw,
+                1,
+                shade(0x2A2E34, factor),
+            );
         }
         if rear {
             // Stop lambaları (fren sırasında parlak).
@@ -1840,8 +1994,20 @@ impl CityDriveApp {
             } else {
                 shade(0xB02A22, factor)
             };
-            fb.draw_rect(lx + (lw * 12 / 100), lamp_y, lamp_w, lamp_h, lamp);
-            fb.draw_rect(
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
+                lx + (lw * 12 / 100),
+                lamp_y,
+                lamp_w,
+                lamp_h,
+                lamp,
+            );
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
                 lx + (lw * 68 / 100).min(lx.saturating_add(lw)),
                 lamp_y,
                 lamp_w,
@@ -1849,7 +2015,10 @@ impl CityDriveApp {
                 lamp,
             );
             // Plaka.
-            fb.draw_rect(
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
                 lx + (lw * 42 / 100),
                 y1.saturating_sub(skirt + 1),
                 (lw * 16 / 100).max(1),
@@ -1864,14 +2033,20 @@ impl CityDriveApp {
                 let sign_w = (lw * 34 / 100).max(3);
                 let sign_h = (h * 9 / 100).max(2);
                 let sign_x = screen_x.saturating_sub((sign_w / 2) as i32).max(0) as usize;
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     sign_x,
                     y0.saturating_sub(sign_h),
                     sign_w,
                     sign_h,
                     shade(0xF2E4B0, factor),
                 );
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     sign_x,
                     y0.saturating_sub(sign_h),
                     sign_w,
@@ -1884,8 +2059,20 @@ impl CityDriveApp {
                 let bar_h = (h * 9 / 100).max(2);
                 let bar_x = screen_x.saturating_sub((bar_w / 2) as i32).max(0) as usize;
                 let bar_y = y0.saturating_sub(bar_h);
-                fb.draw_rect(bar_x, bar_y, bar_w / 2, bar_h, shade(0xE03A3A, factor));
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
+                    bar_x,
+                    bar_y,
+                    bar_w / 2,
+                    bar_h,
+                    shade(0xE03A3A, factor),
+                );
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     bar_x + bar_w / 2,
                     bar_y,
                     bar_w - bar_w / 2,
@@ -1894,7 +2081,10 @@ impl CityDriveApp {
                 );
                 // Gövde üzerindeki mavi kaplama bandı.
                 let band_y = y0 + (h * 52 / 100);
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     lx,
                     band_y,
                     lw,
@@ -1934,6 +2124,12 @@ impl CityDriveApp {
         let lw = size_x.max(1);
         let factor = 0.55 + 0.45 * (1.0 - (depth / MAX_VIEW).clamp(0.0, 1.0));
 
+        // Duvar arkasında kalan sütunları kırp.
+        let (runs, run_count) = visible_runs(zbuf, depth, left, left + size_x as i32);
+        if run_count == 0 {
+            return;
+        }
+
         match reward.kind {
             RewardKind::Coin => {
                 // Madeni para: altın disk, kalın kenar ve parlak merkez.
@@ -1956,7 +2152,7 @@ impl CityDriveApp {
                     } else {
                         base
                     };
-                    fb.draw_rect(x0, y0 + row, w, 1, color);
+                    draw_clipped(fb, &runs, run_count, x0, y0 + row, w, 1, color);
                 }
             }
             RewardKind::Banknote => {
@@ -1964,14 +2160,17 @@ impl CityDriveApp {
                 let body = shade(0x5FBF78, factor);
                 let edge = shade(0xA8E6B6, factor);
                 let inner = shade(0x3E9E58, factor);
-                fb.draw_rect(lx, y0, lw, size_y, body);
-                fb.draw_rect(lx, y0, lw, 1, edge);
-                fb.draw_rect(lx, y0 + size_y - 1, lw, 1, edge);
-                fb.draw_rect(lx + 1, y0, 1, size_y, edge);
-                fb.draw_rect(lx + lw - 2, y0, 1, size_y, edge);
+                draw_clipped(fb, &runs, run_count, lx, y0, lw, size_y, body);
+                draw_clipped(fb, &runs, run_count, lx, y0, lw, 1, edge);
+                draw_clipped(fb, &runs, run_count, lx, y0 + size_y - 1, lw, 1, edge);
+                draw_clipped(fb, &runs, run_count, lx + 1, y0, 1, size_y, edge);
+                draw_clipped(fb, &runs, run_count, lx + lw - 2, y0, 1, size_y, edge);
                 let iw = (lw * 44 / 100).max(1);
                 let ih = (size_y * 44 / 100).max(1);
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     screen_x.saturating_sub((iw as i32) / 2).max(0) as usize,
                     y0 + (size_y - ih) / 2,
                     iw,
@@ -1984,12 +2183,15 @@ impl CityDriveApp {
                 let body = shade(0xD2503F, factor);
                 let edge = shade(0x9C3629, factor);
                 let cap = shade(0x2A2E34, factor);
-                fb.draw_rect(lx, y0, lw, size_y, body);
-                fb.draw_rect(lx, y0 + size_y - 1, lw, 1, edge);
-                fb.draw_rect(lx, y0, 1, size_y, edge);
-                fb.draw_rect(lx + lw - 2, y0, 1, size_y, edge);
+                draw_clipped(fb, &runs, run_count, lx, y0, lw, size_y, body);
+                draw_clipped(fb, &runs, run_count, lx, y0 + size_y - 1, lw, 1, edge);
+                draw_clipped(fb, &runs, run_count, lx, y0, 1, size_y, edge);
+                draw_clipped(fb, &runs, run_count, lx + lw - 2, y0, 1, size_y, edge);
                 // Kapak.
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     screen_x.saturating_sub(lw as i32 * 15 / 100).max(0) as usize,
                     y0.saturating_sub(2),
                     (lw * 30 / 100).max(2),
@@ -1998,7 +2200,10 @@ impl CityDriveApp {
                 );
                 // Tutamak.
                 let handle = (size_y * 18 / 100).max(2);
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     lx + (lw * 32 / 100),
                     y0.saturating_sub(handle),
                     (lw * 30 / 100).max(2),
@@ -2015,14 +2220,20 @@ impl CityDriveApp {
                 let r = size_y as f32 * 0.36;
                 let disc_top = y0 + (size_y as f32 * 0.30) as usize;
                 // Şeritler.
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     lx + (lw * 14 / 100),
                     y0,
                     (lw * 14 / 100).max(2),
                     disc_top.saturating_sub(y0),
                     ribbon,
                 );
-                fb.draw_rect(
+                draw_clipped(
+                    fb,
+                    &runs,
+                    run_count,
                     lx + (lw * 72 / 100),
                     y0,
                     (lw * 14 / 100).max(2),
@@ -2039,10 +2250,34 @@ impl CityDriveApp {
                     let w = (hw * 2.0) as usize;
                     let x0 = screen_x.saturating_sub((w as i32) / 2).max(0) as usize;
                     let color = if hw > r * 0.78 { rim } else { base };
-                    fb.draw_rect(x0, disc_top + row, w, 1, color);
+                    draw_clipped(fb, &runs, run_count, x0, disc_top + row, w, 1, color);
                 }
             }
         }
+
+        // 3D hacim: ödülün üst yüzü ve sağ yan yüzü.
+        let r_top_h = (size_y * 8 / 100).max(1);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx,
+            y0.saturating_sub(r_top_h),
+            lw,
+            r_top_h,
+            shade(0xE8E8EC, factor.min(1.2)),
+        );
+        let r_side_w = (lw * 14 / 100).max(1);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx + lw.saturating_sub(r_side_w),
+            y0,
+            r_side_w,
+            size_y,
+            shade(0x555555, factor),
+        );
     }
 
     /// HUD: hız göstergesi, dönüş yarıçapı, skor, mini harita, kontrol ipuçları.

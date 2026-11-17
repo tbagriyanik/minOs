@@ -2110,7 +2110,18 @@ impl TlsSession {
             // Transcript-Hash, sunucu Finished mesajı eklenmeden önceki hâli.
             let transcript = alg.hash(pre_transcript);
             let expected = alg.hmac(&finished_key, &transcript);
-            if body.len() != alg.hash_len() || body[..alg.hash_len()] != expected[..] {
+            if body.len() != alg.hash_len() {
+                serial_print("[TLS] Finished uzunluğu beklenmiyor: gelen=");
+                crate::serial::print_dec(body.len() as u64);
+                serial_print(" beklenen=");
+                crate::serial::print_dec(alg.hash_len() as u64);
+                serial_print("\n");
+                return Err(());
+            }
+            if body != expected.as_slice() {
+                serial_print(
+                    "[TLS] Finished doğrulaması başarısız (transcript/hash uyuşmazlığı).\n",
+                );
                 return Err(());
             }
 
@@ -2576,8 +2587,14 @@ impl TlsSession {
 
     pub fn encrypt_app_data(&mut self, plaintext: &[u8]) -> Option<Vec<u8>> {
         if self.tls13_mode {
-            let client_base_iv = self.client_base_iv?;
-            let gcm = self.client_gcm.as_ref()?;
+            let Some(client_base_iv) = self.client_base_iv else {
+                serial_print("[TLS] Uygulama verisi şifrelenemedi: client IV yok.\n");
+                return None;
+            };
+            let Some(gcm) = self.client_gcm.as_ref() else {
+                serial_print("[TLS] Uygulama verisi şifrelenemedi: client GCM yok.\n");
+                return None;
+            };
 
             let seq = self.client_seq;
             self.client_seq = self.client_seq.wrapping_add(1);
@@ -2587,7 +2604,13 @@ impl TlsSession {
             let nonce = Self::tls13_nonce(&client_base_iv, seq);
             let gcm_aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, inner.len() + GCM_TAG_LEN);
 
-            let (ct, tag) = gcm.encrypt(&nonce, &gcm_aad, &inner).ok()?;
+            let (ct, tag) = match gcm.encrypt(&nonce, &gcm_aad, &inner) {
+                Ok(value) => value,
+                Err(_) => {
+                    serial_print("[TLS] Uygulama verisi GCM şifreleme hatası.\n");
+                    return None;
+                }
+            };
 
             let mut record = Vec::new();
             record.push(TLS_RECORD_APPLICATION_DATA);

@@ -225,16 +225,22 @@ if ($NoPs2) {
     $UsbHid = $true
 }
 
-if ($UsbHid) {
-    # Yerel xHCI HID sürücüsünü test etmek için USB 3.0 denetleyicisi ve
-    # boot protokollü klavye/fare ekle. -NoPs2 verilmediyse QEMU varsayılan
-    # PS/2 girişini de sunar; bu nedenle aynı tuşlar iki yoldan da gelebilir.
+# QEMU 11'in varsayılan 'pc' makinesinde i8042 PS/2 denetleyicisi vardır ancak
+# ona bağlı PS/2 klavye/fare aygıtı yoktur (ps2-keyboard/ps2-mouse cihaz
+# modeli mevcut değil). Dolayısıyla klavye/fare girişini garanti etmek için
+# varsayılan olarak USB HID (xHCI + usb-kbd + usb-mouse) eklenir; bu yöntem
+# çekirdeğin `usb_hid` sürücüsü ile eventi döngüsünde işlenir.
+if ($UsbHid -or (-not $NoPs2)) {
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
         "-device", "usb-mouse,bus=xhci.0"
     )
-    Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+    if ($UsbHid) {
+        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+    } else {
+        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+    }
 }
 
 if ($NoPs2) {

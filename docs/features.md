@@ -11,6 +11,8 @@ Uygulama kataloğu, sistem yetenekleri ve proje yol haritası.
 - Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı Müzik Çalar'da açar. Resim Gösterici görüntüyü döşeli masaüstü arka planı yapabilir.
 - Ayarlar'da üç yeni ek masaüstü görseli bulunur (`desktop1.png`–`desktop3.png`).
 - Çekirdek KASLR ile her açılışta rastgele adreslenir; `SYS_SECCOMP` syscall filtreleme ve ELF yükleyici güvenlik sertleştirmesi eklendi. `test_stress_24h.ps1` ile yapılandırılabilir süreli QEMU soak/panik testi çalıştırılabilir.
+- **QEMU varsayılan çalıştırmasında klavye ve fare artık çalışıyor:** `run.ps1` varsayılan olarak `qemu-xhci + usb-kbd + usb-mouse` (USB HID) aygıtlarını bağlar; QEMU 11'in varsayılan `pc` makinesinde i8042 denetleyicisi olduğu ancak bir PS/2 klavye/fare aygıtı bağlanmadığı için giriş olayları gelmemişti. Bu düzeltmeyle masaüstüne gelindiği anda klavyen ve fare çalışır hale gelir.
+- **3D nesneler:** FPS Oyunu'nda düşmanlar ve Şehir Sürüş oyununda trafik araçları ve toplanabilir ödüller artık düz billboard yerine ön/üst/yan yüzeyleriyle 3D kutu olarak render edilir; derinlik ve z-buffer testi ile duvarların arkasından sızdırılmazlar.
 
 Önceki sürümlerin ayrıntıları için [sürüm günlüğüne](CHANGELOG.md), tam değişiklik listesi için [değişiklik arşivine](releases.md) bakın.
 
@@ -60,7 +62,20 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerle
 
 Derleme profilleri, QEMU örnekleri ve ayrıntılı donanım sınırları için [derleme rehberine](building.md) ve [Hardware & Driver Support Matrix](HARDWARE_DRIVER_SUPPORT_MATRIX.md) belgesine bakın.
 
+## 📊 Kod İstatistikleri (güncel)
+
+| Ölçüm | Değer |
+| :--- | :--- |
+| **Rust Kaynak Dosyası (`src/`)** | 199 dosya |
+| **Toplam Kod Satırı (`src/*.rs`)** | 158.035 satır (ham) / 144.858 satır (boşlukları hariç) |
+| **Test Dosyaları (`tests/*.rs`)** | 2.894 satır |
+| **Derleme Komut Dosyası (`build.rs`)** | 204 satır |
+| **Toplam (`src/` + `tests/` + `build.rs`)** | 161.133 satır (ham) |
+
+Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 144.858 satırdır.
+
 ---
+
 
 
 ## 🗺️ Gelecek Planları ve Yol Haritası (Roadmap)

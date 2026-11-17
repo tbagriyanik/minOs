@@ -39,7 +39,7 @@ $kernelPath = Join-Path $repoRoot "target\x86_64-minos\release\minos-kernel"
 $needBuild = $Rebuild -or (-not (Test-Path $isoPath))
 if (-not $needBuild -and (Test-Path $isoPath)) {
     $isoTime = (Get-Item $isoPath).LastWriteTime
-    if (Test-Path $kernelPath -and ((Get-Item $kernelPath).LastWriteTime -gt $isoTime)) {
+    if ((Test-Path $kernelPath) -and ((Get-Item $kernelPath).LastWriteTime -gt $isoTime)) {
         $needBuild = $true
     }
 }
@@ -83,7 +83,7 @@ $qemuArgs = @(
     "-device", "e1000,netdev=n0",
     "-device", "qemu-xhci,id=xhci",
     "-device", "usb-kbd,bus=xhci.0",
-    "-device", "usb-tablet,bus=xhci.0"
+        "-device", "usb-mouse,bus=xhci.0"
 )
 
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo

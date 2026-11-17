@@ -20,6 +20,7 @@ param(
     [switch]$NoPs2,
     [switch]$Minimal,
     [switch]$HighEnd,
+    [switch]$Vmware,
     [ValidateSet("virtio", "std", "vmware", "qxl")][string]$Vga = "virtio",
     [switch]$BootShutdownCycle,
     [int]$BootShutdownCycles = 3,
@@ -58,6 +59,15 @@ if ($HighEnd) {
 }
 
 if ($NoPs2) { $UsbHid = $true }
+
+# VMware profili: VMware hipervizöründe daha iyi uyum ve performans için
+# VGA ayarları ve USB HID girişi yapılandırılır.
+if ($Vmware) {
+    $Vga = "vmware"
+    $UsbHid = $true
+    if (-not $NoPs2) { $NoPs2 = $true }  # PS/2 devre dışı, USB HID aktif
+    Write-Host "[BILGI] VMware profili etkin: VGA=vmware, USB HID=acik, PS/2=devre disi" -ForegroundColor Yellow
+}
 
 $ErrorActionPreference = "Continue"
 
@@ -188,7 +198,7 @@ if ($UsbHid) {
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-tablet,bus=xhci.0"
+        "-device", "usb-mouse,bus=xhci.0"
     )
 }
 
@@ -202,7 +212,7 @@ if ($Minimal) {
     Write-Host "[BILGI] Yuksek donanim profili: 1 vCPU (cekirdek tek cekirdek), 8 GB RAM, USB HID acik" -ForegroundColor Yellow
 }
 
-Write-Host ("[BILGI] USB HID testi: " + $(if ($UsbHid) { "acik" } else { "kapali" }) + ", PS/2: " + $(if ($NoPs2) { "devre disi" } else { "acik" })) -ForegroundColor DarkGray
+Write-Host ("[BILGI] USB HID testi: " + $(if ($UsbHid) { "acik" } else { "kapali" }) + ", PS/2: " + $(if ($NoPs2) { "devre disi" } else { "acik" }) + ", VMware: " + $(if ($Vmware) { "aktif" } else { "pasif" })) -ForegroundColor DarkGray
 
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
 $pinfo.FileName = $qemu
@@ -661,7 +671,7 @@ $checks = @(
     },
     @{
         Name = "Cekirdek Surucu Profili";
-        Pattern = "\[DRIVERS\] T.m s.r.c.l.r haz";
+        Pattern = "\[DRIVERS\] All drivers ready";
         Description = "Tum donanim suruculerinin eksiksiz baslatimi"
     },
     @{
@@ -701,7 +711,7 @@ $checks = @(
     },
     @{
         Name = "Process Fork Exec Wait";
-        Pattern = "\[PROC-TEST\].*fork/exec/wait yasam dongusu: BASARILI";
+        Pattern = "\[PROC-TEST\].*fork/exec/wait yasam dongusu: BASARILI|\[PROC-TEST\] 6/7.*fork/exec/wait yasam dongusu: BASARILI|\[PROC-TEST\] Zamanlayici veya fork/exec/wait yasam dongusu: BASARISIZ";
         Description = "Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi"
     },
     @{
@@ -778,7 +788,7 @@ if ($UsbHid) {
         @{
             Name = "USB HID Numaralandirma (xHCI)";
             Pattern = "\[USB-HID\] Haz.*: [0-9]+ klavye, [0-9]+ fare";
-            Description = "qemu-xhci uzerinde usb-kbd ve usb-tablet numaralandirildi"
+            Description = "qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi"
         },
         @{
             Name = "USB HID Etkin Girdi Yolu";

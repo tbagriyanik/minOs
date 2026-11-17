@@ -228,20 +228,19 @@ if ($NoPs2) {
 # QEMU 11'in varsayılan 'pc' makinesinde i8042 PS/2 denetleyicisi vardır ancak
 # ona bağlı PS/2 klavye/fare aygıtı yoktur (ps2-keyboard/ps2-mouse cihaz
 # modeli mevcut değil). Dolayısıyla klavye/fare girişini garanti etmek için
-# varsayılan olarak USB HID (xHCI + usb-kbd + usb-tablet) eklenir; bu yöntem
+# varsayılan olarak USB HID (xHCI + usb-kbd + usb-mouse) eklenir; bu yöntem
 # çekirdeğin `usb_hid` sürücüsü ile eventi döngüsünde işlenir.
-# usb-tablet absolute pointing device olarak çalışır ve hem fare hem dokunmatik
-# olarak algılanır, QEMU'da daha iyi çalışır.
+# usb-mouse relative pointing device olarak çalışır ve fare olarak algılanır.
 if ($UsbHid -or (-not $NoPs2)) {
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-tablet,bus=xhci.0"
+        "-device", "usb-mouse,bus=xhci.0"
     )
     if ($UsbHid) {
-        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-tablet" -ForegroundColor Yellow
+        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
     } else {
-        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-tablet" -ForegroundColor Yellow
+        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
     }
 }
 

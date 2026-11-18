@@ -663,6 +663,13 @@ pub struct TlsSession {
     pending_ticket: Option<Vec<u8>>,
     /// Sunucunun bildirdiği `ticket_age_add` (ms).
     ticket_age_add_ms: u64,
+    /// QUIC `quic_transport_parameters` (0xffa5) uzantısının ham gövdesi
+    /// — EncryptedExtensions'ten alınır (RFC 9000 §18.2).
+    quic_transport_params: Option<Vec<u8>>,
+    /// Yalnızca canlı test (`livetest_insecure` cmdline token'ı) için:
+    /// sertifika zinciri/hostname doğrulamasını atlar. Normal yolda
+    /// hiçbir zaman etkinleştirilmez.
+    skip_cert_validation: bool,
 }
 
 /// Best-effort zeroization that the optimizer cannot remove.
@@ -802,7 +809,16 @@ impl TlsSession {
             resumption_master_secret: None,
             pending_ticket: None,
             ticket_age_add_ms: 0,
+            quic_transport_params: None,
+            skip_cert_validation: false,
         }
+    }
+
+    /// Sertifika zinciri ve hostname doğrulamasını atlar. Yalnızca
+    /// gömülü test sunucularına karşı canlı testlerde kullanılır
+    /// (`livetest_insecure`); üretim yolunda çağrılmamalıdır.
+    pub fn set_skip_cert_validation(&mut self, skip: bool) {
+        self.skip_cert_validation = skip;
     }
 
     pub fn is_cert_verified(&self) -> bool {
@@ -1387,6 +1403,9 @@ impl TlsSession {
                 // bildirir. `selected_identity` 0 ise ilk (ve tek) teklif
                 // kabul edilmiştir.
                 self.handle_pre_shared_key_extension(&body[pos..pos + len])?;
+            } else if ext_type == 0xffa5 {
+                // quic_transport_parameters (RFC 9000 §18.2)
+                self.quic_transport_params = Some(body[pos..pos + len].to_vec());
             }
             pos += len;
         }
@@ -1779,7 +1798,13 @@ impl TlsSession {
         // Sertifika zinciri sertifika "uyarısı" değil, sertifika hatasıdır:
         // doğrulama başarısızsa el sıkışma durdurulur. Tanılama bilgisi
         // (cert_verified / cert_error) tarayıcıya raporlanır.
-        if let Some(first_cert) = cert_chain.first() {
+        // Canli test (`livetest_insecure`) icin zincir dogrulamasi
+        // atlanabilir; anahtar cikarimi asagida normal akar.
+        if self.skip_cert_validation {
+            self.cert_verified = true;
+            self.cert_error = None;
+            serial_print("[TLS] Test modu: sertifika zinciri dogrulamasi atlandi.\n");
+        } else if let Some(first_cert) = cert_chain.first() {
             // 1. Sertifika zinciri derinliği sınırı.
             if cert_chain.len() > self.max_chain_depth {
                 self.cert_verified = false;
@@ -2535,6 +2560,12 @@ impl TlsSession {
         } else {
             None
         }
+    }
+
+    /// Sunucunun EncryptedExtensions'te gönderdiği QUIC transport
+    /// parametrelerinin ham gövdesi (yoksa `None`).
+    pub fn quic_transport_params(&self) -> Option<&[u8]> {
+        self.quic_transport_params.as_deref()
     }
 
     /// TLS 1.3 application anahtarları türetildi mi? (sunucu Finished

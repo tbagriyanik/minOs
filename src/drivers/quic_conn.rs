@@ -5,7 +5,8 @@
 //! stream'lerine taşıyarak yürütür. Kapsam: el sıkışma, ACK'ler,
 //! CRYPTO/PING/CONNECTION_CLOSE/HANDSHAKE_DONE çerçeveleri ve STREAM
 //! frame'lerinin uygulamaya teslimi (H3 katmanı `h3.rs`'te). Kayıp
-//! kurtarma ve tıkanıklık kontrolü basittir (tekrar yok).
+//! kurtarma RTO ile offset'li CRYPTO segmentleri üzerinden yapılır;
+//! gönderim akış kontrolü MAX_DATA/MAX_STREAM_DATA ile uygulanır.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -35,9 +36,57 @@ pub enum ConnState {
 /// Bir gelen STREAM'in yeniden birleştirme durumu.
 struct StreamRx {
     id: u64,
-    /// (offset, veri) parçaları.
+    /// (offset, veri) parçaları — çakışmasız, sıralanmamış.
     chunks: Vec<(u64, Vec<u8>)>,
     fin: bool,
+}
+
+impl StreamRx {
+    /// `(offset, data)` parçasını ekler; mevcut parçalarla çakışan
+    /// kısımları atlar (yeniden iletilen aynı aralıklar için güvenli).
+    fn insert(&mut self, offset: u64, data: &[u8], fin: bool) {
+        self.fin |= fin;
+        if data.is_empty() {
+            return;
+        }
+        let end = offset.saturating_add(data.len() as u64);
+        // Mevcut aralıklarla kesişmeyen boşlukları bul
+        let mut covered: Vec<(u64, u64)> = self
+            .chunks
+            .iter()
+            .map(|(o, d)| (*o, *o + d.len() as u64))
+            .collect();
+        covered.sort_by_key(|(o, _)| *o);
+        let mut cur = offset;
+        for (cs, ce) in covered {
+            if ce <= cur {
+                continue;
+            }
+            if cs >= end {
+                break;
+            }
+            if cs > cur {
+                // [cur, min(cs,end)) boşluk
+                let gap_end = cs.min(end);
+                let s = (cur - offset) as usize;
+                let e = (gap_end - offset) as usize;
+                if e > s {
+                    self.chunks.push((cur, data[s..e].to_vec()));
+                }
+            }
+            cur = cur.max(ce);
+            if cur >= end {
+                break;
+            }
+        }
+        if cur < end {
+            let s = (cur - offset) as usize;
+            let e = (end - offset) as usize;
+            if e > s {
+                self.chunks.push((cur, data[s..e].to_vec()));
+            }
+        }
+    }
 }
 
 /// Bir packet-number uzayının gönderim/alım durumu.
@@ -174,6 +223,15 @@ impl CryptoRx {
     }
 }
 
+/// ACK'lenmemiş gönderilmiş stream parçası (retransmission birimi).
+#[derive(Clone)]
+struct PendingChunk {
+    stream_id: u64,
+    offset: u64,
+    data: Vec<u8>,
+    fin: bool,
+}
+
 /// QUIC istemci bağlantısı.
 pub struct QuicConn {
     fd: i32,
@@ -213,6 +271,30 @@ pub struct QuicConn {
     rx_buf: Vec<u8>,
     /// Sunucunun SCID'si öğrenildi mi (short header hedefi için).
     app_keys_ready: bool,
+    /// Bağlantı düzeyi gönderim akış kontrolü sınırı: peer'ın izin
+    /// verdiği toplam STREAM payload baytı (MAX_DATA çerçevesi veya
+    /// `initial_max_data` transport parametresi; mutlak değer).
+    tx_max_data: u64,
+    /// Şimdiye kadar gönderilen toplam STREAM payload baytı.
+    tx_conn_bytes: u64,
+    /// Akış başına azami gönderim offset'i — MAX_STREAM_DATA
+    /// çerçeveleriyle güncellenir (mutlak offset değeri).
+    tx_stream_limits: Vec<(u64, u64)>,
+    /// Transport parametrelerinden gelen varsayılan akış sınırları:
+    /// client'ın gönderdiği bidi ve uni akışları için peer limitleri
+    /// (`initial_max_stream_data_bidi_remote` / `_uni`).
+    tx_stream_default_bidi: u64,
+    tx_stream_default_uni: u64,
+    /// Peer transport parametreleri (EE 0xffa5) işlendi mi?
+    peer_params_done: bool,
+    /// Akış kontrolüne takılan gönderim parçaları (FIFO; poll'da
+    /// MAX_DATA/MAX_STREAM_DATA geldiğinde boşaltılır).
+    tx_queue: Vec<PendingChunk>,
+    /// ACK'lenmemiş gönderilmiş stream parçaları (slot -> parça;
+    /// ACK gelince None). Yeniden iletimde aynı slot kullanılır.
+    tx_pending: Vec<Option<PendingChunk>>,
+    /// App uzayında gönderilen paketler: (pn, tx_pending slot id listesi).
+    sent_app: Vec<(u64, Vec<usize>)>,
 }
 
 impl QuicConn {
@@ -301,44 +383,61 @@ impl QuicConn {
             streams: Vec::new(),
             rx_buf: Vec::new(),
             app_keys_ready: false,
+            tx_max_data: 0,
+            tx_conn_bytes: 0,
+            tx_stream_limits: Vec::new(),
+            tx_stream_default_bidi: 0,
+            tx_stream_default_uni: 0,
+            peer_params_done: false,
+            tx_queue: Vec::new(),
+            tx_pending: Vec::new(),
+            sent_app: Vec::new(),
         };
         conn.initial.tx = quic::client_initial_keys(&dcid);
         conn.initial.rx = quic::server_initial_keys(&dcid);
-        conn.send_initial_crypto(0, &hello);
+        let _ = conn.send_crypto_segments(quic::PT_INITIAL, &hello);
         Ok(conn)
     }
 
-    /// Initial uzayında CRYPTO frame'i gönderir (ClientHello / yeniden
-    /// deneme). Paket 1200 bayta doldurulur.
-    fn send_initial_crypto(&mut self, offset: u64, data: &[u8]) {
-        let Some(keys) = self.initial.tx.as_ref() else {
-            return;
-        };
-        let mut frames = Vec::new();
-        quic::encode_crypto_frame(offset, data, &mut frames);
-        // 1200 bayt minimumu için PADDING
-        let header_len_est = 7 + CID_LEN + 1 + CID_LEN + 1 + PN_LEN + frames.len() + 16;
-        while header_len_est + frames.len() < INITIAL_MIN_LEN {
-            frames.push(quic::FRAME_PADDING);
+    /// CRYPTO verisini ~`CRYPTO_SEG` baytlık parçalara bölüp her birini
+    /// kendi CRYPTO frame'iyle (doğru stream offset'i) gönderir.
+    /// Tek dev paket yerine segmentleme MTU'yu aşmayı önler ve alıcının
+    /// `CryptoRx`'inin beklediği aralık tabanlı yeniden birleştirme ile
+    /// uyumludur — yeniden iletilen segmentler örtüşen aralık olarak
+    /// güvenle elenir. Initial paketleri 1200 bayta doldurulur.
+    fn send_crypto_segments(&mut self, ptype: u8, data: &[u8]) -> Result<(), String> {
+        const CRYPTO_SEG: usize = 1000;
+        let mut off = 0usize;
+        while off < data.len() {
+            let end = (off + CRYPTO_SEG).min(data.len());
+            let mut frames = Vec::new();
+            quic::encode_crypto_frame(off as u64, &data[off..end], &mut frames);
+            if ptype == quic::PT_INITIAL {
+                // 1200 bayt minimumu için PADDING (RFC 9000 §14.1)
+                let header_len_est = 7 + CID_LEN + 1 + CID_LEN + 1 + PN_LEN + frames.len() + 16;
+                while header_len_est + frames.len() < INITIAL_MIN_LEN {
+                    frames.push(quic::FRAME_PADDING);
+                }
+            }
+            let keys = match ptype {
+                quic::PT_INITIAL => self.initial.tx.take(),
+                quic::PT_HANDSHAKE => self.handshake.tx.take(),
+                _ => self.app.tx.take(),
+            };
+            let Some(keys) = keys else { break };
+            let result = self.send_long_pkt_with(&keys, ptype, &frames);
+            match ptype {
+                quic::PT_INITIAL => self.initial.tx = Some(keys),
+                quic::PT_HANDSHAKE => self.handshake.tx = Some(keys),
+                _ => self.app.tx = Some(keys),
+            }
+            result?;
+            if ptype == quic::PT_INITIAL {
+                self.initial_sent = true;
+            }
+            off = end;
         }
-        let Some(header) = quic::build_long_header(
-            quic::PT_INITIAL,
-            quic::VERSION_1,
-            &self.dcid,
-            &self.scid,
-            None,
-            PN_LEN,
-            0,
-            frames.len() + 16,
-        ) else {
-            return;
-        };
-        let pn = self.initial.next_pn;
-        self.initial.next_pn += 1;
-        if let Some(pkt) = quic::seal_packet(keys, pn, PN_LEN, header, &frames, true) {
-            let _ = socket::sendto(self.fd, self.peer_ip, self.peer_port, &pkt);
-            self.initial_sent = true;
-        }
+        Ok(())
     }
 
     /// Bir datagram alıp tek sefer işler. `Ok(true)` bağlantı yaşar,
@@ -369,6 +468,7 @@ impl QuicConn {
         self.update_key_phases()?;
         self.send_pending_acks()?;
         self.flush_crypto_tx_hs()?;
+        self.flush_tx_queue()?;
         // RTO dolduysa el sıkışma verisini yeniden gönder
         let now = crate::monotonic_ms();
         if now.wrapping_sub(self.last_activity_ms) > self.rto_ms {
@@ -388,6 +488,12 @@ impl QuicConn {
     /// TLS oturumuna erişim (sertifika doğrulama sonucu için).
     pub fn tls(&self) -> &TlsSession {
         &self.tls
+    }
+
+    /// TLS oturumuna değişebilir erişim (yalnızca test kancaları için;
+    /// ör. `livetest_insecure` ile sertifika doğrulamasını atlamak).
+    pub fn tls_mut(&mut self) -> &mut TlsSession {
+        &mut self.tls
     }
 
     /// 1-RTT anahtarları hazır mı?
@@ -454,6 +560,65 @@ impl QuicConn {
         data: &[u8],
         fin: bool,
     ) -> Result<(), String> {
+        // Akış kontrolü: kuyrukta bekleyen parça varsa doğrudan
+        // gönderme (akış başına sıralamayı koru).
+        if !self.tx_queue.is_empty() {
+            self.tx_queue.push(PendingChunk {
+                stream_id,
+                offset,
+                data: data.to_vec(),
+                fin,
+            });
+            return Ok(());
+        }
+        if !self.stream_send_allowed(stream_id, offset, data.len()) {
+            // Pencere aşımı — parça bekletilir, MAX_DATA /
+            // MAX_STREAM_DATA gelince poll() boşaltır.
+            self.tx_queue.push(PendingChunk {
+                stream_id,
+                offset,
+                data: data.to_vec(),
+                fin,
+            });
+            return Ok(());
+        }
+        self.emit_stream_chunk(stream_id, offset, data, fin)
+    }
+
+    /// `(stream_id, offset, data, fin)` için tek STREAM frame'li paket
+    /// gönderir; akış kontrolü hesabını ve ACK takibini burada yapar.
+    /// Kuyruk kontrolü `send_stream_chunk`'ta yapılır.
+    fn emit_stream_chunk(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<(), String> {
+        let Some(pn) = self.send_stream_packet(stream_id, offset, data, fin)? else {
+            return Ok(());
+        };
+        self.tx_conn_bytes = self.tx_conn_bytes.saturating_add(data.len() as u64);
+        let id = self.tx_pending.len();
+        self.tx_pending.push(Some(PendingChunk {
+            stream_id,
+            offset,
+            data: data.to_vec(),
+            fin,
+        }));
+        self.sent_app.push((pn, alloc::vec![id]));
+        Ok(())
+    }
+
+    /// Tek STREAM frame'li tek app-uzayı paketi gönderir; ACK/retransmit
+    /// takibi yapmaz. Başarılı UDP gönderiminde paket numarasını döner.
+    fn send_stream_packet(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<Option<u64>, String> {
         let keys = match self.app.tx.take() {
             Some(k) => k,
             None => return Err(String::from("no_keys")),
@@ -470,7 +635,83 @@ impl QuicConn {
         if let Some(pkt) = result {
             socket::sendto(self.fd, self.peer_ip, self.peer_port, &pkt)
                 .map_err(|e| alloc::format!("sendto: {}", e))?;
+            return Ok(Some(pn));
         }
+        Ok(None)
+    }
+
+    /// Akışın gönderebileceği azami offset: MAX_STREAM_DATA çerçevesi
+    /// varsa o, yoksa transport parametresi varsayılanı.
+    fn stream_tx_limit(&self, stream_id: u64) -> u64 {
+        if let Some((_, limit)) = self
+            .tx_stream_limits
+            .iter()
+            .find(|(id, _)| *id == stream_id)
+        {
+            return *limit;
+        }
+        // QUIC stream id bitleri: bit0=initiator, bit1=direction
+        // (0=bidi, 1=uni). Client'ın gönderdiği uni akışlar için
+        // `initial_max_stream_data_uni`, bidi için
+        // `initial_max_stream_data_bidi_remote` geçerlidir.
+        if stream_id & 0x2 != 0 {
+            self.tx_stream_default_uni
+        } else {
+            self.tx_stream_default_bidi
+        }
+    }
+
+    /// `(offset, len)` aralığının akış ve bağlantı düzeyi akış
+    /// kontrolü sınırlarına uyup uymadığını denetler.
+    fn stream_send_allowed(&self, stream_id: u64, offset: u64, len: usize) -> bool {
+        let end = offset.saturating_add(len as u64);
+        end <= self.stream_tx_limit(stream_id)
+            && self.tx_conn_bytes.saturating_add(len as u64) <= self.tx_max_data
+    }
+
+    /// `tx_queue`'daki parçaları akış kontrolü izin verdiği ölçüde
+    /// gönderir. Sığmayan parçalar kuyrukta kalır; parça kısmen
+    /// gönderilebilir (offset ilerletilerek kalan tekrar denenir).
+    /// Farklı akışlar bağımsız olduğundan engellenen parça atlanıp
+    /// sonrakiler denenebilir — QUIC akışları sıra dışı veri kabul
+    /// eder ve aynı akışta engellenen parçadan sonrakiler de aynı
+    /// sınıra takılır.
+    fn flush_tx_queue(&mut self) -> Result<(), String> {
+        if self.tx_queue.is_empty() {
+            return Ok(());
+        }
+        let pending = core::mem::take(&mut self.tx_queue);
+        let mut still: Vec<PendingChunk> = Vec::new();
+        for mut c in pending {
+            loop {
+                if c.data.is_empty() {
+                    if c.fin {
+                        if self.stream_send_allowed(c.stream_id, c.offset, 0) {
+                            self.emit_stream_chunk(c.stream_id, c.offset, &[], true)?;
+                        } else {
+                            still.push(c);
+                        }
+                    }
+                    break;
+                }
+                let stream_room = self.stream_tx_limit(c.stream_id).saturating_sub(c.offset);
+                let conn_room = self.tx_max_data.saturating_sub(self.tx_conn_bytes);
+                let allow = stream_room.min(conn_room).min(c.data.len() as u64) as usize;
+                if allow == 0 {
+                    still.push(c);
+                    break;
+                }
+                let last = allow == c.data.len();
+                let piece = c.data[..allow].to_vec();
+                self.emit_stream_chunk(c.stream_id, c.offset, &piece, c.fin && last)?;
+                c.offset += allow as u64;
+                c.data.drain(..allow);
+                if last {
+                    break;
+                }
+            }
+        }
+        self.tx_queue = still;
         Ok(())
     }
 
@@ -525,7 +766,7 @@ impl QuicConn {
                     self.initial.rx = quic::server_initial_keys(&self.dcid);
                     self.initial.next_pn = 0;
                     let hello = self.client_hello.clone();
-                    self.send_initial_crypto(0, &hello);
+                    let _ = self.send_crypto_segments(quic::PT_INITIAL, &hello);
                     return Ok(());
                 }
                 if ptype == quic::PT_0RTT {
@@ -632,19 +873,44 @@ impl QuicConn {
                         *pos += l;
                         Some(v)
                     };
-                    if read_varint(&mut pos).is_none() || read_varint(&mut pos).is_none() {
-                        return Ok(());
-                    }
-                    let Some(ranges) = read_varint(&mut pos) else {
+                    let Some(largest) = read_varint(&mut pos) else {
                         return Ok(());
                     };
                     if read_varint(&mut pos).is_none() {
                         return Ok(());
                     }
-                    for _ in 0..ranges {
-                        if read_varint(&mut pos).is_none() || read_varint(&mut pos).is_none() {
+                    let Some(range_count) = read_varint(&mut pos) else {
+                        return Ok(());
+                    };
+                    let Some(first_range) = read_varint(&mut pos) else {
+                        return Ok(());
+                    };
+                    let Some(first_start) = largest.checked_sub(first_range) else {
+                        return Ok(());
+                    };
+                    // Onaylanan pn aralıkları (dahil): ilk aralık
+                    // [largest-first_range, largest]; sonraki her aralık
+                    // önceki aralığın başından gap+1 geri çekilip len
+                    // uzunluğunda kurulur (RFC 9000 §19.3).
+                    let mut acked = Vec::new();
+                    acked.push((first_start, largest));
+                    let mut prev_start = first_start;
+                    for _ in 0..range_count {
+                        let Some(gap) = read_varint(&mut pos) else {
                             return Ok(());
-                        }
+                        };
+                        let Some(len) = read_varint(&mut pos) else {
+                            return Ok(());
+                        };
+                        let Some(end) = prev_start.checked_sub(gap).and_then(|v| v.checked_sub(1))
+                        else {
+                            return Ok(());
+                        };
+                        let Some(start) = end.checked_sub(len) else {
+                            return Ok(());
+                        };
+                        acked.push((start, end));
+                        prev_start = start;
                     }
                     if ft & 0x01 != 0
                         && (read_varint(&mut pos).is_none()
@@ -652,6 +918,9 @@ impl QuicConn {
                             || read_varint(&mut pos).is_none())
                     {
                         return Ok(());
+                    }
+                    if !crypto_space {
+                        self.note_acked(&acked);
                     }
                 }
                 0x06 | 0x07 => {
@@ -698,13 +967,38 @@ impl QuicConn {
                 // Flow-control / bağlantı yönetimi çerçeveleri:
                 // MAX_DATA(0x10), MAX_STREAM_DATA(0x11), MAX_STREAMS(0x12/0x13),
                 // DATA_BLOCKED(0x14), STREAM_DATA_BLOCKED(0x15),
-                // STREAMS_BLOCKED(0x16/0x17) — hepsi varint alanlı;
-                // gönderim tarafında sınır uygulamadığımız için yalnızca atlanır.
-                0x10..=0x17 => {
-                    // Alan sayısı türe göre: MAX_DATA/MAX_STREAMS/*_BLOCKED
-                    // tek, MAX_STREAM_DATA/STREAM_DATA_BLOCKED çift varint.
+                // STREAMS_BLOCKED(0x16/0x17).
+                0x10 => {
+                    // MAX_DATA: bağlantı düzeyi azami STREAM baytı
+                    // (mutlak kümülatif değer — asla azalmaz).
+                    let Some((v, l)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
+                    };
+                    pos += l;
+                    self.tx_max_data = self.tx_max_data.max(v);
+                    self.flush_tx_queue()?;
+                }
+                0x11 => {
+                    // MAX_STREAM_DATA: akış düzeyi azami offset.
+                    let Some((sid, l1)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
+                    };
+                    pos += l1;
+                    let Some((v, l2)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
+                    };
+                    pos += l2;
+                    match self.tx_stream_limits.iter_mut().find(|(id, _)| *id == sid) {
+                        Some((_, limit)) => *limit = (*limit).max(v),
+                        None => self.tx_stream_limits.push((sid, v)),
+                    }
+                    self.flush_tx_queue()?;
+                }
+                0x12..=0x17 => {
+                    // Alan sayısı türe göre: MAX_STREAMS/*_BLOCKED tek,
+                    // STREAM_DATA_BLOCKED(0x15) çift varint.
                     let n = match ft {
-                        0x11 | 0x15 => 2,
+                        0x15 => 2,
                         _ => 1,
                     };
                     for _ in 0..n {
@@ -724,6 +1018,36 @@ impl QuicConn {
             }
         }
         Ok(())
+    }
+
+    /// App uzayında ACK'lenen pn aralıklarına karşılık gelen stream
+    /// parçalarını `tx_pending`'den temizler. `ranges` dahil
+    /// `(start, end)` paket numarası aralıklarıdır.
+    fn note_acked(&mut self, ranges: &[(u64, u64)]) {
+        if ranges.is_empty() || self.sent_app.is_empty() {
+            return;
+        }
+        let mut acked_ids = Vec::new();
+        self.sent_app.retain(|(pn, ids)| {
+            if ranges.iter().any(|(s, e)| pn >= s && pn <= e) {
+                acked_ids.extend(ids.iter().copied());
+                false
+            } else {
+                true
+            }
+        });
+        for id in acked_ids {
+            if let Some(slot) = self.tx_pending.get_mut(id) {
+                *slot = None;
+            }
+        }
+        // Başka bir kopyası ACK'lenmiş slotlara işaret eden eski
+        // sent_app kayıtlarını buda.
+        let tx_pending = &self.tx_pending;
+        self.sent_app.retain(|(_, ids)| {
+            ids.iter()
+                .any(|id| tx_pending.get(*id).is_some_and(|p| p.is_some()))
+        });
     }
 
     /// STREAM frame'ini ayrıştırır; `rest` frame type sonrası baytlar.
@@ -762,16 +1086,17 @@ impl QuicConn {
             (rest.len() - pos, &rest[pos..])
         };
         pos += dlen;
-        // Akış verisini sakla
+        // Akış verisini sakla (tekrar iletilen aralıklar elenir)
         if let Some(s) = self.streams.iter_mut().find(|s| s.id == stream_id) {
-            s.chunks.push((offset, data.to_vec()));
-            s.fin |= fin;
+            s.insert(offset, data, fin);
         } else {
-            self.streams.push(StreamRx {
+            let mut s = StreamRx {
                 id: stream_id,
-                chunks: alloc::vec![(offset, data.to_vec())],
-                fin,
-            });
+                chunks: Vec::new(),
+                fin: false,
+            };
+            s.insert(offset, data, fin);
+            self.streams.push(s);
         }
         Ok(Some(pos))
     }
@@ -798,8 +1123,47 @@ impl QuicConn {
         Ok(())
     }
 
+    /// Peer'ın QUIC transport parametrelerini (EncryptedExtensions
+    /// 0xffa5) bir kez işleyip gönderim akış kontrolü başlangıç
+    /// değerlerini yükler (RFC 9000 §18.2).
+    fn apply_peer_transport_params(&mut self) {
+        if self.peer_params_done {
+            return;
+        }
+        let Some(params) = self.tls.quic_transport_params().map(|p| p.to_vec()) else {
+            return;
+        };
+        self.peer_params_done = true;
+        // Biçim: (parametre_id varint, uzunluk varint, değer)
+        let mut pos = 0usize;
+        while pos < params.len() {
+            let Some((id, l1)) = quic::decode_varint(&params[pos..]) else {
+                break;
+            };
+            pos += l1;
+            let Some((len, l2)) = quic::decode_varint(&params[pos..]) else {
+                break;
+            };
+            pos += l2;
+            let len = len as usize;
+            if pos + len > params.len() {
+                break;
+            }
+            let value = &params[pos..pos + len];
+            pos += len;
+            let parsed = quic::decode_varint(value).map(|(v, _)| v);
+            match (id, parsed) {
+                (0x04, Some(v)) => self.tx_max_data = v, // initial_max_data
+                (0x06, Some(v)) => self.tx_stream_default_bidi = v, // bidi_remote
+                (0x07, Some(v)) => self.tx_stream_default_uni = v, // uni
+                _ => {}
+            }
+        }
+    }
+
     /// Anahtar fazlarını günceller; client Finished'i ve Ready geçişini yapar.
     fn update_key_phases(&mut self) -> Result<(), String> {
+        self.apply_peer_transport_params();
         // QUIC paket koruması yalnızca AES-128-GCM-SHA-256 (0x1301)
         // destekler; sunucu AES-256 seçerse bağlantıyı düşür.
         if self.tls.tls13_cipher_suite() != Some(tls::TLS_AES_128_GCM_SHA256)
@@ -877,43 +1241,61 @@ impl QuicConn {
     }
 
     fn flush_crypto_tx_hs(&mut self) -> Result<(), String> {
-        if self.crypto_tx_hs.is_empty() {
+        if self.crypto_tx_hs.is_empty() || self.handshake.tx.is_none() {
             return Ok(());
         }
-        let Some(keys) = self.handshake.tx.take() else {
-            return Ok(());
-        };
         let data = core::mem::take(&mut self.crypto_tx_hs);
         self.sent_hs_crypto = data.clone();
-        let mut frames = Vec::new();
-        // Handshake CRYPTO akışı offset'i: client'ın ilk handshake verisi 0.
-        quic::encode_crypto_frame(0, &data, &mut frames);
-        let result = self.send_long_pkt_with(&keys, quic::PT_HANDSHAKE, &frames);
-        self.handshake.tx = Some(keys);
-        result
+        // Handshake CRYPTO akışı offset'i: client'ın ilk handshake
+        // verisi 0; segmentler kendi offset'leriyle gönderilir.
+        self.send_crypto_segments(quic::PT_HANDSHAKE, &data)
+    }
+
+    /// RTO dolduğunda ACK'lenmemiş stream parçalarını yeni paket
+    /// numaralarıyla yeniden gönderir. Akış kontrolü ve bayt sayacı
+    /// tekrar işletilmez — parçalar zaten izinli kabul edilmiştir;
+    /// alıcı `StreamRx::insert` ile örtüşen aralıkları eler.
+    fn retransmit_pending_streams(&mut self) -> Result<(), String> {
+        if !self.app_keys_ready {
+            return Ok(());
+        }
+        let ids: Vec<usize> = (0..self.tx_pending.len())
+            .filter(|&i| self.tx_pending[i].is_some())
+            .collect();
+        for id in ids {
+            let Some(chunk) = self.tx_pending.get(id).and_then(|p| p.as_ref()).cloned() else {
+                continue;
+            };
+            if let Some(pn) =
+                self.send_stream_packet(chunk.stream_id, chunk.offset, &chunk.data, chunk.fin)?
+            {
+                self.sent_app.push((pn, alloc::vec![id]));
+            }
+        }
+        Ok(())
     }
 
     /// RTO dolduğunda el sıkışma verisini yeniden gönderir.
-    /// Basit kayıp kurtarma: Initial CH veya client Finished tekrar edilir.
+    /// Basit kayıp kurtarma: ClientHello veya client Finished, daha
+    /// önce gönderilen offset'lerle CRYPTO segmentleri olarak tekrar
+    /// iletilir — alıcının CryptoRx'i örtüşen aralıkları birleştirir.
+    /// Ready durumda handshake tekrarı yerine stream retransmission
+    /// çalışır.
     fn retransmit(&mut self) -> Result<(), String> {
-        if self.state == ConnState::Ready || self.state == ConnState::Failed {
+        if self.state == ConnState::Failed {
             return Ok(());
+        }
+        if self.state == ConnState::Ready {
+            return self.retransmit_pending_streams();
         }
         if self.handshake.tx.is_some() && !self.sent_hs_crypto.is_empty() {
             // client Finished'ı Handshake uzayında tekrar gönder
-            let Some(keys) = self.handshake.tx.take() else {
-                return Ok(());
-            };
             let data = self.sent_hs_crypto.clone();
-            let mut frames = Vec::new();
-            quic::encode_crypto_frame(0, &data, &mut frames);
-            let result = self.send_long_pkt_with(&keys, quic::PT_HANDSHAKE, &frames);
-            self.handshake.tx = Some(keys);
-            result
+            self.send_crypto_segments(quic::PT_HANDSHAKE, &data)
         } else if self.initial_sent {
             // Henüz handshake anahtarı yok → ClientHello'yu tekrar gönder
             let hello = self.client_hello.clone();
-            self.send_initial_crypto(0, &hello);
+            let _ = self.send_crypto_segments(quic::PT_INITIAL, &hello);
             Ok(())
         } else {
             Ok(())

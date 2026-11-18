@@ -8,6 +8,8 @@
 //! - H3 çerçeve kodlama/ayrıştırma: DATA, HEADERS, SETTINGS, PUSH_PROMISE,
 //!   GOAWAY, MAX_PUSH_ID; bilinmeyen çerçeveler atlanır.
 //! - İstemci kontrol akışı (SETTINGS) ve istek akışları.
+//!
+#![allow(static_mut_refs)] // tek çekirdekli no_std: havuz deseni http.rs ile aynı
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -98,6 +100,9 @@ pub fn client_settings() -> Vec<u8> {
 pub struct H3Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
+    /// Trailer HEADERS alanları — `:status` içermeyen HEADERS
+    /// blokları (RFC 9114 §4.1: trailer'larda pseudo-header olmaz).
+    pub trailers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub stream_id: u64,
     pub done: bool,
@@ -135,6 +140,16 @@ pub struct H3Client {
     pending_qpack: Vec<(u64, Vec<u8>)>,
     /// Section Ack bekleyen tamamlanmış istek stream id'leri.
     ack_pending: Vec<u64>,
+    /// Sunucu kontrol akışından GOAWAY alındı mı? (H3 bağlantı
+    /// yeniden kullanımı için — GOAWAY sonrası conn havuza dönmez.)
+    goaway: bool,
+    /// GOAWAY'nin izin verdiği son stream id.
+    goaway_stream_id: u64,
+    /// Sunucunun MAX_PUSH_ID değeri (server push kullanılmıyor;
+    /// kayıt için saklanır).
+    max_push_id: u64,
+    /// Sunucu SETTINGS parametreleri (id -> değer).
+    peer_settings: Vec<(u64, u64)>,
 }
 
 impl H3Client {
@@ -152,6 +167,10 @@ impl H3Client {
             dec_insert_ack: 0,
             pending_qpack: Vec::new(),
             ack_pending: Vec::new(),
+            goaway: false,
+            goaway_stream_id: 0,
+            max_push_id: u64::MAX,
+            peer_settings: Vec::new(),
         };
         client.send_control_stream()?;
         client.send_decoder_stream()?;
@@ -277,6 +296,16 @@ impl H3Client {
         Ok(stream_id)
     }
 
+    /// Kısa canlılık yoklaması: soket timeout'unu geçici olarak kısaltıp
+    /// tek poll çalıştırır, sonra eski timeout'u geri yükler.
+    /// Havuzdan alınan bağlantının hâlâ yaşadığını anlamak için kullanılır.
+    pub fn poll_quick(&mut self) -> bool {
+        self.conn.set_recv_timeout(30);
+        let alive = self.poll().unwrap_or(false);
+        self.conn.set_recv_timeout(1_500);
+        alive
+    }
+
     /// QUIC poll + gelen stream verilerini H3 yanıtlarına çevirir.
     /// `Ok(true)` = bağlantı canlı.
     pub fn poll(&mut self) -> Result<bool, String> {
@@ -356,22 +385,98 @@ impl H3Client {
         Ok(())
     }
 
-    /// QPACK encoder stream (type 0x02) verisini decoder'a besler.
+    /// QPACK encoder stream (type 0x02) verisini decoder'a, kontrol
+    /// stream'i (type 0x00) H3 çerçevelerini ilgili işleyicilere besler.
     fn process_uni_streams(&mut self) -> Result<(), String> {
-        for u in self.uni.iter_mut() {
-            if u.stream_type != Some(0x02) || u.buf.is_empty() {
-                continue;
-            }
-            match self.qpack.decode_encoder_stream(&u.buf) {
-                Ok(consumed) => {
-                    u.buf.drain(..consumed);
+        for i in 0..self.uni.len() {
+            match self.uni[i].stream_type {
+                Some(0x02) if !self.uni[i].buf.is_empty() => {
+                    match self.qpack.decode_encoder_stream(&self.uni[i].buf) {
+                        Ok(consumed) => {
+                            self.uni[i].buf.drain(..consumed);
+                        }
+                        Err(_) => {
+                            self.uni[i].buf.clear();
+                        }
+                    }
                 }
-                Err(_) => {
-                    u.buf.clear();
+                Some(0x00) if !self.uni[i].buf.is_empty() => {
+                    self.process_control_stream(i)?;
                 }
+                _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Sunucu kontrol akışı (uni stream type 0x00) üzerindeki H3
+    /// çerçevelerini işler: SETTINGS, GOAWAY, MAX_PUSH_ID
+    /// (RFC 9114 §6.2). Eksik çerçeve kuyruktaki baytlarda kalır.
+    fn process_control_stream(&mut self, idx: usize) -> Result<(), String> {
+        let buf = core::mem::take(&mut self.uni[idx].buf);
+        match parse_frames(&buf) {
+            Ok((frames, consumed)) => {
+                for f in frames {
+                    match f.frame_type {
+                        FRAME_SETTINGS => self.apply_peer_settings(&f.payload),
+                        FRAME_GOAWAY => {
+                            self.goaway = true;
+                            if let Some((id, _)) = decode_varint(&f.payload) {
+                                self.goaway_stream_id = id;
+                            }
+                        }
+                        FRAME_MAX_PUSH_ID => {
+                            if let Some((id, _)) = decode_varint(&f.payload) {
+                                self.max_push_id = id;
+                            }
+                        }
+                        _ => {} // CANCEL_PUSH / PRIORITY_UPDATE vb. — yoksay
+                    }
+                }
+                let mut rest = buf;
+                rest.drain(..consumed);
+                self.uni[idx].buf = rest;
+            }
+            Err(_) => {
+                // Bozuk/eksik başlık — daha fazla veri bekle.
+                self.uni[idx].buf = buf;
+            }
+        }
+        Ok(())
+    }
+
+    /// Sunucu SETTINGS parametrelerini (id, value varint çiftleri)
+    /// `peer_settings`'e yazar; tekrar gelenler üzerine yazılır.
+    fn apply_peer_settings(&mut self, payload: &[u8]) {
+        let mut pos = 0usize;
+        while pos < payload.len() {
+            let Some((id, l1)) = decode_varint(&payload[pos..]) else {
+                break;
+            };
+            pos += l1;
+            let Some((val, l2)) = decode_varint(&payload[pos..]) else {
+                break;
+            };
+            pos += l2;
+            match self.peer_settings.iter_mut().find(|(k, _)| *k == id) {
+                Some(e) => e.1 = val,
+                None => self.peer_settings.push((id, val)),
+            }
+        }
+    }
+
+    /// Sunucunun bildirdiği bir SETTINGS parametresi (yoksa `None`).
+    pub fn peer_setting(&self, id: u64) -> Option<u64> {
+        self.peer_settings
+            .iter()
+            .find(|(k, _)| *k == id)
+            .map(|(_, v)| *v)
+    }
+
+    /// Sunucu GOAWAY gönderdi mi veya bağlantı kapandı mı?
+    /// `false` ise bağlantı havuza geri konabilir.
+    pub fn is_closing(&self) -> bool {
+        self.goaway || self.conn.state() == ConnState::Failed
     }
 
     /// `qpack_pending` ile ertelenen HEADERS yüklerini tekrar dener.
@@ -380,7 +485,7 @@ impl H3Client {
         for (sid, payload) in pending {
             match self.qpack.decode_block(&payload) {
                 Ok(headers) => {
-                    self.apply_headers(sid, headers)?;
+                    self.apply_header_block(sid, headers)?;
                 }
                 Err(ref e) if e == "qpack_pending" => {
                     self.pending_qpack.push((sid, payload));
@@ -410,12 +515,33 @@ impl H3Client {
         Ok(())
     }
 
+    /// Çözülmüş HEADERS bloğunu başlık ya da trailer olarak sınıflandırır:
+    /// `:status` içeren bloklar yanıt başlıklarıdır (interim 1xx dahil),
+    /// içermeyenler trailer'dır (RFC 9114 §4.1 — trailer'larda pseudo-header
+    /// alanı bulunmaz).
+    fn apply_header_block(
+        &mut self,
+        sid: u64,
+        headers: Vec<(String, String)>,
+    ) -> Result<(), String> {
+        if headers.iter().any(|(n, _)| n == ":status") {
+            return self.apply_headers(sid, headers);
+        }
+        if let Some(r) = self.responses.iter_mut().find(|r| r.stream_id == sid) {
+            for (n, v) in headers {
+                r.trailers.push((n, v));
+            }
+        }
+        Ok(())
+    }
+
     /// `send_request` sonrası stream_id'yi yanıt takibine ekler.
     pub fn track_response(&mut self, stream_id: u64) {
         if !self.responses.iter().any(|r| r.stream_id == stream_id) {
             self.responses.push(H3Response {
                 status: 0,
                 headers: Vec::new(),
+                trailers: Vec::new(),
                 body: Vec::new(),
                 stream_id,
                 done: false,
@@ -459,7 +585,7 @@ impl H3Client {
                     // decode_block prefix'i kendisi çözer.
                     match self.qpack.decode_block(&f.payload) {
                         Ok(headers) => {
-                            self.apply_headers(sid, headers)?;
+                            self.apply_header_block(sid, headers)?;
                         }
                         Err(ref e) if e == "qpack_pending" => {
                             self.pending_qpack.push((sid, f.payload.clone()));
@@ -515,13 +641,137 @@ impl H3Client {
 }
 
 // ---------------------------------------------------------------------------
-// Üst düzey HTTP/3 GET (http.rs/http2.rs ile aynı kullanım kalıbı)
+// H3 bağlantı havuzu: aynı host'a tekrar isteklerde QUIC bağlantısı
+// yeniden kullanılır (TCP keep-alive havuzunun HTTP/3 karşılığı).
 // ---------------------------------------------------------------------------
+
+/// Havuzdaki bir H3 istemcisi ve ait olduğu yetki (authority).
+struct PooledH3 {
+    host: String,
+    port: u16,
+    client: H3Client,
+    last_used: u64,
+}
+
+static mut H3_POOL: [Option<PooledH3>; 4] = [const { None }; 4];
+
+/// Havuzda boşta kalabilecek en uzun süre — reklam edilen QUIC
+/// `max_idle_timeout`'un (30 sn) altında tutulur.
+const H3_POOL_IDLE_MS: u64 = 20_000;
+
+/// `(host, port)` için havuzda bekleyen H3 istemcisini çıkarır.
+/// Bayat girdiler düşürülür; bulunan istemcinin canlılığı çağıran
+/// tarafından yoklanır.
+fn h3_pool_acquire(host: &str, port: u16) -> Option<H3Client> {
+    unsafe {
+        let now = crate::monotonic_ms();
+        for entry in H3_POOL.iter_mut() {
+            if entry
+                .as_ref()
+                .is_some_and(|p| now.wrapping_sub(p.last_used) > H3_POOL_IDLE_MS)
+            {
+                entry.take(); // drop → soket kapanır
+            }
+        }
+        for entry in H3_POOL.iter_mut() {
+            if entry
+                .as_ref()
+                .is_some_and(|p| p.host == host && p.port == port)
+            {
+                return entry.take().map(|p| p.client);
+            }
+        }
+    }
+    None
+}
+
+/// İstemciyi havuza geri koyar. GOAWAY alınmış veya bağlantısı
+/// kapanmış istemciler havuza dönmez (drop → soket kapanır).
+fn h3_pool_release(host: &str, port: u16, client: H3Client) {
+    if client.is_closing() {
+        return;
+    }
+    unsafe {
+        let now = crate::monotonic_ms();
+        let mut empty = None;
+        let mut oldest = 0usize;
+        let mut oldest_t = u64::MAX;
+        for (i, entry) in H3_POOL.iter().enumerate() {
+            match entry {
+                None => {
+                    empty = Some(i);
+                    break;
+                }
+                Some(p) => {
+                    if p.last_used < oldest_t {
+                        oldest_t = p.last_used;
+                        oldest = i;
+                    }
+                }
+            }
+        }
+        let idx = empty.unwrap_or(oldest);
+        H3_POOL[idx] = Some(PooledH3 {
+            host: String::from(host),
+            port,
+            client,
+            last_used: now,
+        });
+    }
+}
+
+/// `livetest_insecure` cmdline token'ı var mı? (Yalnızca gömülü
+/// test sunucusuna karşı sertifika doğrulamasını atlatmak için.)
+#[cfg(not(test))]
+fn livetest_insecure_enabled() -> bool {
+    crate::boot::limine::limine_boot_cmdline()
+        .map(|c| c.split_whitespace().any(|t| t == "livetest_insecure"))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn livetest_insecure_enabled() -> bool {
+    false
+}
+
+/// Yeni QUIC bağlantısı kurar, el sıkışmanın bitmesini bekler ve
+/// H3 istemcisini döndürür. Kontrol akışı SETTINGS'i 1-RTT anahtarı
+/// gerektirdiğinden `H3Client::new` ancak `conn.ready()` sonrası
+/// çağrılabilir.
+fn h3_connect(
+    ip: crate::drivers::netstack::Ipv4Address,
+    port: u16,
+    host: &str,
+) -> Result<H3Client, i32> {
+    use crate::drivers::socket;
+    let mut conn = QuicConn::connect(ip, port, host).map_err(|_| socket::E_NOTCONN)?;
+    conn.set_recv_timeout(1_500);
+    if livetest_insecure_enabled() {
+        conn.tls_mut().set_skip_cert_validation(true);
+    }
+    let mut ready = false;
+    for _ in 0..40 {
+        if conn.ready() {
+            ready = true;
+            break;
+        }
+        if !conn.poll().map_err(|_| socket::E_IO)? {
+            break;
+        }
+    }
+    if !ready {
+        conn.close();
+        return Err(socket::E_TIMEOUT);
+    }
+    H3Client::new(conn).map_err(|_| socket::E_NOTCONN)
+}
 
 /// `https://` URL'sini HTTP/3 (QUIC) üzerinden istek yapar.
 /// `resp_buf` gövdeyi alır; dönen: (status, gövde uzunluğu).
 /// Yanıt başlıkları `resp_headers` doluysa `(ad, değer)` listesi olarak
 /// yazılır (küçük harfli adlar). `body` verilirse DATA frame'i gönderilir.
+/// Aynı host'a tekrar isteklerde QUIC bağlantısı havuzdan yeniden
+/// kullanılır; GOAWAY/kapanan bağlantılar havuza dönmez.
 pub fn http3_request_full(
     method: &str,
     url: &str,
@@ -543,33 +793,57 @@ pub fn http3_request_full(
     let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
     let ip = socket::resolve_host(host_str)?;
 
-    let mut conn = QuicConn::connect(ip, port, host_str).map_err(|_| socket::E_NOTCONN)?;
-    conn.set_recv_timeout(1_500);
-    let mut client = H3Client::new(conn).map_err(|_| socket::E_NOTCONN)?;
-
-    // El sıkışmanın tamamlanmasını bekle (maks ~20 sn)
-    let mut ready = false;
-    for _ in 0..40 {
-        if client.conn_ready() {
-            ready = true;
-            break;
+    // Havuzdan al; yoksa ya da bağlantı öldüyse yeni kur.
+    let mut client = match h3_pool_acquire(host_str, port) {
+        Some(mut c) => {
+            // Kısa canlılık yoklaması: sunucu bağlantıyı kapattıysa
+            // (CONNECTION_CLOSE) burada yakalanır.
+            if c.poll_quick() {
+                c
+            } else {
+                c.close();
+                h3_connect(ip, port, host_str)?
+            }
         }
-        if !client.poll().map_err(|_| socket::E_IO)? {
-            break;
-        }
-    }
-    if !ready {
-        client.close();
-        return Err(socket::E_TIMEOUT);
-    }
+        None => h3_connect(ip, port, host_str)?,
+    };
 
     let authority = if port == 443 {
         host_str.to_string()
     } else {
         alloc::format!("{}:{}", host_str, port)
     };
+    let result = h3_do_request(
+        &mut client,
+        method,
+        path_str,
+        &authority,
+        req_headers,
+        body,
+        resp_buf,
+        resp_headers,
+    );
+    // Başarılı olsun olmasın bağlantıyı havuza geri ver —
+    // release() GOAWAY/kapanma durumunu denetler.
+    h3_pool_release(host_str, port, client);
+    result
+}
+
+/// Tek bir H3 isteği gönderir ve yanıtı bekler; `client` üzerinde
+/// çalışır (havuz tarafından edinilmiş/kurulmuş olmalı).
+fn h3_do_request(
+    client: &mut H3Client,
+    method: &str,
+    path: &str,
+    authority: &str,
+    req_headers: &[(String, String)],
+    body: Option<&[u8]>,
+    resp_buf: &mut [u8],
+    resp_headers: &mut Vec<(String, String)>,
+) -> Result<(u16, usize), i32> {
+    use crate::drivers::socket;
     let stream_id = client
-        .send_request_body(method, path_str, &authority, req_headers, body)
+        .send_request_body(method, path, authority, req_headers, body)
         .map_err(|_| socket::E_IO)?;
 
     // Yanıtı bekle (maks ~30 sn)
@@ -583,7 +857,6 @@ pub fn http3_request_full(
             break;
         }
     }
-    client.close();
     let resp = result.ok_or(socket::E_TIMEOUT)?;
 
     let blen = resp.body.len().min(resp_buf.len());

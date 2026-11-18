@@ -417,23 +417,49 @@ impl QuicConn {
         Some((out, fin))
     }
 
-    /// Bir bidirectional stream üzerinde veri gönderir (H3 istekleri için).
-    /// `stream_id` çift olmalı (istemci-initiated bidi = 0, 4, 8...).
-    pub fn send_stream_data(
+    /// Bir stream üzerinde `offset` konumundan veri gönderir.
+    pub fn send_stream_data_off(
         &mut self,
         stream_id: u64,
+        offset: u64,
         data: &[u8],
         fin: bool,
     ) -> Result<(), String> {
         if !self.app_keys_ready {
             return Err(String::from("not_ready"));
         }
+        // Büyük veriyi ~1000 baytlık STREAM frame'lere böl (tek UDP
+        // datagramı MTU'yu aşmamalı).
+        const CHUNK: usize = 1000;
+        if data.len() <= CHUNK {
+            return self.send_stream_chunk(stream_id, offset, data, fin);
+        }
+        let mut off = offset;
+        let mut pos = 0usize;
+        while pos < data.len() {
+            let end = (pos + CHUNK).min(data.len());
+            let last = end == data.len();
+            self.send_stream_chunk(stream_id, off, &data[pos..end], fin && last)?;
+            off += (end - pos) as u64;
+            pos = end;
+        }
+        Ok(())
+    }
+
+    /// Tek STREAM frame'li tek paket gönderir.
+    fn send_stream_chunk(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<(), String> {
         let keys = match self.app.tx.take() {
             Some(k) => k,
             None => return Err(String::from("no_keys")),
         };
         let mut frames = Vec::new();
-        quic::encode_stream_frame(stream_id, 0, fin, data, &mut frames);
+        quic::encode_stream_frame(stream_id, offset, fin, data, &mut frames);
         let mut header = Vec::with_capacity(1 + self.server_scid.len());
         header.push(0x40 | ((PN_LEN - 1) as u8));
         header.extend_from_slice(&self.server_scid);
@@ -446,6 +472,22 @@ impl QuicConn {
                 .map_err(|e| alloc::format!("sendto: {}", e))?;
         }
         Ok(())
+    }
+
+    /// Stream'in gönderim offset'ini sıfırdan başlatır (offset=0 kısayolu).
+    pub fn send_stream_data(
+        &mut self,
+        stream_id: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<(), String> {
+        self.send_stream_data_off(stream_id, 0, data, fin)
+    }
+
+    /// Veri taşıyan bilinen stream id'lerini döndürür (uni-stream
+    /// keşfi için; veri gelmemiş stream'ler listede yoktur).
+    pub fn stream_ids(&self) -> Vec<u64> {
+        self.streams.iter().map(|s| s.id).collect()
     }
 
     /// Soket recv timeout'unu değiştirir (ms).

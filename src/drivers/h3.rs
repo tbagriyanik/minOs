@@ -68,10 +68,17 @@ pub fn encode_frame(frame_type: u64, payload: &[u8], out: &mut Vec<u8>) {
 
 /// SETTINGS çerçevesi (istemci reklamları).
 pub fn client_settings() -> Vec<u8> {
-    // SETTINGS_QPACK_MAX_TABLE_CAPACITY(0x01)=0, MAX_FIELD_SECTION_SIZE(0x06),
-    // QPACK_BLOCKED_STREAMS(0x07), ENABLE_CONNECT_PROTOCOL(0x08),
+    // SETTINGS_QPACK_MAX_TABLE_CAPACITY(0x01)=4096,
+    // MAX_FIELD_SECTION_SIZE(0x06)=65536,
+    // QPACK_BLOCKED_STREAMS(0x07)=16,
+    // ENABLE_CONNECT_PROTOCOL(0x08)=0 (gönderilmiyor),
     // H3_DATAGRAM(0x33)=1
     let mut p = Vec::new();
+    encode_varint(0x01, &mut p);
+    encode_varint(
+        crate::drivers::qpack::QPACK_MAX_TABLE_CAPACITY as u64,
+        &mut p,
+    );
     encode_varint(0x06, &mut p);
     encode_varint(65_536, &mut p); // max_field_section_size
     encode_varint(0x07, &mut p);
@@ -96,6 +103,17 @@ pub struct H3Response {
     pub done: bool,
 }
 
+/// Sunucu-initiated unidirectional stream durumu (H3 stream type
+/// öneki + biriken yük).
+struct UniRx {
+    id: u64,
+    /// H3 stream type (0x00 control, 0x02 qpack encoder, 0x03 qpack
+    /// decoder); henüz ayrıştırılmadıysa None.
+    stream_type: Option<u64>,
+    /// Type öneki düşüldükten sonraki biriken yük.
+    buf: Vec<u8>,
+}
+
 /// QUIC bağlantısı üzerinde HTTP/3 istemcisi.
 pub struct H3Client {
     conn: QuicConn,
@@ -107,6 +125,16 @@ pub struct H3Client {
     /// her poll'da yeniden ayrıştırılır).
     responses: Vec<H3Response>,
     qpack: QpackDecoder,
+    /// Sunucu uni-stream'leri (kontrol/QPACK encoder).
+    uni: Vec<UniRx>,
+    /// QPACK decoder stream (istemci uni stream 6) gönderim offset'i.
+    dec_offset: u64,
+    /// Insert Count Increment ile bildirilen son insert sayısı.
+    dec_insert_ack: u64,
+    /// Dinamik tablo verisi bekleyen HEADERS yükleri: (stream_id, payload).
+    pending_qpack: Vec<(u64, Vec<u8>)>,
+    /// Section Ack bekleyen tamamlanmış istek stream id'leri.
+    ack_pending: Vec<u64>,
 }
 
 impl H3Client {
@@ -119,12 +147,19 @@ impl H3Client {
             rx: Vec::new(),
             responses: Vec::new(),
             qpack: QpackDecoder::new(),
+            uni: Vec::new(),
+            dec_offset: 0,
+            dec_insert_ack: 0,
+            pending_qpack: Vec::new(),
+            ack_pending: Vec::new(),
         };
         client.send_control_stream()?;
+        client.send_decoder_stream()?;
         Ok(client)
     }
 
-    /// Kontrol akışı (istemci-initiated unidirectional, stream 2) SETTINGS.
+    /// Kontrol akışı (istemci-initiated unidirectional, stream 2):
+    /// H3 stream type 0x00 + SETTINGS çerçevesi.
     fn send_control_stream(&mut self) -> Result<(), String> {
         if self.control_sent {
             return Ok(());
@@ -132,11 +167,50 @@ impl H3Client {
         let settings = client_settings();
         // Stream id 2 = client uni (bits: 0 initiator=client? QUIC: bit0
         // initiator (0=client), bit1 direction (1=unidirectional) → 2).
+        // H3 uni stream'lerin ilk baytı stream type varint'idir.
+        let mut payload = Vec::new();
+        encode_varint(0x00, &mut payload); // stream type: control
+        payload.extend_from_slice(&settings);
         self.conn
-            .send_stream_data(2, &settings, false)
+            .send_stream_data(2, &payload, false)
             .map_err(|e| alloc::format!("ctrl: {}", e))?;
         self.control_sent = true;
         Ok(())
+    }
+
+    /// QPACK decoder stream (istemci uni stream 6, type 0x03) açar;
+    /// Section Acknowledgment / Insert Count Increment buradan gider.
+    fn send_decoder_stream(&mut self) -> Result<(), String> {
+        let mut payload = Vec::new();
+        encode_varint(0x03, &mut payload); // stream type: qpack decoder
+        self.conn
+            .send_stream_data_off(6, 0, &payload, false)
+            .map_err(|e| alloc::format!("dec: {}", e))?;
+        self.dec_offset = payload.len() as u64;
+        Ok(())
+    }
+
+    /// QPACK decoder stream'ine komut ekler (Section Ack / Insert
+    /// Count Increment).
+    fn qpack_feedback(&mut self, section_acks: &[u64], insert_total: u64) {
+        let mut buf = Vec::new();
+        for &sid in section_acks {
+            // Section Acknowledgment: '1' + 7-bit önekli stream id
+            crate::drivers::qpack::encode_prefixed_int(sid, 7, 0x80, &mut buf);
+        }
+        let delta = insert_total.saturating_sub(self.dec_insert_ack);
+        if delta > 0 {
+            // Insert Count Increment: '00' + 6-bit önekli increment
+            crate::drivers::qpack::encode_prefixed_int(delta, 6, 0x00, &mut buf);
+            self.dec_insert_ack = insert_total;
+        }
+        if buf.is_empty() {
+            return;
+        }
+        let off = self.dec_offset;
+        if self.conn.send_stream_data_off(6, off, &buf, false).is_ok() {
+            self.dec_offset += buf.len() as u64;
+        }
     }
 
     /// GET benzeri basit istek gönderir (form submit yok — GET/HEAD).
@@ -147,6 +221,19 @@ impl H3Client {
         path: &str,
         authority: &str,
         extra_headers: &[(String, String)],
+    ) -> Result<u64, String> {
+        self.send_request_body(method, path, authority, extra_headers, None)
+    }
+
+    /// İstek gönderir; `body` verilirse HEADERS'tan sonra DATA frame'i
+    /// eklenir ve akış FIN ile kapatılır.
+    pub fn send_request_body(
+        &mut self,
+        method: &str,
+        path: &str,
+        authority: &str,
+        extra_headers: &[(String, String)],
+        body: Option<&[u8]>,
     ) -> Result<u64, String> {
         if !self.conn.ready() {
             return Err(String::from("quic_not_ready"));
@@ -160,6 +247,14 @@ impl H3Client {
             (String::from(":authority"), String::from(authority)),
             (String::from(":path"), String::from(path)),
         ];
+        if let Some(b) = body {
+            if !headers.iter().any(|(n, _)| n == "content-length") {
+                headers.push((
+                    String::from("content-length"),
+                    alloc::format!("{}", b.len()),
+                ));
+            }
+        }
         headers.extend(extra_headers.iter().cloned());
 
         let qpack_block = qpack_encode(&headers);
@@ -169,9 +264,14 @@ impl H3Client {
         // varsayımıyla ham blok — statik tablo kullandığımız için encode
         // edilmiş alan satırları doğrudan gelir)
         encode_frame(FRAME_HEADERS, &qpack_block, &mut stream_data);
-
+        if let Some(b) = body {
+            encode_frame(FRAME_DATA, b, &mut stream_data);
+        }
+        // Gövde olsun ya da olmasın istek akışını FIN ile kapat
+        // (sunucu yanıtı aynı akışta döner; FIN göndermek server'ın
+        // "istek sonu"nu anlamasını sağlar).
         self.conn
-            .send_stream_data(stream_id, &stream_data, false)
+            .send_stream_data(stream_id, &stream_data, true)
             .map_err(|e| alloc::format!("send: {}", e))?;
         self.track_response(stream_id);
         Ok(stream_id)
@@ -200,10 +300,114 @@ impl H3Client {
         for id in fins {
             if let Some(r) = self.responses.iter_mut().find(|r| r.stream_id == id) {
                 r.done = true;
+                // HEADERS işlendi ise Section Ack gönder
+                if r.status != 0 && !self.ack_pending.contains(&id) {
+                    self.ack_pending.push(id);
+                }
             }
         }
+        // Sunucu uni-stream'lerini topla (kontrol / QPACK encoder)
+        self.drain_uni_streams()?;
+        // QPACK encoder stream'inden gelen insert'leri işle
+        self.process_uni_streams()?;
+        // Bekleyen HEADERS bloklarını tekrar dene
+        self.retry_pending_qpack()?;
         self.process_rx()?;
+        // Tamamlanan istek akışları için Section Ack + insert bildirimi
+        let acks = core::mem::take(&mut self.ack_pending);
+        self.qpack_feedback(&acks, self.qpack.total_inserts());
         Ok(alive && self.conn.state() != ConnState::Failed)
+    }
+
+    /// conn'deki uni-stream verilerini (id % 4 == 3) `uni` tamponlarına
+    /// taşır; stream type varint'ini ayrıştırır.
+    fn drain_uni_streams(&mut self) -> Result<(), String> {
+        let ids = self.conn.stream_ids();
+        for id in ids {
+            if id % 4 != 3 {
+                continue; // yalnızca sunucu-initiated uni
+            }
+            let Some((data, _fin)) = self.conn.read_stream(id) else {
+                continue;
+            };
+            if data.is_empty() {
+                continue;
+            }
+            let idx = match self.uni.iter().position(|u| u.id == id) {
+                Some(i) => i,
+                None => {
+                    self.uni.push(UniRx {
+                        id,
+                        stream_type: None,
+                        buf: Vec::new(),
+                    });
+                    self.uni.len() - 1
+                }
+            };
+            self.uni[idx].buf.extend_from_slice(&data);
+            // Stream type varint'ini çöz (henüz yoksa)
+            if self.uni[idx].stream_type.is_none() {
+                if let Some((t, l)) = decode_varint(&self.uni[idx].buf) {
+                    self.uni[idx].stream_type = Some(t);
+                    self.uni[idx].buf.drain(..l);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// QPACK encoder stream (type 0x02) verisini decoder'a besler.
+    fn process_uni_streams(&mut self) -> Result<(), String> {
+        for u in self.uni.iter_mut() {
+            if u.stream_type != Some(0x02) || u.buf.is_empty() {
+                continue;
+            }
+            match self.qpack.decode_encoder_stream(&u.buf) {
+                Ok(consumed) => {
+                    u.buf.drain(..consumed);
+                }
+                Err(_) => {
+                    u.buf.clear();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `qpack_pending` ile ertelenen HEADERS yüklerini tekrar dener.
+    fn retry_pending_qpack(&mut self) -> Result<(), String> {
+        let pending = core::mem::take(&mut self.pending_qpack);
+        for (sid, payload) in pending {
+            match self.qpack.decode_block(&payload) {
+                Ok(headers) => {
+                    self.apply_headers(sid, headers)?;
+                }
+                Err(ref e) if e == "qpack_pending" => {
+                    self.pending_qpack.push((sid, payload));
+                }
+                Err(_) => {
+                    if let Some(r) = self.responses.iter_mut().find(|r| r.stream_id == sid) {
+                        r.done = true;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Çözülmüş başlıkları ilgili yanıta uygular.
+    fn apply_headers(&mut self, sid: u64, headers: Vec<(String, String)>) -> Result<(), String> {
+        let Some(resp) = self.responses.iter_mut().find(|r| r.stream_id == sid) else {
+            return Ok(());
+        };
+        for (n, v) in headers {
+            if n == ":status" {
+                resp.status = v.parse().unwrap_or(0);
+            } else {
+                resp.headers.push((n, v));
+            }
+        }
+        Ok(())
     }
 
     /// `send_request` sonrası stream_id'yi yanıt takibine ekler.
@@ -245,33 +449,33 @@ impl H3Client {
     }
 
     fn handle_frames(&mut self, sid: u64, frames: Vec<H3Frame>) -> Result<(), String> {
-        let Some(resp) = self.responses.iter_mut().find(|r| r.stream_id == sid) else {
+        if !self.responses.iter().any(|r| r.stream_id == sid) {
             return Ok(());
-        };
+        }
         for f in frames {
             match f.frame_type {
                 FRAME_HEADERS => {
-                    // QPACK Required Insert Count + Delta Base (varint×2)
-                    // sonra alan satırları. Statik tablo kullandığımız için
-                    // genellikle 0,0.
-                    let mut pos = 0usize;
-                    let (_ric, l1) =
-                        decode_varint(&f.payload[..]).ok_or_else(|| String::from("qpack_ric"))?;
-                    pos += l1;
-                    let (_dbase, l2) = decode_varint(&f.payload[pos..])
-                        .ok_or_else(|| String::from("qpack_dbase"))?;
-                    pos += l2;
-                    let headers = self.qpack.decode_block(&f.payload[pos..])?;
-                    for (n, v) in headers {
-                        if n == ":status" {
-                            resp.status = v.parse().unwrap_or(0);
-                        } else {
-                            resp.headers.push((n, v));
+                    // QPACK payload = prefix (RIC+Base) + alan satırları;
+                    // decode_block prefix'i kendisi çözer.
+                    match self.qpack.decode_block(&f.payload) {
+                        Ok(headers) => {
+                            self.apply_headers(sid, headers)?;
+                        }
+                        Err(ref e) if e == "qpack_pending" => {
+                            self.pending_qpack.push((sid, f.payload.clone()));
+                        }
+                        Err(_) => {
+                            if let Some(r) = self.responses.iter_mut().find(|r| r.stream_id == sid)
+                            {
+                                r.done = true;
+                            }
                         }
                     }
                 }
                 FRAME_DATA => {
-                    resp.body.extend_from_slice(&f.payload);
+                    if let Some(r) = self.responses.iter_mut().find(|r| r.stream_id == sid) {
+                        r.body.extend_from_slice(&f.payload);
+                    }
                 }
                 FRAME_PUSH_PROMISE | FRAME_GOAWAY | FRAME_MAX_PUSH_ID => {}
                 _ => {} // bilinmeyen çerçeve — yoksay
@@ -314,12 +518,15 @@ impl H3Client {
 // Üst düzey HTTP/3 GET (http.rs/http2.rs ile aynı kullanım kalıbı)
 // ---------------------------------------------------------------------------
 
-/// `https://` URL'sini HTTP/3 (QUIC) üzerinden GET eder.
+/// `https://` URL'sini HTTP/3 (QUIC) üzerinden istek yapar.
 /// `resp_buf` gövdeyi alır; dönen: (status, gövde uzunluğu).
 /// Yanıt başlıkları `resp_headers` doluysa `(ad, değer)` listesi olarak
-/// yazılır (küçük harfli adlar).
-pub fn http3_get_full(
+/// yazılır (küçük harfli adlar). `body` verilirse DATA frame'i gönderilir.
+pub fn http3_request_full(
+    method: &str,
     url: &str,
+    body: Option<&[u8]>,
+    req_headers: &[(String, String)],
     resp_buf: &mut [u8],
     resp_headers: &mut Vec<(String, String)>,
 ) -> Result<(u16, usize), i32> {
@@ -362,7 +569,7 @@ pub fn http3_get_full(
         alloc::format!("{}:{}", host_str, port)
     };
     let stream_id = client
-        .send_request("GET", path_str, &authority, &[])
+        .send_request_body(method, path_str, &authority, req_headers, body)
         .map_err(|_| socket::E_IO)?;
 
     // Yanıtı bekle (maks ~30 sn)
@@ -384,6 +591,15 @@ pub fn http3_get_full(
     resp_headers.clear();
     resp_headers.extend(resp.headers.iter().cloned());
     Ok((resp.status, blen))
+}
+
+/// `https://` URL'sini HTTP/3 (QUIC) üzerinden GET eder.
+pub fn http3_get_full(
+    url: &str,
+    resp_buf: &mut [u8],
+    resp_headers: &mut Vec<(String, String)>,
+) -> Result<(u16, usize), i32> {
+    http3_request_full("GET", url, None, &[], resp_buf, resp_headers)
 }
 
 /// `http3_get_full` basitleştirilmiş sürümü (başlıklar döndürmez).

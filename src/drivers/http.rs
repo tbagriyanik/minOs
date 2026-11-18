@@ -1947,13 +1947,18 @@ fn fetch_once_with_method(
 
     // Alt-Svc h3 reklamı varsa ve basit GET ise önce QUIC/HTTP/3 dene;
     // başarısızlıkta normal TCP (h2/h1) yoluna düşülür.
-    if is_https
-        && use_pool
-        && matches!(method, HttpMethod::Get)
-        && body.is_none()
-        && alt_svc_has_h3(host)
-    {
-        if let Ok(result) = try_http3_as_http(host, port, path, ip, resp_buf) {
+    if is_https && use_pool && alt_svc_has_h3(host) {
+        if let Ok(result) = try_http3_as_http(
+            method,
+            host,
+            port,
+            path,
+            ip,
+            resp_buf,
+            body,
+            content_type,
+            extra_headers,
+        ) {
             return Ok(result);
         }
     }
@@ -2115,11 +2120,15 @@ fn fetch_once_with_method(
 /// Alt-Svc h3 yolunu dener: QUIC/HTTP/3 GET yapar ve yanıtı HTTP/1.1
 /// biçiminde `resp_buf`'a ([status+headers][body]) dönüştürür.
 fn try_http3_as_http(
+    method: HttpMethod,
     host: &[u8],
     port: u16,
     path: &[u8],
     _ip: Ipv4Address,
     resp_buf: &mut [u8],
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra_headers: Option<&str>,
 ) -> Result<(u16, usize, usize), i32> {
     let host_str = core::str::from_utf8(host).map_err(|_| E_URL)?;
     let path_str = core::str::from_utf8(path).map_err(|_| E_URL)?;
@@ -2129,11 +2138,34 @@ fn try_http3_as_http(
     } else {
         alloc::format!("https://{}:{}{}", host_str, port, path_str)
     };
+    // extra_headers "Ad: değer\r\n" bloklarını (String,String) çiftlerine çevir
+    let mut req_headers: alloc::vec::Vec<(String, String)> = alloc::vec::Vec::new();
+    if let Some(ct) = content_type {
+        req_headers.push((String::from("content-type"), String::from(ct)));
+    }
+    if let Some(extra) = extra_headers {
+        for line in extra.split("\r\n") {
+            if let Some((name, value)) = line.split_once(':') {
+                let name = name.trim();
+                if !name.is_empty() {
+                    req_headers.push((String::from(name), String::from(value.trim())));
+                }
+            }
+        }
+    }
     // Önce gövdeyi geçici alana al (resp_buf'ı doğrudan kullanamayız —
     // başlıkları öne eklememiz gerek)
-    let mut body = alloc::vec![0u8; resp_buf.len()];
+    let mut resp_body = alloc::vec![0u8; resp_buf.len()];
     let mut headers: alloc::vec::Vec<(String, String)> = alloc::vec::Vec::new();
-    let (status, body_len) = crate::drivers::h3::http3_get_full(&url, &mut body, &mut headers)?;
+    let method_str = core::str::from_utf8(method.as_str()).map_err(|_| E_HTTP)?;
+    let (status, body_len) = crate::drivers::h3::http3_request_full(
+        method_str,
+        &url,
+        body,
+        &req_headers,
+        &mut resp_body,
+        &mut headers,
+    )?;
 
     // HTTP/1.1 yanıt biçimi üret: status satırı + başlıklar + boş satır + gövde
     let mut n = 0usize;
@@ -2143,6 +2175,13 @@ fn try_http3_as_http(
     }
     resp_buf[n..n + status_line.len()].copy_from_slice(status_line.as_bytes());
     n += status_line.len();
+    // HTTP/1.1 biçimi taklidi: Content-Length eksik kalmasın
+    let cl_line = alloc::format!("content-length: {}\r\n", body_len);
+    if n + cl_line.len() + body_len + 4 > resp_buf.len() {
+        return Err(E_HTTP);
+    }
+    resp_buf[n..n + cl_line.len()].copy_from_slice(cl_line.as_bytes());
+    n += cl_line.len();
     for (name, value) in &headers {
         let line = alloc::format!("{}: {}\r\n", name, value);
         if n + line.len() + body_len + 4 > resp_buf.len() {
@@ -2157,7 +2196,7 @@ fn try_http3_as_http(
     if hlen + body_len > resp_buf.len() {
         return Err(E_HTTP);
     }
-    resp_buf[n..n + body_len].copy_from_slice(&body[..body_len]);
+    resp_buf[n..n + body_len].copy_from_slice(&resp_body[..body_len]);
     Ok((status, hlen, hlen + body_len))
 }
 

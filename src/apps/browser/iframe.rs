@@ -83,6 +83,7 @@ impl IFrame {
         let mut canvases: Vec<super::canvas::CanvasElement> = Vec::new();
         let mut media_players: super::media::MediaPlayers = super::media::MediaPlayers::new();
         let mut previous_styles: BTreeMap<String, ElementStyle> = BTreeMap::new();
+        let details_state: BTreeMap<String, bool> = BTreeMap::new();
         let mut iframes: super::iframe::IFrames = super::iframe::IFrames::new();
         let mut page_background = None;
 
@@ -95,6 +96,7 @@ impl IFrame {
             0,
             0,
             &mut previous_styles,
+            &details_state,
             None as Option<&mut VirtualFileSystem>,
             None,
             &mut page_background,

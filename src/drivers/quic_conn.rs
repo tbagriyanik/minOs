@@ -175,21 +175,31 @@ impl QuicConn {
         tls.set_client_x25519_secret(x25519);
 
         // quic_transport_parameters (0xffa5) ekle — RFC 9000 §18.2
+        // Biçim: (parametre_id varint, uzunluk varint, değer baytları).
+        // Tamsayı değerler varint olarak kodlanır; length = kodlanmış
+        // varint uzunluğu.
         let mut params = Vec::new();
-        let mut put = |id: u64, val: u64| {
-            quic::encode_varint(id, &mut params);
-            quic::encode_varint(val, &mut params);
+        let put = |params: &mut Vec<u8>, id: u64, val: u64| {
+            quic::encode_varint(id, params);
+            let mut vb = Vec::new();
+            quic::encode_varint(val, &mut vb);
+            quic::encode_varint(vb.len() as u64, params);
+            params.extend_from_slice(&vb);
         };
-        put(0x06, 1_000_000); // initial_max_data
-        put(0x04, 65_536); // initial_max_stream_data_bidi_local
-        put(0x05, 65_536); // initial_max_stream_data_bidi_remote
-        put(0x08, 65_536); // initial_max_stream_data_uni
-        put(0x03, 128); // initial_max_streams_bidi
-        put(0x07, 32); // initial_max_streams_uni
-        put(0x0a, 30_000); // max_idle_timeout (ms)
-        put(0x0b, 25); // max_ack_delay (ms)
-        put(0x0c, 3); // ack_delay_exponent
-        put(0x0e, 4); // active_connection_id_limit
+        put(&mut params, 0x01, 30_000); // max_idle_timeout (ms)
+        put(&mut params, 0x04, 1_000_000); // initial_max_data
+        put(&mut params, 0x05, 65_536); // initial_max_stream_data_bidi_local
+        put(&mut params, 0x06, 65_536); // initial_max_stream_data_bidi_remote
+        put(&mut params, 0x07, 65_536); // initial_max_stream_data_uni
+        put(&mut params, 0x08, 128); // initial_max_streams_bidi
+        put(&mut params, 0x09, 32); // initial_max_streams_uni
+        put(&mut params, 0x0a, 3); // ack_delay_exponent
+        put(&mut params, 0x0b, 25); // max_ack_delay (ms)
+        put(&mut params, 0x0e, 4); // active_connection_id_limit
+                                   // initial_source_connection_id (0x0f) — zorunlu; değer = scid.
+        quic::encode_varint(0x0f, &mut params);
+        quic::encode_varint(scid.len() as u64, &mut params);
+        params.extend_from_slice(&scid);
         quic::inject_quic_transport_params(&mut hello, &params);
 
         let mut conn = Self {

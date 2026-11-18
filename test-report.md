@@ -2,7 +2,7 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-18 18:47:52 UTC |
+| Zaman | 2026-11-18 19:05:02 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |
@@ -21,14 +21,14 @@
 | Bellek sıkıstirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sıkıstirilamaz veri reddi |
 | Kernel Heap Buyutme ve Tembel Doldurma | ✅ GEÇTİ | Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi |
 | Bellek Kullanim Profili | ✅ GEÇTİ | PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari |
-| Uygulama Bazli Bellek Raporu | ✅ GEÇTİ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
-| GUI Ekran Geometrisi / Duman Testi | ✅ GEÇTİ | Acilis/kapanis/hata ekran geometrisi ve yerellestirilmis ekran metinleri |
+| Uygulama Bazli Bellek Raporu | ❌ BAŞARISIZ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
+| GUI Ekran Geometrisi / Duman Testi | ❌ BAŞARISIZ | Acilis/kapanis/hata ekran geometrisi ve yerellestirilmis ekran metinleri |
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |
 | Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir) | ✅ GEÇTİ | PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu |
 | Giris Suruculeri (USB-HID / PS-2 Fallback) | ✅ GEÇTİ | xHCI taramasi veya basarili PS/2 fallback aktivasyonu |
-| Girdi Kuyrugu Oz Testi (klavye/fare) | ✅ GEÇTİ | Normalized klavye/fare olay kuyrugunun FIFO sirasi, uzunluk ve dolu-kuyruk davranisi |
+| Girdi Kuyrugu Oz Testi (klavye/fare) | ❌ BAŞARISIZ | Normalized klavye/fare olay kuyrugunun FIFO sirasi, uzunluk ve dolu-kuyruk davranisi |
 | Ses Denetleyicisi (Intel HDA Surucusu) | ✅ GEÇTİ | PCI BAR0 MMIO, 48kHz stereo DMA akisi |
-| Cekirdek Surucu Profili | ✅ GEÇTİ | Tum donanim suruculerinin eksiksiz baslatimi |
+| Cekirdek Surucu Profili | ❌ BAŞARISIZ | Tum donanim suruculerinin eksiksiz baslatimi |
 | Ring3 Surec Zamanlayici (CR3 + Context Switch) | ✅ GEÇTİ | APIC timer onalimli gercek CR3/context-switch ile kullanici sureci dilimi |
 | Ring3 Izolasyon & Yigin Guard Testi | ✅ GEÇTİ | Kernel adresi erisimi reddi (SIGSEGV), kullanici yigin tasmasi ve yield/exit dogrulamasi |
 | Ring3 Syscall Register Restore | ✅ GEÇTİ | GPR ve XMM durumunun int 0x80 donusunde korunmasi |
@@ -46,11 +46,11 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
-| Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
+| Masaüstü Olay Döngüsü | ❌ BAŞARISIZ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç
 
-**BAŞARILI** — tüm kontroller geçti.
+**BAŞARISIZ** — bir veya daha fazla kontrol başarısız oldu.
 
 > Bu rapor 	est_qemu.ps1 tarafından otomatik üretilmiştir.
 

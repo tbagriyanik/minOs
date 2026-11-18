@@ -40,6 +40,9 @@ pub mod types {
 #[path = "../src/apps/browser/css.rs"]
 pub mod browser_css;
 
+#[path = "../src/apps/browser/svg.rs"]
+pub mod browser_svg;
+
 #[path = "../src/apps/calc_core.rs"]
 pub mod calc_core;
 

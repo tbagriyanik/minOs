@@ -693,6 +693,7 @@ pub fn render_html_to_lines(
     animation_start_ms: usize,
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
+    details_state: &BTreeMap<String, bool>,
     mut vfs: Option<&mut VirtualFileSystem>,
     image_cache: Option<&ImageCache>,
     page_background: &mut Option<Arc<BackgroundImage>>,
@@ -1025,9 +1026,54 @@ pub fn render_html_to_lines(
 
     p = 0;
     let mut word_buf = String::new();
-    let mut hidden_until_close: Option<Vec<u8>> = None;
+    // display:none / <template> / kapalı <dialog> gibi gizlenen öğelerin
+    // kapanış etiketi: (etiket adı, iç içe aynı-etiket derinliği).
+    let mut hidden_until_close: Option<(Vec<u8>, usize)> = None;
     // İç içe liste durumu: (sıralı mı?, mevcut madde numarası)
     let mut list_stack: Vec<(bool, usize)> = Vec::new();
+
+    // ── HTML5 etkileşimli öğeler ─────────────────────────────────
+    // (WIP: details/picture/media durumu henüz ayrıştırıcıya bağlanmadı)
+    /// `<details>` bağlamı: summary açıklama işaretçisi ve açık/kapalı durum.
+    #[allow(dead_code)]
+    struct DetailsCtx {
+        /// Kararlı anahtar (id özniteliği veya üretilen `details_N`).
+        key: String,
+        /// `open` özniteliği taşıyor mu? (toggle haritası bunu ezer)
+        has_open_attr: bool,
+        /// Açıklama `<summary>`'si görüldü mü?
+        disclosure_done: bool,
+        /// Şu an summary içeriğinin içinde miyiz?
+        summary_active: bool,
+        /// summary açılmadan önceki onclick (iç içe <a> için geri yükleme).
+        outer_onclick: Option<String>,
+    }
+    #[allow(unused)]
+    let mut details_stack: Vec<DetailsCtx> = Vec::new();
+    // Kapalı details'in summary sonrası içeriği atlanırken açık etiket sayısı.
+    #[allow(unused)]
+    let mut details_skip: usize = 0;
+    /// `<picture>` kaynak adayları (srcset/media/type).
+    #[allow(dead_code)]
+    struct PictureSource {
+        media: Option<String>,
+        mime: Option<String>,
+        srcset: Option<String>,
+    }
+    #[allow(unused)]
+    let mut picture_stack: Vec<Vec<PictureSource>> = Vec::new();
+    // `<video>`/`<audio>` içindeyken > 0 — `<source>` ayrıştırması için.
+    #[allow(unused)]
+    let mut media_depth: usize = 0;
+    #[allow(dead_code)]
+    static DETAILS_ID_COUNTER: core::sync::atomic::AtomicUsize =
+        core::sync::atomic::AtomicUsize::new(0);
+
+    // details_state haritasından etkin açık durumu: override varsa o,
+    // yoksa `open` özniteliği.
+    #[allow(unused)]
+    let details_is_open =
+        |key: &str, has_open: bool| -> bool { details_state.get(key).copied().unwrap_or(has_open) };
 
     let flush_word = |lines: &mut Vec<BrowserLine>,
                       spans: &mut Vec<TextSpan>,
@@ -1076,9 +1122,21 @@ pub fn render_html_to_lines(
                 .unwrap_or(tag_content.len());
             let name = &tag_content[..name_end];
 
-            let hidden_close = hidden_until_close
-                .as_ref()
-                .is_some_and(|h| closing && eq_ascii(name, h));
+            // Gizlenen öğe içindeki aynı-etiket iç içeliğini izle:
+            // açılışta derinlik artar, kapanışta azalır; 0'a inince öğe biter.
+            if let Some((hname, depth)) = hidden_until_close.as_mut() {
+                if eq_ascii(name, hname) {
+                    if closing {
+                        *depth = depth.saturating_sub(1);
+                    } else {
+                        *depth += 1;
+                    }
+                }
+            }
+            let hidden_close = closing
+                && hidden_until_close
+                    .as_ref()
+                    .is_some_and(|(_, depth)| *depth == 0);
             if hidden_close {
                 // display:none ile gizlenen öğenin rengini geri yükle.
                 if let Some(saved) = pop_inline_state(&mut state_stack, name) {
@@ -1111,14 +1169,17 @@ pub fn render_html_to_lines(
                 if let Some(parent) = dom_stack.last_mut() {
                     parent.note_child(&brief);
                 }
-                hidden_until_close = Some(name.to_vec());
+                hidden_until_close = Some((name.to_vec(), 1));
                 p = end + 1;
                 continue;
             }
 
             let link_target = active_link.as_deref().unwrap_or("");
             let is_link = active_link.is_some();
-            let onclick_str = active_onclick.as_deref().unwrap_or("");
+            // `active_onclick` bu yinelemede yeniden atanabiliyor (summary
+            // toggle'ı); ödünç alma çakışmasını önlemek için anlık kopya.
+            let onclick_snap = active_onclick.clone().unwrap_or_default();
+            let onclick_str = onclick_snap.as_str();
             let elem_id_str = active_id.as_deref().unwrap_or("");
 
             // Style hesaplamasını daha önce yap (grid/flexbox için gerekli)
@@ -1412,7 +1473,7 @@ pub fn render_html_to_lines(
                 }
                 // display:none — içeriği gizle
                 if matched.display_none && hidden_until_close.is_none() {
-                    hidden_until_close = Some(name.to_vec());
+                    hidden_until_close = Some((name.to_vec(), 1));
                 }
 
                 // CSS Grid konteynerı başlat
@@ -1565,7 +1626,7 @@ pub fn render_html_to_lines(
                         cur_line_align = matched.align;
                     }
                     if matched.display_none && hidden_until_close.is_none() {
-                        hidden_until_close = Some(name.to_vec());
+                        hidden_until_close = Some((name.to_vec(), 1));
                     }
                 } else if eq_ascii(name, b"em") {
                     // <em>: vurgulu metin; rengi ebeveynden miras alır.
@@ -1926,10 +1987,32 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                 } else if eq_ascii(name, b"img") {
-                    // <img>: Görsel işleme
+                    // <img>: Görsel işleme — <picture> içindeyse en iyi
+                    // <source> adayı (media/srcset) seçilir.
+                    let mut pic_src: Option<String> = None;
+                    if let Some(cands) = picture_stack.last() {
+                        for cand in cands {
+                            if let Some(m) = cand.media.as_deref() {
+                                if !media_query_matches(m, wrap_width_px) {
+                                    continue;
+                                }
+                            }
+                            if let Some(t) = cand.mime.as_deref() {
+                                let tl = t.to_ascii_lowercase();
+                                if !tl.starts_with("image/") && !tl.contains("image") {
+                                    continue;
+                                }
+                            }
+                            if let Some(ss) = cand.srcset.as_deref() {
+                                pic_src = Some(pick_srcset(ss));
+                                break;
+                            }
+                        }
+                    }
+                    let img_src = pic_src.as_deref().or_else(|| extract_attr(attrs, b"src"));
                     let label = extract_attr(attrs, b"alt")
                         .or_else(|| extract_attr(attrs, b"title"))
-                        .or_else(|| extract_attr(attrs, b"src"))
+                        .or(img_src)
                         .unwrap_or("görsel");
                     if !word_buf.is_empty() {
                         flush_word(
@@ -1956,7 +2039,7 @@ pub fn render_html_to_lines(
                     // Decode image from data URL only during render; remote URLs are
                     // fetched asynchronously by poll_network and the page is re-rendered.
                     let mut image_decoded: Option<(usize, usize, Vec<u8>)> = None;
-                    if let Some(src) = extract_attr(attrs, b"src") {
+                    if let Some(src) = img_src {
                         if src.starts_with("data:image/") {
                             if let Some(img) = decode_data_image_url(src) {
                                 image_decoded = Some((img.width, img.height, img.rgb));
@@ -2188,7 +2271,8 @@ pub fn render_html_to_lines(
                         underline: current_underline,
                     });
                 } else if eq_ascii(name, b"video") {
-                    // <video>: Video oynatıcı
+                    // <video>: Video oynatıcı — içindeki <source> medya adayıdır.
+                    media_depth += 1;
                     let video_id =
                         extract_attr(attrs, b"id")
                             .map(String::from)
@@ -2319,7 +2403,8 @@ pub fn render_html_to_lines(
                         underline: current_underline,
                     });
                 } else if eq_ascii(name, b"audio") {
-                    // <audio>: Ses oynatıcı
+                    // <audio>: Ses oynatıcı — içindeki <source> medya adayıdır.
+                    media_depth += 1;
                     let audio_id =
                         extract_attr(attrs, b"id")
                             .map(String::from)
@@ -2510,16 +2595,275 @@ pub fn render_html_to_lines(
                         underline: current_underline,
                     });
                 } else if eq_ascii(name, b"source") {
-                    // <source src="..."> — <video>/<audio> için kaynak kaydı.
-                    // `<source>` boş bir etikettir; içeriği yoktur, yalnızca
-                    // `src` niteliği okunur ve son eklenen medya oynatıcıya atanır.
-                    if let Some(src) = extract_attr(attrs, b"src") {
-                        if let Some(last_player) = media_players.players.last_mut() {
-                            if last_player.src.is_empty() {
-                                last_player.src = String::from(src);
+                    // <source>: <video>/<audio> içindeyse medya kaynağı,
+                    // <picture> içindeyse resim adayı (srcset/media/type).
+                    if media_depth > 0 {
+                        if let Some(src) = extract_attr(attrs, b"src") {
+                            if let Some(last_player) = media_players.players.last_mut() {
+                                if last_player.src.is_empty() {
+                                    last_player.src = String::from(src);
+                                }
                             }
                         }
+                    } else if let Some(cands) = picture_stack.last_mut() {
+                        cands.push(PictureSource {
+                            media: extract_attr(attrs, b"media").map(String::from),
+                            mime: extract_attr(attrs, b"type").map(String::from),
+                            srcset: extract_attr(attrs, b"srcset")
+                                .or_else(|| extract_attr(attrs, b"src"))
+                                .map(String::from),
+                        });
                     }
+                } else if eq_ascii(name, b"template") {
+                    // <template>: içerik inert'tir — hiçbir zaman render edilmez.
+                    hidden_until_close = Some((name.to_vec(), 1));
+                } else if eq_ascii(name, b"picture") {
+                    // <picture>: şeffaf kapsayıcı — <source> adaylarını toplar,
+                    // içindeki <img> en iyi adayı seçer.
+                    picture_stack.push(Vec::new());
+                } else if eq_ascii(name, b"details") {
+                    // <details>: <summary> açıklaması + aç/kapa durumu.
+                    // Kararlı anahtar: id özniteliği veya üretilen details_N.
+                    let key = extract_attr(attrs, b"id")
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            let n = DETAILS_ID_COUNTER
+                                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            format!("details_{}", n)
+                        });
+                    let has_open = extract_attr(attrs, b"open").is_some();
+                    details_stack.push(DetailsCtx {
+                        key,
+                        has_open_attr: has_open,
+                        disclosure_done: false,
+                        summary_active: false,
+                        outer_onclick: None,
+                    });
+                    // Kapalı details blok seviyesinde satır sonu.
+                    if !details_is_open(
+                        &details_stack.last().unwrap().key,
+                        details_stack.last().unwrap().has_open_attr,
+                    ) {
+                        flush_line(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                } else if eq_ascii(name, b"summary") {
+                    // <summary>: details'in açıklama işaretçisi — tıklanınca
+                    // aç/kapa toggle edilir (onclick sihirli öneki).
+                    if let Some(ctx) = details_stack.last_mut() {
+                        if !ctx.disclosure_done {
+                            ctx.disclosure_done = true;
+                            ctx.summary_active = true;
+                            let open = details_is_open(&ctx.key, ctx.has_open_attr);
+                            let toggle_js =
+                                format!("__details_set__:{}:{}", ctx.key, if open { 0 } else { 1 });
+                            // Açıklama işareti: "+" kapalı, "-" açık.
+                            // Bekleyen kelime eski onclick ile basılır.
+                            if !word_buf.is_empty() {
+                                flush_word(
+                                    out_lines,
+                                    &mut cur_line_spans,
+                                    &mut cur_line_w,
+                                    &mut word_buf,
+                                    current_color,
+                                    current_bg,
+                                    is_link,
+                                    link_target,
+                                    active_is_button,
+                                    false,
+                                    onclick_str,
+                                    elem_id_str,
+                                    current_bold,
+                                    current_underline,
+                                    cur_line_tag,
+                                    cur_line_align,
+                                    max_lines,
+                                );
+                            }
+                            ctx.outer_onclick = active_onclick.clone();
+                            active_onclick = Some(toggle_js);
+                            word_buf.push_str(if open { "- " } else { "+ " });
+                            current_bold = true;
+                        }
+                    }
+                } else if eq_ascii(name, b"dialog") {
+                    // <dialog>: open özniteliği yoksa render edilmez;
+                    // open ise alıntı çubuğu ile modal blok gibi gösterilir.
+                    if extract_attr(attrs, b"open").is_some() {
+                        flush_line(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                        cur_line_tag = HtmlTagType::Quote;
+                        cur_line_indent.set(matched.indent_px.max(16));
+                    } else {
+                        hidden_until_close = Some((name.to_vec(), 1));
+                    }
+                } else if eq_ascii(name, b"svg") {
+                    // <svg>: alt ağacı taranır, şekiller rasterize edilip
+                    // img benzeri image_rgb span'i olarak basılır.
+                    // Eşleşen </svg> sonu bulunur (iç içe <svg> derinliği sayılır).
+                    let self_close = tag_content
+                        .iter()
+                        .rev()
+                        .find(|b| !b.is_ascii_whitespace())
+                        .is_some_and(|b| *b == b'/');
+                    let frag_start = p;
+                    let mut frag_end = end + 1;
+                    if !self_close {
+                        let mut scan = end + 1;
+                        let mut depth = 1usize;
+                        while scan + 4 < body.len() && depth > 0 {
+                            if body[scan] == b'<' {
+                                let closing = body.get(scan + 1) == Some(&b'/');
+                                let ns = scan + 1 + usize::from(closing);
+                                if body[ns..].len() >= 3 && eq_ascii(&body[ns..ns + 3], b"svg") {
+                                    let after = ns + 3;
+                                    let boundary = body.get(after).is_none_or(|b| {
+                                        b.is_ascii_whitespace() || *b == b'/' || *b == b'>'
+                                    });
+                                    if boundary {
+                                        // Etiketin '>' sonunu bul
+                                        let mut e = after;
+                                        let mut quote = 0u8;
+                                        while e < body.len() {
+                                            let c = body[e];
+                                            if quote != 0 {
+                                                if c == quote {
+                                                    quote = 0;
+                                                }
+                                            } else if c == b'"' || c == b'\'' {
+                                                quote = c;
+                                            } else if c == b'>' {
+                                                break;
+                                            }
+                                            e += 1;
+                                        }
+                                        if closing {
+                                            depth = depth.saturating_sub(1);
+                                            if depth == 0 {
+                                                frag_end = e + 1;
+                                                break;
+                                            }
+                                        } else {
+                                            // Kendinden kapanır mı?
+                                            let mut j = e;
+                                            while j > ns && body[j - 1].is_ascii_whitespace() {
+                                                j -= 1;
+                                            }
+                                            if !(j > ns && body[j - 1] == b'/') {
+                                                depth += 1;
+                                            }
+                                        }
+                                        scan = e + 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                            scan += 1;
+                        }
+                    }
+                    let svg_img = super::svg::render_svg(&body[frag_start..frag_end]);
+                    if let Some((sw, sh, srgb)) = svg_img {
+                        // Bekleyen kelimeyi bas, sonra görüntü span'i ekle.
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        // Görüntü boyutu: en çok 200px genişlik, oran korunur.
+                        let (disp_w, disp_h) = if sw > 200 {
+                            let s = 200.0 / sw as f32;
+                            (200usize, ((sh as f32 * s) as usize).max(1))
+                        } else {
+                            (sw.max(1), sh.max(1))
+                        };
+                        let scaled = scale_rgb(sw, sh, &srgb, disp_w, disp_h);
+                        let svg_scale = match cur_line_tag {
+                            HtmlTagType::Heading1 => 2,
+                            _ => 1,
+                        };
+                        let space_w = MinGuiCompositor::text_width(" ", svg_scale);
+                        let eff_wrap = wrap_width_px
+                            .saturating_sub(tag_indent(cur_line_tag))
+                            .max(100);
+                        let svg_w_px = disp_w.max(1);
+                        if cur_line_w > 0 && cur_line_w + space_w + svg_w_px > eff_wrap {
+                            flush_line(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        cur_line_w += if cur_line_w > 0 {
+                            space_w + svg_w_px
+                        } else {
+                            svg_w_px
+                        };
+                        cur_line_spans.push(TextSpan {
+                            text: format!("[svg:{}x{}]", disp_w, disp_h),
+                            color: current_color,
+                            bg_color: current_bg,
+                            bg_image: current_bg_image.borrow().clone(),
+                            is_link,
+                            link_url: String::from(link_target),
+                            is_button: active_is_button,
+                            is_image: true,
+                            image_width: disp_w,
+                            image_height: disp_h,
+                            image_rgb: Some(scaled),
+                            image_url: String::new(),
+                            onclick: String::from(onclick_str),
+                            elem_id: String::from(elem_id_str),
+                            bold: current_bold,
+                            underline: current_underline,
+                        });
+                    } else {
+                        // Ayrıştırılamayan svg — içeriğini de atla (zaten frag_end'e ilerledik)
+                    }
+                    // svg alt ağacı bütünüyle tüketildi — açılışta itilen
+                    // stil/DOM çerçevelerini geri al ve imleci </svg> sonrasına taşı.
+                    if let Some(saved) = pop_inline_state(&mut state_stack, name) {
+                        current_color = saved.color;
+                        current_bg = saved.bg;
+                        current_bold = saved.bold;
+                        current_underline = saved.underline;
+                        cur_line_align = saved.align;
+                        cur_line_indent.set(saved.indent);
+                        *current_bg_image.borrow_mut() = saved.bg_image;
+                    }
+                    pop_dom_node(&mut dom_stack, name);
+                    p = frag_end;
+                    continue;
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
                         out_lines,
@@ -3011,10 +3355,42 @@ pub fn render_html_to_lines(
                     // </td>: Veri hücresi bitti — içerik zaten word_buf'de
                 } else if eq_ascii(name, b"video") {
                     // <video> kapanıyor
-                    // Video içeriği zaten açılışta eklendi
+                    media_depth = media_depth.saturating_sub(1);
                 } else if eq_ascii(name, b"audio") {
                     // <audio> kapanıyor
-                    // Ses içeriği zaten açılışta eklendi
+                    media_depth = media_depth.saturating_sub(1);
+                } else if eq_ascii(name, b"details") {
+                    // </details>: bağlamı düşür, blok satırını bitir.
+                    details_stack.pop();
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    cur_line_tag = HtmlTagType::Normal;
+                } else if eq_ascii(name, b"summary") {
+                    // </summary>: açıklama bölgesi kapandı — onclick'i geri yükle.
+                    if let Some(ctx) = details_stack.iter_mut().rev().find(|c| c.summary_active) {
+                        ctx.summary_active = false;
+                        active_onclick = ctx.outer_onclick.take();
+                    }
+                } else if eq_ascii(name, b"picture") {
+                    picture_stack.pop();
+                } else if eq_ascii(name, b"dialog") {
+                    // </dialog>: open dialog'un alıntı çubuğunu kapat.
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    cur_line_tag = HtmlTagType::Normal;
+                    cur_line_indent.set(0);
                 }
                 active_id = None;
                 // Açılışta saklanan renk/metin stilini geri yükle.
@@ -3109,6 +3485,125 @@ pub fn render_html_to_lines(
         cur_line_align,
         max_lines,
     );
+}
+
+/// Basit media sorgusu değerlendirme — `<picture><source media="...">` için.
+/// Virgülle ayrılmış liste OR'dur; `only`/`not` önekleri, `all`/`screen`/`print`
+/// türleri ve `(min-width:Npx)`/`(max-width:Npx)`/`(width:Npx)` özellikleri
+/// desteklenir. Bilinmeyen özellikler ifadeyi elemeyez (doğru sayılır).
+fn media_query_matches(query: &str, width_px: usize) -> bool {
+    query
+        .split(',')
+        .any(|part| media_query_one(part.trim(), width_px))
+}
+
+fn media_query_one(q: &str, width_px: usize) -> bool {
+    let mut s = q.trim();
+    let mut negate = false;
+    if let Some(r) = s.strip_prefix("only ") {
+        s = r.trim();
+    }
+    if let Some(r) = s.strip_prefix("not ") {
+        negate = true;
+        s = r.trim();
+    }
+    // Medya türü: all/screen → doğru; diğerleri (print vb.) → yanlış.
+    let mut type_ok = true;
+    for t in ["all", "screen", "print", "speech"] {
+        if s.eq_ignore_ascii_case(t) {
+            type_ok = t.eq_ignore_ascii_case("all") || t.eq_ignore_ascii_case("screen");
+            s = "";
+            break;
+        }
+    }
+    // "screen and (min-width:600px)" — türden sonraki koşulları al.
+    if let Some(idx) = s.find(" and ") {
+        s = s[idx + 5..].trim();
+    } else if let Some(r) = s.strip_prefix("and ") {
+        s = r.trim();
+    }
+    let mut feat_ok = true;
+    let mut rest = s;
+    while let Some(l) = rest.find('(') {
+        match rest[l..].find(')') {
+            Some(r) => {
+                if !media_feature_matches(rest[l + 1..l + r].trim(), width_px) {
+                    feat_ok = false;
+                    break;
+                }
+                rest = &rest[l + r + 1..];
+            }
+            None => break,
+        }
+    }
+    let ok = type_ok && feat_ok;
+    if negate {
+        !ok
+    } else {
+        ok
+    }
+}
+
+fn media_feature_matches(f: &str, width_px: usize) -> bool {
+    for prefix in ["min-width", "max-width", "width"] {
+        if let Some(v) = f.strip_prefix(prefix) {
+            let num = v
+                .trim_start_matches(':')
+                .trim()
+                .strip_suffix("px")
+                .and_then(|n| n.trim().parse::<usize>().ok());
+            if let Some(n) = num {
+                return match prefix {
+                    "min-width" => width_px >= n,
+                    "max-width" => width_px <= n,
+                    _ => width_px == n,
+                };
+            }
+        }
+    }
+    // orientation ve bilinmeyen özellikler: elemeyi bırak (doğru say).
+    true
+}
+
+/// `srcset` aday listesinden en iyi URL'yi seçer: `Nw`/`Nx` tanımlayıcısı olan
+/// adaylarda en büyük değer, tanımsızda ilk aday.
+fn pick_srcset(srcset: &str) -> String {
+    let mut best_url: Option<String> = None;
+    let mut best_score = -1.0f32;
+    for cand in srcset.split(',') {
+        let cand = cand.trim();
+        if cand.is_empty() {
+            continue;
+        }
+        let mut it = cand.split_whitespace();
+        let url = it.next().unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+        let mut score = 1.0f32;
+        let mut has_desc = false;
+        for d in it {
+            if let Some(w) = d.strip_suffix('w') {
+                if let Ok(v) = w.parse::<f32>() {
+                    score = v;
+                    has_desc = true;
+                }
+            } else if let Some(x) = d.strip_suffix('x') {
+                if let Ok(v) = x.parse::<f32>() {
+                    score = v;
+                    has_desc = true;
+                }
+            }
+        }
+        if !has_desc {
+            score = 0.5; // tanımsız aday, tanımlılardan sonra gelir
+        }
+        if best_url.is_none() || score > best_score {
+            best_url = Some(String::from(url));
+            best_score = score;
+        }
+    }
+    best_url.unwrap_or_default()
 }
 
 #[cfg(test)]

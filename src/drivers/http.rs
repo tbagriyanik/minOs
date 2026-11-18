@@ -756,12 +756,23 @@ fn build_request_with_headers(
         n += headers_bytes.len();
     }
 
-    // Final CRLF
-    if n + 2 > req.len() {
+    // Son başlık satırını sonlandırıp boş satır ekle (CRLF CRLF).
+    // İçerik zaten \r\n ile bitiyorsa (örn. extra_headers) tek CRLF yeter.
+    let need = if n >= 2 && req[n - 2..n] == *b"\r\n" {
+        2
+    } else {
+        4
+    };
+    if n + need > req.len() {
         return None;
     }
-    req[n..n + 2].copy_from_slice(b"\r\n");
-    n += 2;
+    req[n] = b'\r';
+    req[n + 1] = b'\n';
+    if need == 4 {
+        req[n + 2] = b'\r';
+        req[n + 3] = b'\n';
+    }
+    n += need;
 
     Some(n)
 }
@@ -2272,12 +2283,23 @@ fn build_request_with_method(
         n += headers_bytes.len();
     }
 
-    // Final CRLF
-    if n + 2 > req.len() {
+    // Son başlık satırını sonlandırıp boş satır ekle (CRLF CRLF).
+    // İçerik zaten \r\n ile bitiyorsa (örn. extra_headers) tek CRLF yeter.
+    let need = if n >= 2 && req[n - 2..n] == *b"\r\n" {
+        2
+    } else {
+        4
+    };
+    if n + need > req.len() {
         return None;
     }
-    req[n..n + 2].copy_from_slice(b"\r\n");
-    n += 2;
+    req[n] = b'\r';
+    req[n + 1] = b'\n';
+    if need == 4 {
+        req[n + 2] = b'\r';
+        req[n + 3] = b'\n';
+    }
+    n += need;
 
     // Gövde
     if let Some(b) = body {

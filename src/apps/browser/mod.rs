@@ -15,6 +15,9 @@ mod devtools;
 mod html;
 mod iframe;
 mod media;
+// SVG rasterizer henüz tarayıcı hattına bağlanmadı (WIP).
+#[allow(dead_code)]
+mod svg;
 mod types;
 mod wasm;
 mod worker;
@@ -718,6 +721,9 @@ pub struct BrowserApp {
     pub transition_start_ms: usize,
     /// Önceki element stilleri (CSS geçiş interpolasyonu için, element ID'ye göre).
     pub previous_styles: BTreeMap<String, types::ElementStyle>,
+    /// `<details>` aç/kapa durumu: element anahtarı → açık mı?
+    /// `open` özniteliği yoksa bile tıklamayla açılabilir.
+    pub details_state: BTreeMap<String, bool>,
     /// Yeni sayfa yüklendiğinde kaydırmayı başa al.
     pub scroll_reset: bool,
     pub request_pending: bool,
@@ -1018,6 +1024,7 @@ impl BrowserApp {
             animation_start_ms: 0,
             transition_start_ms: 0,
             previous_styles: BTreeMap::new(),
+            details_state: BTreeMap::new(),
             scroll_reset: true,
             request_pending: false,
             request_host: [0; 128],
@@ -1554,6 +1561,13 @@ impl BrowserApp {
         }
 
         if let Some(js_code) = clicked_js {
+            // <summary> tıklaması: details aç/kapa durumunu çevirir.
+            if let Some(rest) = js_code.strip_prefix("__details_set__:") {
+                if let Some((key, val)) = rest.rsplit_once(':') {
+                    self.details_state.insert(key.to_string(), val == "1");
+                }
+                return None;
+            }
             self.execute_js(&js_code);
             return None;
         }
@@ -1989,6 +2003,7 @@ impl BrowserApp {
             self.animation_start_ms,
             self.transition_start_ms,
             &mut self.previous_styles,
+            &self.details_state,
             vfs,
             Some(&self.image_cache),
             &mut page_bg_image,

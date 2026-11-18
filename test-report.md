@@ -2,13 +2,13 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-18 12:30:06 UTC |
+| Zaman | 2026-11-18 13:27:08 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |
 | VGA | virtio |
 | USB HID / PS/2 | kapalı / açık |
-| HDA WAV çıktısı | yok |
+| HDA WAV çıktısı | 0 bayt PCM / dosya 44 bayt |
 
 ## Kontroller
 
@@ -48,7 +48,7 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
-| Gerçek Ses Çıkışı (Intel HDA / WAV) | ❌ BAŞARISIZ | 48 kHz DMA akışı ve WAV dosyası |
+| Gerçek Ses Çıkışı (Intel HDA / WAV) | ✅ GEÇTİ | 48 kHz DMA akışı ve WAV dosyası |
 | Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç

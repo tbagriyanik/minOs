@@ -203,27 +203,37 @@ pub fn render_full_frame(
                 continue;
             }
 
-            // Per pencere render listesi: takip edilen kirli bolge varsa
-            // yalnizca o bolgeye kayitli pencereler cizilir; kayitli olmayan
-            // pencereler (kirli listesinde hicbir kare gecilmemis) atlanir.
+            // Kirli bolge varsa yalnizca o bolgeyle kesisen pencereler
+            // cizilir. Per pencere render listesi ek tetikleyici olarak
+            // kullanilir; ancak listeye kayitli olmasa bile pencerenin kendi
+            // sinirlari (golge payi dahil) kirli bolgeyle kesisiyorsa cizilmek
+            // zorundadir — aksi halde arka plan yeniden cizimi altinda kalan
+            // pencerelerin pikselleri silinmis olur (orn. surukleme sirasinda).
 
             if let Some((dx, dy, dw, dh)) = dirty_rect {
-                let Some((wx, wy, ww, wh)) = compositor.window_dirty_rect(idx) else {
-                    // Bu pencere bu frame'de icin takip listesinde karsila degil.
-                    continue;
-                };
+                let bx0 = win.x.saturating_sub(4);
+                let by0 = win.y.saturating_sub(4);
+                let bx1 = win.x.saturating_add(win.width).saturating_add(8);
+                let by1 = win.y.saturating_add(win.height).saturating_add(8);
 
-                let wx0 = wx;
-                let wy0 = wy;
-                let wx1 = wx.saturating_add(ww).saturating_add(8);
-                let wy1 = wy.saturating_add(wh).saturating_add(8);
+                let bounds_overlap = dx < bx1
+                    && bx0 < dx.saturating_add(dw)
+                    && dy < by1
+                    && by0 < dy.saturating_add(dh);
 
-                let overlaps = dx < wx1
-                    && wx0 < dx.saturating_add(dw)
-                    && dy < wy1
-                    && wy0 < dy.saturating_add(dh);
+                let tracked_overlap = compositor
+                    .window_dirty_rect(idx)
+                    .map(|(tx, ty, tw, th)| {
+                        let tx1 = tx.saturating_add(tw).saturating_add(8);
+                        let ty1 = ty.saturating_add(th).saturating_add(8);
+                        dx < tx1
+                            && tx < dx.saturating_add(dw)
+                            && dy < ty1
+                            && ty < dy.saturating_add(dh)
+                    })
+                    .unwrap_or(false);
 
-                if !overlaps {
+                if !bounds_overlap && !tracked_overlap {
                     continue;
                 }
             }

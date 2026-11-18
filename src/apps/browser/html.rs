@@ -1,7 +1,7 @@
 //! HTML tokenizer ve kelime sarma tabanlı yerleşim motoru (no_std).
 extern crate alloc;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -10,7 +10,9 @@ use alloc::sync::Arc;
 
 use super::css::blend_styles;
 use super::css::transition_progress;
-use super::css::{find_keyframes, match_css_style, parse_css};
+use super::css::{
+    find_keyframes, match_css_style, match_css_style_ctx, parse_css, ElemCtx, NodeBrief, NodeInfo,
+};
 use super::types::{
     html_color, BackgroundImage, BackgroundSize, BrowserLine, ElementStyle, HtmlTagType, TextAlign,
     TextSpan,
@@ -603,6 +605,45 @@ fn pop_inline_state(stack: &mut Vec<(Vec<u8>, InlineState)>, name: &[u8]) -> Opt
     Some(state)
 }
 
+/// Kapanış etiketine karşılık gelen DOM çerçevesini yığından çıkarır
+/// (içte kapanmamış öğeler de düşer — `pop_inline_state` ile aynı kural).
+fn pop_dom_node(stack: &mut Vec<NodeInfo>, name: &[u8]) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let Some(pos) = stack
+        .iter()
+        .rposition(|n| n.base.tag.as_bytes().eq_ignore_ascii_case(name))
+    else {
+        return false;
+    };
+    if pos == 0 {
+        return false; // sanal #document kökü kapanmaz
+    }
+    stack.remove(pos);
+    stack.truncate(pos);
+    true
+}
+
+/// Öğenin seçici bağlamındaki `NodeBrief`'ini kurar; index/type_index
+/// ebeveynin o ana kadarki çocuk sayısından gelir.
+fn make_node_brief(
+    tag: &str,
+    attrs: &[u8],
+    class: Option<&str>,
+    id: Option<&str>,
+    parent: Option<&NodeInfo>,
+) -> NodeBrief {
+    NodeBrief {
+        tag: tag.to_string(),
+        class: class.map(String::from),
+        id: id.map(String::from),
+        attrs: attrs[..attrs.len().min(768)].to_vec(),
+        index: parent.map_or(1, |p| p.child_count + 1),
+        type_index: parent.map_or(1, |p| p.type_index_of(tag)),
+    }
+}
+
 /// Boşluklu (void) HTML etiketleri: kapanış etiketi yoktur, durum yığınına girmez.
 fn is_void_tag(name: &[u8]) -> bool {
     const VOID_TAGS: [&[u8]; 16] = [
@@ -718,6 +759,16 @@ pub fn render_html_to_lines(
     let mut default_link_color: Option<u32> = None;
     // Açılış/kapanış etiketleri arasında rengi ve metin süslemelerini korur.
     let mut state_stack: Vec<(Vec<u8>, InlineState)> = Vec::new();
+    // CSS seçici bağlamı: açık öğelerin DOM-vari zinciri. İlk çerçeve
+    // sanal `#document` köküdür — tüm üst düzey öğeler onun çocuğudur.
+    let mut dom_stack: Vec<NodeInfo> = vec![NodeInfo::new(NodeBrief {
+        tag: String::from("#document"),
+        class: None,
+        id: None,
+        attrs: Vec::new(),
+        index: 0,
+        type_index: 0,
+    })];
 
     // 1. Tüm <style> bloklarını topla. Tek bir metin olarak ayrıştırmak,
     // bloklar arasında paylaşılan CSS değişkenlerinin (--renk) çözülmesini
@@ -1039,6 +1090,7 @@ pub fn render_html_to_lines(
                     cur_line_indent.set(saved.indent);
                     *current_bg_image.borrow_mut() = saved.bg_image;
                 }
+                pop_dom_node(&mut dom_stack, name);
                 hidden_until_close = None;
             }
             if hidden_until_close.is_some() || hidden_close {
@@ -1046,6 +1098,19 @@ pub fn render_html_to_lines(
                 continue;
             }
             if !closing && (eq_ascii(name, b"script") || eq_ascii(name, b"style")) {
+                // script/style element kardeşi sayılır (nth-child doğruluğu)
+                // ama çerçeve itmez — içeriği atlanır.
+                let s_attrs = &tag_content[name_end..];
+                let brief = make_node_brief(
+                    core::str::from_utf8(name).unwrap_or(""),
+                    s_attrs,
+                    extract_attr(s_attrs, b"class"),
+                    extract_attr(s_attrs, b"id"),
+                    dom_stack.last(),
+                );
+                if let Some(parent) = dom_stack.last_mut() {
+                    parent.note_child(&brief);
+                }
                 hidden_until_close = Some(name.to_vec());
                 p = end + 1;
                 continue;
@@ -1069,15 +1134,18 @@ pub fn render_html_to_lines(
             let text_attr = extract_attr(attrs, b"text");
             let link_attr = extract_attr(attrs, b"link");
 
-            let mut matched = match_css_style(
-                &css_rules,
-                tag_name_str,
-                class_attr,
-                id_attr,
-                style_attr,
-                wrap_width_px,
-                768,
-            );
+            // Seçici bağlamı: ata zinciri + önceki kardeşler.
+            let node_brief =
+                make_node_brief(tag_name_str, attrs, class_attr, id_attr, dom_stack.last());
+            let ancestors: Vec<&NodeInfo> = dom_stack.iter().collect();
+            let prev_sibs: &[NodeBrief] = dom_stack.last().map_or(&[], |p| p.children.as_slice());
+            let elem_ctx = ElemCtx {
+                node: &node_brief,
+                ancestors: &ancestors,
+                prev_sibs,
+            };
+            let mut matched =
+                match_css_style_ctx(&css_rules, &elem_ctx, style_attr, wrap_width_px, 768);
 
             // CSS Grid modu: kelimeyi aktif öğenin hücresine ekle.
             if in_grid && !word_buf.is_empty() {
@@ -1237,6 +1305,17 @@ pub fn render_html_to_lines(
             }
 
             if !closing {
+                // DOM seçici bağlamı: çocuğu ebeveynin listesine işle;
+                // void olmayan öğeler için çerçeve it (kapanışta pop).
+                // Yalnızca gerçek etiket adları (yorum/PI hariç).
+                if name.first().is_some_and(|b| b.is_ascii_alphabetic()) {
+                    if let Some(parent) = dom_stack.last_mut() {
+                        parent.note_child(&node_brief);
+                    }
+                    if !is_void_tag(name) {
+                        dom_stack.push(NodeInfo::new(node_brief.clone()));
+                    }
+                }
                 // Kapanışta geri yüklemek üzere mevcut durumu sakla.
                 if name.first().is_some_and(|b| b.is_ascii_alphabetic()) {
                     state_stack.push((
@@ -2948,6 +3027,7 @@ pub fn render_html_to_lines(
                     cur_line_indent.set(saved.indent);
                     *current_bg_image.borrow_mut() = saved.bg_image;
                 }
+                pop_dom_node(&mut dom_stack, name);
             }
 
             p = end + 1;

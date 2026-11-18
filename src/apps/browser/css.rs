@@ -1769,7 +1769,9 @@ fn parse_css_rules(
                 }
             }
         }
-        for s in selector.split(',') {
+        // Virgülle ayrılmış seçici listesi — :is()/.not() argümanlarındaki
+        // virgülleri bölmemek için üst düzey ayrıştırıcı kullanılır.
+        for s in split_top_level(selector, ',') {
             let trimmed = s.trim();
             if !trimmed.is_empty() {
                 rules.push(CssRule {
@@ -1871,8 +1873,8 @@ fn split_top_level(text: &str, sep: char) -> Vec<&str> {
     let mut i = 0usize;
     while i < bytes.len() {
         match bytes[i] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
             _ => {}
         }
         if bytes[i] == sep as u8 && depth == 0 {
@@ -2079,78 +2081,530 @@ fn class_list_contains(class: Option<&str>, want: &str) -> bool {
     })
 }
 
-/// Bileşik seçicinin sözde-sınıf bölümlerini toplar: (ad, argüman metni).
-///
-/// Sözde-elementler ("::before") özel olarak işaretlenir.
-fn collect_pseudo_classes(part: &str) -> Vec<(String, Option<String>)> {
-    let mut out: Vec<(String, Option<String>)> = Vec::new();
-    let bytes = part.as_bytes();
+// ---------------------------------------------------------------------------
+// Bağlam-duyarlı seçici eşleştirme
+//
+// Tek geçişli HTML çizimleyici tam bir DOM kurmaz; yine de kardeş/ata
+// bağlamını izlemek için her açılan öğe için kompakt bir `NodeBrief`,
+// ebeveynin çocuk listesi `NodeBrief` olarak ve ata zinciri `NodeInfo`
+// olarak tutulur. `:nth-child`, `[attr]`, `+`/`~` ve ata birleştiricileri
+// bu bağlam üzerinden doğru değerlendirilir.
+// ---------------------------------------------------------------------------
+
+/// Bir öğenin seçici bağlamındaki kompakt kopyası (kardeş listelerinde
+/// ve özne düğümünde kullanılır).
+#[derive(Clone)]
+pub struct NodeBrief {
+    pub tag: String,
+    pub class: Option<String>,
+    pub id: Option<String>,
+    /// Ham öznitelik metni (`[attr]` seçicileri için, ~768 bayt üst sınır).
+    pub attrs: Vec<u8>,
+    /// Ebeveyn içindeki 1-tabanlı element sırası.
+    pub index: usize,
+    /// Aynı etiketli önceki kardeş sayısı + 1 (`:nth-of-type` için).
+    pub type_index: usize,
+}
+
+/// Açık öğe çerçevesi: düğüm + şimdiye kadarki element çocuklarının
+/// kompakt kopyaları (kardeş seçicileri ve `:nth-*` için).
+#[derive(Clone)]
+pub struct NodeInfo {
+    pub base: NodeBrief,
+    /// Son ~384 element çocuğun kopyası (seçici bağlamı).
+    pub children: Vec<NodeBrief>,
+    /// Görülen toplam element çocuğu sayısı (children dolsa bile
+    /// `:nth-child` sırası doğru kalır).
+    pub child_count: usize,
+    /// Etiket → çocuk sayısı (`:nth-of-type` doğruluğu için, ~32 etiket).
+    pub tag_counts: Vec<(String, usize)>,
+}
+
+impl NodeInfo {
+    /// Yeni boş çerçeve.
+    pub fn new(base: NodeBrief) -> Self {
+        Self {
+            base,
+            children: Vec::new(),
+            child_count: 0,
+            tag_counts: Vec::new(),
+        }
+    }
+
+    /// Çocuk sayacı + etiket sayacını günceller; çocuk kopyasını
+    /// liste doluysa eklemez (bağlam yaklaşık kalır).
+    pub fn note_child(&mut self, brief: &NodeBrief) {
+        self.child_count += 1;
+        if let Some((_, n)) = self
+            .tag_counts
+            .iter_mut()
+            .find(|(t, _)| t.eq_ignore_ascii_case(&brief.tag))
+        {
+            *n += 1;
+        } else if self.tag_counts.len() < 32 {
+            self.tag_counts.push((brief.tag.clone(), 1));
+        }
+        if self.children.len() < 384 {
+            self.children.push(brief.clone());
+        }
+    }
+
+    /// Aynı etiketli çocuk sayısı + 1 (:nth-of-type dizini).
+    pub fn type_index_of(&self, tag: &str) -> usize {
+        self.tag_counts
+            .iter()
+            .find(|(t, _)| t.eq_ignore_ascii_case(tag))
+            .map_or(1, |(_, n)| n + 1)
+    }
+}
+
+/// Seçici eşleştirmesi için özne öğe bağlamı.
+pub struct ElemCtx<'a> {
+    /// Özne düğüm (henüz ebeveynin çocuk listesine eklenmemiş olabilir).
+    pub node: &'a NodeBrief,
+    /// Kökten doğrudan ebeveyne ata zinciri (`NodeInfo` dilimleri).
+    pub ancestors: &'a [&'a NodeInfo],
+    /// Öğe ile aynı ebeveyndeki önceki element kardeşler.
+    pub prev_sibs: &'a [NodeBrief],
+}
+
+/// Eşleştiricideki bir düğüm referansı.
+#[derive(Clone, Copy)]
+enum NodeRef<'a> {
+    Brief(&'a NodeBrief),
+    Info(&'a NodeInfo),
+}
+
+impl<'a> NodeRef<'a> {
+    fn tag(&self) -> &'a str {
+        match self {
+            NodeRef::Brief(b) => &b.tag,
+            NodeRef::Info(n) => &n.base.tag,
+        }
+    }
+    fn class(&self) -> Option<&'a str> {
+        match self {
+            NodeRef::Brief(b) => b.class.as_deref(),
+            NodeRef::Info(n) => n.base.class.as_deref(),
+        }
+    }
+    fn id(&self) -> Option<&'a str> {
+        match self {
+            NodeRef::Brief(b) => b.id.as_deref(),
+            NodeRef::Info(n) => n.base.id.as_deref(),
+        }
+    }
+    fn attrs(&self) -> &'a [u8] {
+        match self {
+            NodeRef::Brief(b) => &b.attrs,
+            NodeRef::Info(n) => &n.base.attrs,
+        }
+    }
+    fn index(&self) -> usize {
+        match self {
+            NodeRef::Brief(b) => b.index,
+            NodeRef::Info(n) => n.base.index,
+        }
+    }
+    fn type_index(&self) -> usize {
+        match self {
+            NodeRef::Brief(b) => b.type_index,
+            NodeRef::Info(n) => n.base.type_index,
+        }
+    }
+}
+
+/// Eşleştirme sırasında bir düğüm + onun bağlamı.
+struct View<'a> {
+    node: NodeRef<'a>,
+    /// Düğümün ataları, kökten ebeveyne doğru.
+    ancestors: &'a [&'a NodeInfo],
+    /// Düğümden önceki element kardeşler.
+    prev_sibs: &'a [NodeBrief],
+}
+
+impl<'a> View<'a> {
+    fn subject(ctx: &'a ElemCtx<'a>) -> Self {
+        View {
+            node: NodeRef::Brief(ctx.node),
+            ancestors: ctx.ancestors,
+            prev_sibs: ctx.prev_sibs,
+        }
+    }
+    /// Doğrudan ebeveyn görünümü.
+    fn parent(&self) -> Option<View<'a>> {
+        let (parent, rest) = self.ancestors.split_last()?;
+        Some(View {
+            node: NodeRef::Info(parent),
+            ancestors: rest,
+            prev_sibs: &parent.children,
+        })
+    }
+    /// Ata zincirindeki `idx` numaralı (kök=0) ata görünümü.
+    fn ancestor_at(&self, idx: usize) -> Option<View<'a>> {
+        let node = self.ancestors.get(idx)?;
+        Some(View {
+            node: NodeRef::Info(node),
+            ancestors: &self.ancestors[..idx],
+            prev_sibs: &node.children,
+        })
+    }
+    /// `list` içindeki `idx` numaralı önceki kardeşin görünümü.
+    fn sibling_at(&self, list: &'a [NodeBrief], idx: usize) -> View<'a> {
+        View {
+            node: NodeRef::Brief(&list[idx]),
+            ancestors: self.ancestors,
+            prev_sibs: &list[..idx],
+        }
+    }
+}
+
+/// Karmaşık seçiciyi (birleştirici, bileşik) çiftlerine böler.
+/// Birleştirici, kendinden SONRAKİ bileşiğe aittir.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Comb {
+    Descendant,
+    Child,
+    Adjacent,
+    General,
+}
+
+/// Üst düzeydeki (parantez/köşeli ayraç dışındaki) birleştiricilere göre
+/// seçiciyi böler; ilk elemanın birleştiricisi `None`'dır.
+fn split_complex(sel: &str) -> Vec<(Option<Comb>, String)> {
+    let bytes = sel.as_bytes();
+    let mut out: Vec<(Option<Comb>, String)> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut pending: Option<Comb> = None;
     let mut i = 0usize;
     while i < bytes.len() {
         match bytes[i] {
-            b'[' => {
-                // Öznitelik seçicileri statik eşleştirmede yok sayılır.
-                while i < bytes.len() && bytes[i] != b']' {
-                    i += 1;
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'>' | b'+' | b'~' if depth == 0 => {
+                let comp = sel[start..i].trim();
+                if !comp.is_empty() {
+                    out.push((pending.take(), comp.to_string()));
                 }
-                if i < bytes.len() {
-                    i += 1;
-                }
-            }
-            b':' => {
+                pending = Some(match bytes[i] {
+                    b'>' => Comb::Child,
+                    b'+' => Comb::Adjacent,
+                    _ => Comb::General,
+                });
                 i += 1;
-                let mut is_element = false;
-                if i < bytes.len() && bytes[i] == b':' {
-                    is_element = true;
-                    i += 1;
-                }
-                let start = i;
-                i = skip_name_chars(bytes, i);
-                let name = part[start..i].to_ascii_lowercase();
-                let mut args = None;
-                if !is_element && i < bytes.len() && bytes[i] == b'(' {
-                    let (content, next) = extract_paren_content(part, i);
-                    args = Some(content);
-                    i = next;
-                }
-                if is_element {
-                    out.push((String::from("::"), args));
-                } else {
-                    out.push((name, args));
-                }
+                start = i;
+                continue;
             }
-            _ => i += 1,
+            b' ' | b'\t' | b'\n' | b'\r' if depth == 0 => {
+                // Ardışık boşlukları tek torun birleştiricisine indir;
+                // açık bir birleştirici bekliyorsa boşluğu atla.
+                let mut j = i;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                let comp = sel[start..i].trim();
+                if !comp.is_empty() {
+                    out.push((pending.take(), comp.to_string()));
+                    pending = Some(Comb::Descendant);
+                }
+                i = j;
+                start = j;
+                continue;
+            }
+            _ => {}
         }
+        i += 1;
+    }
+    let comp = sel[start..].trim();
+    if !comp.is_empty() {
+        out.push((pending.take(), comp.to_string()));
     }
     out
 }
 
-/// Bir bileşik seçiciyi (`div.card`, `.a.b`, `#id`, `*`) eşleştirir.
-///
-/// `:is()`, `:not()` ve `:where()` fonksiyonel sözde-sınıfları eşleştirilir;
-/// desteklenmeyen sözde-sınıflar (`:hover`, `:nth-child` ...) statik çizimde
-/// eşleşmez (false döner).
-fn compound_selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
-    let s = sel.trim();
+/// `an+b` biçimindeki :nth-* argümanını (a, b) olarak çözer.
+/// "odd"→(2,1), "even"→(2,0), "3"→(0,3), "2n+1"→(2,1), "-n+3"→(-1,3).
+fn parse_anb(s: &str) -> Option<(i64, i64)> {
+    let s = s.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "odd" => return Some((2, 1)),
+        "even" => return Some((2, 0)),
+        _ => {}
+    }
+    if !s.contains('n') {
+        return s.parse::<i64>().ok().map(|n| (0, n));
+    }
+    let (a_part, b_part) = s.split_once('n')?;
+    let a = match a_part.trim() {
+        "" | "+" => 1,
+        "-" => -1,
+        v => v.parse::<i64>().ok()?,
+    };
+    let b_str = b_part.trim();
+    let b = if b_str.is_empty() {
+        0
+    } else {
+        // "n+3" → b_part = "+3"; "n-3" → "-3"; "2n3" geçersiz
+        if b_str.starts_with('+') || b_str.starts_with('-') {
+            b_str.parse::<i64>().ok()?
+        } else {
+            return None;
+        }
+    };
+    Some((a, b))
+}
+
+/// 1-tabanlı `index`'in `an+b` kalıbına uyup uymadığını denetler.
+fn nth_matches(index: usize, a: i64, b: i64) -> bool {
+    if a == 0 {
+        return index as i64 == b;
+    }
+    let d = index as i64 - b;
+    d % a == 0 && d / a >= 0
+}
+
+/// Ham öznitelik metninde `name` özniteliğinin değerini döndürür.
+/// Değer tırnakları ayıklanır; öznitelik değersizse boş dilim döner.
+fn attr_lookup<'a>(attrs: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    let name_b = name.as_bytes();
+    let mut i = 0usize;
+    while i < attrs.len() {
+        // Öznitelik adı
+        while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') {
+            i += 1;
+        }
+        let k_start = i;
+        while i < attrs.len()
+            && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-' || attrs[i] == b'_')
+        {
+            i += 1;
+        }
+        if i == k_start {
+            i += 1;
+            continue;
+        }
+        let cur = &attrs[k_start..i];
+        while i < attrs.len() && attrs[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < attrs.len() && attrs[i] == b'=' {
+            i += 1;
+            while i < attrs.len() && attrs[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let (v_start, quote) = if i < attrs.len() && (attrs[i] == b'\'' || attrs[i] == b'"') {
+                let q = attrs[i];
+                i += 1;
+                (i, q)
+            } else {
+                (i, 0)
+            };
+            while i < attrs.len()
+                && ((quote != 0 && attrs[i] != quote)
+                    || (quote == 0 && !attrs[i].is_ascii_whitespace() && attrs[i] != b'>'))
+            {
+                i += 1;
+            }
+            let val = &attrs[v_start..i];
+            if quote != 0 && i < attrs.len() {
+                i += 1; // kapanış tırnağı
+            }
+            if cur.eq_ignore_ascii_case(name_b) {
+                return Some(val);
+            }
+        } else if cur.eq_ignore_ascii_case(name_b) {
+            return Some(b"");
+        }
+    }
+    None
+}
+
+/// `[name op value]` öznitelik seçicisini değerlendirir.
+fn attr_selector_matches(attrs: &[u8], content: &str) -> bool {
+    let c = content.trim();
+    if c.is_empty() {
+        return false;
+    }
+    // İşleç: iki karakterli (~=, |=, ^=, $=, *=) veya =.
+    let bytes = c.as_bytes();
+    let mut op_pos = None;
+    let mut op_len = 0usize;
+    for i in 0..bytes.len() {
+        if bytes[i] == b'=' {
+            op_pos = Some(i);
+            op_len = if i > 0 && matches!(bytes[i - 1], b'~' | b'|' | b'^' | b'$' | b'*') {
+                2
+            } else {
+                1
+            };
+            break;
+        }
+        if bytes[i] == b']' {
+            break;
+        }
+    }
+    let ci = c.to_ascii_lowercase().ends_with(" i");
+    let body = if ci {
+        let t = c.trim_end();
+        t[..t.len() - 2].trim_end()
+    } else {
+        c
+    };
+    let (name, op, raw_val) = match op_pos {
+        Some(pos) => {
+            let name_end = if op_len == 2 { pos - 1 } else { pos };
+            let op = &body[name_end..pos + 1];
+            let mut v = body[pos + 1..].trim();
+            // Tırnakları ayıkla
+            if v.len() >= 2
+                && ((v.starts_with('"') && v.ends_with('"'))
+                    || (v.starts_with('\'') && v.ends_with('\'')))
+            {
+                v = &v[1..v.len() - 1];
+            }
+            (body[..name_end].trim(), op, v)
+        }
+        None => (body, "", ""),
+    };
+    if name.is_empty() {
+        return false;
+    }
+    let Some(val) = attr_lookup(attrs, name) else {
+        return false;
+    };
+    let val_str = core::str::from_utf8(val).unwrap_or("");
+    let want = raw_val;
+    let eq = |a: &str, b: &str| {
+        if ci {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    match op {
+        "" => true, // [attr] — varlık
+        "=" => eq(val_str, want),
+        "~=" => val_str.split_whitespace().any(|w| eq(w, want)),
+        "|=" => {
+            eq(val_str, want)
+                || (val_str.len() > want.len()
+                    && val_str.starts_with(want)
+                    && val_str.as_bytes()[want.len()] == b'-')
+        }
+        "^=" => !want.is_empty() && val_str.starts_with(want),
+        "$=" => !want.is_empty() && val_str.ends_with(want),
+        "*=" => !want.is_empty() && val_str.contains(want),
+        _ => false,
+    }
+}
+
+/// Sözde-sınıfı bağlam üzerinde değerlendirir.
+fn pseudo_matches(name: &str, args: Option<&str>, view: &View) -> bool {
+    match name {
+        "first-child" => view.node.index() == 1,
+        "nth-child" => {
+            let Some(a) = args.and_then(parse_anb) else {
+                return false;
+            };
+            nth_matches(view.node.index(), a.0, a.1)
+        }
+        "nth-of-type" => {
+            let Some(a) = args.and_then(parse_anb) else {
+                return false;
+            };
+            nth_matches(view.node.type_index(), a.0, a.1)
+        }
+        // :root — html öğesi; ata zincirinde yalnızca sanal #document
+        // kök çerçevesi bulunabilir.
+        "root" => {
+            view.node.tag().eq_ignore_ascii_case("html")
+                && view.ancestors.iter().all(|n| n.base.tag == "#document")
+        }
+        "is" | "where" => {
+            let list = args.unwrap_or_default();
+            split_top_level(list, ',').iter().any(|arg| {
+                let parts = split_complex(arg);
+                !parts.is_empty() && complex_view_matches(&parts, parts.len() - 1, view)
+            })
+        }
+        "not" => {
+            let list = args.unwrap_or_default();
+            !split_top_level(list, ',').iter().any(|arg| {
+                let parts = split_complex(arg);
+                !parts.is_empty() && complex_view_matches(&parts, parts.len() - 1, view)
+            })
+        }
+        // Dinamik/durum sözde-sınıfları ve desteklenmeyenler eşleşmez.
+        _ => false,
+    }
+}
+
+/// Karmaşık seçicinin `i` numaralı (sağdan) bileşiğini `view` üzerinde
+/// eşleştirir ve birleştiricileri geriye doğru izler.
+fn complex_view_matches(parts: &[(Option<Comb>, String)], i: usize, view: &View) -> bool {
+    let Some((_, compound)) = parts.get(i) else {
+        return false;
+    };
+    if !compound_view_matches(compound, view) {
+        return false;
+    }
+    if i == 0 {
+        return true;
+    }
+    match parts[i].0.unwrap_or(Comb::Descendant) {
+        Comb::Child => view
+            .parent()
+            .is_some_and(|v| complex_view_matches(parts, i - 1, &v)),
+        Comb::Descendant => {
+            // En yakın atadan köke doğru dene.
+            let mut idx = view.ancestors.len();
+            while idx > 0 {
+                idx -= 1;
+                if let Some(v) = view.ancestor_at(idx) {
+                    if complex_view_matches(parts, i - 1, &v) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        Comb::Adjacent => view.prev_sibs.last().is_some_and(|_| {
+            let k = view.prev_sibs.len() - 1;
+            let v = view.sibling_at(view.prev_sibs, k);
+            complex_view_matches(parts, i - 1, &v)
+        }),
+        Comb::General => {
+            for k in (0..view.prev_sibs.len()).rev() {
+                let v = view.sibling_at(view.prev_sibs, k);
+                if complex_view_matches(parts, i - 1, &v) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// Bir bileşik seçiciyi (`div.card`, `.a.b`, `#id`, `*`, `[attr=x]`,
+/// `:nth-child(2)`) bağlam üzerinde eşleştirir.
+fn compound_view_matches(compound: &str, view: &View) -> bool {
+    let s = compound.trim();
     if s.is_empty() {
         return false;
     }
     let base_end = s.find([':', '[']).unwrap_or(s.len());
     let base = s[..base_end].trim();
-    let pseudos = collect_pseudo_classes(&s[base_end..]);
-
-    if base.is_empty() && pseudos.is_empty() {
-        // Yalnızca öznitelik seçicisi olan bir bileşik seçici statik olarak
-        // eşleştirilemez.
-        return false;
-    }
 
     if !base.is_empty() && base != "*" {
         let (tag_part, mut rest) = match base.find(['#', '.']) {
             Some(pos) => (&base[..pos], &base[pos..]),
             None => (base, ""),
         };
-        if !tag_part.is_empty() && tag_part != "*" && !tag_part.eq_ignore_ascii_case(tag) {
+        if !tag_part.is_empty()
+            && tag_part != "*"
+            && !tag_part.eq_ignore_ascii_case(view.node.tag())
+        {
             return false;
         }
         while let Some(ch) = rest.chars().next() {
@@ -2158,7 +2612,7 @@ fn compound_selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Opti
                 rest = &rest[1..];
                 let end = rest.find(['#', '.']).unwrap_or(rest.len());
                 let want = &rest[..end];
-                if !id.is_some_and(|v| v.eq_ignore_ascii_case(want)) {
+                if !view.node.id().is_some_and(|v| v.eq_ignore_ascii_case(want)) {
                     return false;
                 }
                 rest = &rest[end..];
@@ -2166,7 +2620,7 @@ fn compound_selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Opti
                 rest = &rest[1..];
                 let end = rest.find(['#', '.']).unwrap_or(rest.len());
                 let want = &rest[..end];
-                if !class_list_contains(class, want) {
+                if !class_list_contains(view.node.class(), want) {
                     return false;
                 }
                 rest = &rest[end..];
@@ -2174,61 +2628,72 @@ fn compound_selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Opti
                 rest = &rest[1..];
             }
         }
+    } else if base.is_empty() {
+        // Yalnızca öznitelik/sözde seçicisi — geçerli, devam et.
     }
 
-    // Sözde-sınıfları değerlendir.
-    for (name, args) in pseudos {
-        match name.as_str() {
-            "is" | "where" => {
-                let list = args.unwrap_or_default();
-                let matched = split_top_level(&list, ',')
-                    .iter()
-                    .any(|arg| complex_part_matches(arg, tag, class, id));
-                if !matched {
+    // Kalan bölümü öznitelik ve sözde-sınıf koşullarına göre tara.
+    let bytes = s.as_bytes();
+    let mut i = base_end;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => {
+                let mut depth = 1i32;
+                let mut j = i + 1;
+                while j < bytes.len() && depth > 0 {
+                    match bytes[j] {
+                        b'[' => depth += 1,
+                        b']' => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth != 0 {
+                    return false;
+                }
+                let content = &s[i + 1..j - 1];
+                if !attr_selector_matches(view.node.attrs(), content) {
+                    return false;
+                }
+                i = j;
+            }
+            b':' => {
+                i += 1;
+                if i < bytes.len() && bytes[i] == b':' {
+                    // Sözde-elementler statik çizimde desteklenmez.
+                    return false;
+                }
+                let start = i;
+                i = skip_name_chars(bytes, i);
+                let name = s[start..i].to_ascii_lowercase();
+                let mut args = None;
+                if i < bytes.len() && bytes[i] == b'(' {
+                    let (content, next) = extract_paren_content(s, i);
+                    args = Some(content);
+                    i = next;
+                }
+                if !pseudo_matches(&name, args.as_deref(), view) {
                     return false;
                 }
             }
-            "not" => {
-                let list = args.unwrap_or_default();
-                let matched = split_top_level(&list, ',')
-                    .iter()
-                    .any(|arg| complex_part_matches(arg, tag, class, id));
-                if matched {
-                    return false;
-                }
-            }
-            // Desteklenmeyen sözde-sınıflar statik çizimde eşleşmez.
-            _ => return false,
+            _ => i += 1,
         }
     }
     true
 }
 
-/// Karmaşık (birleştiricili) seçicinin son bileşik parçasını eşleştirir.
-fn complex_part_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
-    let part = sel.trim();
-    if part.is_empty() {
-        return false;
-    }
-    let last = part
-        .rsplit(|c: char| c.is_ascii_whitespace() || c == '>' || c == '+' || c == '~')
-        .find(|s| !s.is_empty())
-        .unwrap_or(part);
-    compound_selector_matches(last, tag, class, id)
-}
-
-/// Seçici eşleştirme: virgülle ayrılmış parçalar, torun/çocuk birleştiricileri
-/// ve bileşik seçiciler desteklenir. Dinamik sözde-sınıflar (`:hover`) statik
-/// çizimde uygulanmaz; aksi halde fare üzerinde olmayan öğeler hover rengini
-/// kalıcı olarak alırdı.
-fn selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
+/// Seçici eşleştirme (bağlamlı): virgülle ayrılmış parçalar,
+/// torun/çocuk/kardeş birleştiricileri ve bileşik seçiciler desteklenir.
+/// Dinamik sözde-sınıflar (`:hover`) ve sözde-elementler statik çizimde
+/// uygulanmaz.
+fn selector_matches_ctx(sel: &str, view: &View) -> bool {
     let sel = sel.trim();
     if sel.is_empty() {
         return false;
     }
     // Virgüllü gruplarda yalnızca dinamik/sözde-element içeren parçayı atla;
     // `a, a:visited { color: red }` gibi yaygın grupların statik kısmı çalışsın.
-    for part in sel.split(',') {
+    for part in split_top_level(sel, ',') {
         let part = part.trim();
         if part.is_empty() {
             continue;
@@ -2242,14 +2707,11 @@ fn selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>)
         {
             continue;
         }
-        if contains_ci(part, ":root") {
-            if tag.eq_ignore_ascii_case("html") {
-                return true;
-            }
+        let parts = split_complex(part);
+        if parts.is_empty() {
             continue;
         }
-        // Torun/çocuk seçicide son bileşik seçiciyi eşleştir.
-        if complex_part_matches(part, tag, class, id) {
+        if complex_view_matches(&parts, parts.len() - 1, view) {
             return true;
         }
     }
@@ -2262,15 +2724,14 @@ fn selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>)
 /// `media` ile filtreleme yapılır; eşleşmeyen @media kuralları atlanır.
 /// Aynı özgüllükteyse sonra gelen kural kazanır (son kazanır kuralı).
 /// `!important` bildirimler normal bildirimlerin üzerinde uygulanır.
-fn apply_css_cascade(
+fn apply_css_cascade_ctx(
     rules: &[CssRule],
-    tag: &str,
-    class: Option<&str>,
-    id: Option<&str>,
+    ctx: &ElemCtx,
     inline_style: Option<&str>,
     viewport_w: usize,
     viewport_h: usize,
 ) -> ElementStyle {
+    let view = View::subject(ctx);
     let mut entries: Vec<CascadeEntry> = Vec::new();
     for (index, rule) in rules.iter().enumerate() {
         // @media filtresi
@@ -2281,12 +2742,12 @@ fn apply_css_cascade(
         }
 
         // Virgülle ayrılmış her seçici kendi özgüllüğüyle değerlendirilir.
-        for part in rule.selector.split(',') {
+        for part in split_top_level(&rule.selector, ',') {
             let part = part.trim();
             if part.is_empty() {
                 continue;
             }
-            if !selector_matches(part, tag, class, id) {
+            if !selector_matches_ctx(part, &view) {
                 continue;
             }
             let specificity = selector_specificity(part);
@@ -2366,7 +2827,35 @@ pub fn match_css_style(
     viewport_w: usize,
     viewport_h: usize,
 ) -> ElementStyle {
-    apply_css_cascade(rules, tag, class, id, inline_style, viewport_w, viewport_h)
+    // Bağlamsız çağrılar (html/body kökü, testler): ata/kardeş
+    // birleştiricileri eşleşmez; basit seçiciler çalışmaya devam eder.
+    let node = NodeBrief {
+        tag: tag.to_string(),
+        class: class.map(|c| c.to_string()),
+        id: id.map(|i| i.to_string()),
+        attrs: Vec::new(),
+        index: 1,
+        type_index: 1,
+    };
+    let ctx = ElemCtx {
+        node: &node,
+        ancestors: &[],
+        prev_sibs: &[],
+    };
+    apply_css_cascade_ctx(rules, &ctx, inline_style, viewport_w, viewport_h)
+}
+
+/// Tam bağlamlı eşleştirme: `ctx` öğenin ata/kardeş/öznitelik bilgisini
+/// taşır; `:nth-child`, `[attr]`, `+`/`~` ve ata birleştiricileri
+/// doğru değerlendirilir.
+pub fn match_css_style_ctx(
+    rules: &[CssRule],
+    ctx: &ElemCtx,
+    inline_style: Option<&str>,
+    viewport_w: usize,
+    viewport_h: usize,
+) -> ElementStyle {
+    apply_css_cascade_ctx(rules, ctx, inline_style, viewport_w, viewport_h)
 }
 
 /// Animasyon ismi ile keyframes kaydını bulur.
@@ -2620,5 +3109,210 @@ mod tests {
         assert_eq!(hid.overflow, 1);
         let sc = match_css_style(&parsed.rules, "div", Some("sc"), None, None, 600, 768);
         assert_eq!(sc.overflow, 2);
+    }
+
+    // --- Bağlamlı seçici motoru testleri ---
+
+    fn brief(
+        tag: &str,
+        class: Option<&str>,
+        id: Option<&str>,
+        attrs: &str,
+        index: usize,
+    ) -> NodeBrief {
+        NodeBrief {
+            tag: tag.to_string(),
+            class: class.map(|c| c.to_string()),
+            id: id.map(|i| i.to_string()),
+            attrs: attrs.as_bytes().to_vec(),
+            index,
+            type_index: index,
+        }
+    }
+
+    /// `ul > li:nth-child(2)` gibi seçicileri test etmek için
+    /// basit bir ata/kardeş bağlamı kurar.
+    fn ctx<'a>(
+        node: &'a NodeBrief,
+        ancestors: &'a [&'a NodeInfo],
+        prev_sibs: &'a [NodeBrief],
+    ) -> ElemCtx<'a> {
+        ElemCtx {
+            node,
+            ancestors,
+            prev_sibs,
+        }
+    }
+
+    fn has_color(rules: &[CssRule], c: &ElemCtx) -> bool {
+        match_css_style_ctx(rules, c, None, 600, 768)
+            .color
+            .is_some()
+    }
+
+    #[test]
+    fn attr_selectors_match() {
+        let parsed = parse_css(
+            "[data-x] { color: red; }\n\
+             [data-x=\"1\"] { color: red; }\n\
+             [data-x='2'] { color: red; }\n\
+             [data-x~=tok] { color: red; }\n\
+             [data-x|=pre] { color: red; }\n\
+             [data-x^=ab] { color: red; }\n\
+             [data-x$=yz] { color: red; }\n\
+             [data-x*=mid] { color: red; }\n\
+             [data-x=NO] { color: red; }\n\
+             [data-x=no i] { color: red; }",
+        );
+        let node = brief("div", None, None, "data-x=\"1\" id=\"a\"", 1);
+        let c = ctx(&node, &[], &[]);
+        // [data-x], [data-x="1"], [data-x^=ab]? hayır — değer "1".
+        // Eşleşenler: [data-x], [data-x="1"], [data-x=no i] değil.
+        assert!(has_color(&parsed.rules, &c)); // en az [data-x] eşleşir
+                                               // Değer "1" için ~=, |=, ^=, $=, *= ve i bayraksız =NO eşleşmez;
+                                               // kesin doğrulama için ayrı kurallar:
+        let p2 = parse_css("[data-x=\"1\"] { color: red; }");
+        assert!(has_color(&p2.rules, &c));
+        let p3 = parse_css("[data-x=\"2\"] { color: red; }");
+        assert!(!has_color(&p3.rules, &c));
+        let p4 = parse_css("[data-x=no i] { color: red; }");
+        let node2 = brief("div", None, None, "data-x=\"NO\"", 1);
+        assert!(has_color(&p4.rules, &ctx(&node2, &[], &[])));
+        let p5 = parse_css("[data-x=no] { color: red; }");
+        assert!(!has_color(&p5.rules, &ctx(&node2, &[], &[])));
+        let p6 = parse_css("[data-x~=tok] { color: red; }");
+        let node3 = brief("div", None, None, "data-x=\"aa tok bb\"", 1);
+        assert!(has_color(&p6.rules, &ctx(&node3, &[], &[])));
+        let p7 = parse_css("[data-x|=pre] { color: red; }");
+        let node4 = brief("div", None, None, "data-x=\"pre-fix\"", 1);
+        assert!(has_color(&p7.rules, &ctx(&node4, &[], &[])));
+        let node5 = brief("div", None, None, "data-x=\"prefix\"", 1);
+        assert!(!has_color(&p7.rules, &ctx(&node5, &[], &[])));
+        let p8 = parse_css("[disabled] { color: red; }");
+        let node6 = brief("input", None, None, "disabled type=\"text\"", 1);
+        assert!(has_color(&p8.rules, &ctx(&node6, &[], &[])));
+    }
+
+    #[test]
+    fn nth_child_and_first_child() {
+        let parsed = parse_css(
+            "li:nth-child(2) { color: red; }\n\
+             li:nth-child(odd) { color: red; }\n\
+             li:nth-child(2n+1) { color: red; }\n\
+             li:first-child { color: red; }",
+        );
+        let second = brief("li", None, None, "", 2);
+        assert!(has_color(&parsed.rules, &ctx(&second, &[], &[])));
+        let third = brief("li", None, None, "", 3);
+        // odd/2n+1 → 3 eşleşir
+        assert!(has_color(&parsed.rules, &ctx(&third, &[], &[])));
+        let fourth = brief("li", None, None, "", 4);
+        assert!(!has_color(&parsed.rules, &ctx(&fourth, &[], &[])));
+        let first = brief("li", None, None, "", 1);
+        assert!(has_color(&parsed.rules, &ctx(&first, &[], &[])));
+        // nth-of-type: type_index ayrı
+        let p2 = parse_css("p:nth-of-type(2) { color: red; }");
+        let mut n = brief("p", None, None, "", 5);
+        n.type_index = 2;
+        assert!(has_color(&p2.rules, &ctx(&n, &[], &[])));
+        n.type_index = 3;
+        assert!(!has_color(&p2.rules, &ctx(&n, &[], &[])));
+    }
+
+    #[test]
+    fn sibling_and_ancestor_combinators() {
+        // div > p kuralı: ebeveyn div olmalı
+        let parsed = parse_css("div > p { color: red; }");
+        let parent_div = NodeInfo::new(brief("div", None, None, "", 1));
+        let ancestors: Vec<&NodeInfo> = vec![&parent_div];
+        let p = brief("p", None, None, "", 1);
+        assert!(has_color(&parsed.rules, &ctx(&p, &ancestors, &[])));
+        let parent_span = NodeInfo::new(brief("span", None, None, "", 1));
+        let ancestors2: Vec<&NodeInfo> = vec![&parent_span];
+        assert!(!has_color(&parsed.rules, &ctx(&p, &ancestors2, &[])));
+
+        // div p (torun): doğrudan ebeveyn span olsa bile ata div ise eşleşir
+        let parsed2 = parse_css("div p { color: red; }");
+        let gp = NodeInfo::new(brief("div", None, None, "", 1));
+        let mid = NodeInfo::new(brief("span", None, None, "", 1));
+        let ancestors3: Vec<&NodeInfo> = vec![&gp, &mid];
+        assert!(has_color(&parsed2.rules, &ctx(&p, &ancestors3, &[])));
+        let ancestors4: Vec<&NodeInfo> = vec![&mid];
+        assert!(!has_color(&parsed2.rules, &ctx(&p, &ancestors4, &[])));
+
+        // h1 + p: hemen önceki kardeş h1 olmalı
+        let parsed3 = parse_css("h1 + p { color: red; }");
+        let h1 = brief("h1", None, None, "", 1);
+        let prevs = vec![h1];
+        assert!(has_color(&parsed3.rules, &ctx(&p, &[], &prevs)));
+        let span_prev = brief("span", None, None, "", 1);
+        let prevs2 = vec![span_prev];
+        assert!(!has_color(&parsed3.rules, &ctx(&p, &[], &prevs2)));
+
+        // h1 ~ p: önceki HERHANGİ bir kardeş h1 yeterli
+        let parsed4 = parse_css("h1 ~ p { color: red; }");
+        let h1b = brief("h1", None, None, "", 1);
+        let mid_sib = brief("em", None, None, "", 2);
+        let prevs3 = vec![h1b, mid_sib];
+        assert!(has_color(&parsed4.rules, &ctx(&p, &[], &prevs3)));
+        let prevs4 = vec![
+            brief("em", None, None, "", 1),
+            brief("b", None, None, "", 2),
+        ];
+        assert!(!has_color(&parsed4.rules, &ctx(&p, &[], &prevs4)));
+    }
+
+    #[test]
+    fn not_is_where_nested() {
+        let parsed = parse_css("p:not(.lead) { color: red; }");
+        let plain = brief("p", Some("body"), None, "", 1);
+        assert!(has_color(&parsed.rules, &ctx(&plain, &[], &[])));
+        let lead = brief("p", Some("lead"), None, "", 1);
+        assert!(!has_color(&parsed.rules, &ctx(&lead, &[], &[])));
+
+        let parsed2 = parse_css("p:is(.a, .b) { color: red; }");
+        assert_eq!(parsed2.rules.len(), 1);
+        assert_eq!(parsed2.rules[0].selector, "p:is(.a, .b)");
+        let parsed2b = parse_css("p:is(.b) { color: red; }");
+        assert!(has_color(
+            &parsed2b.rules,
+            &ctx(&brief("p", Some("b"), None, "", 1), &[], &[])
+        ));
+        assert!(has_color(
+            &parsed2.rules,
+            &ctx(&brief("p", Some("b"), None, "", 1), &[], &[])
+        ));
+        assert!(!has_color(
+            &parsed2.rules,
+            &ctx(&brief("p", Some("c"), None, "", 1), &[], &[])
+        ));
+
+        // :not içinde karmaşık seçici: ata bağlamı da değerlendirilir
+        let parent = NodeInfo::new(brief("div", None, None, "", 1));
+        let ancestors: Vec<&NodeInfo> = vec![&parent];
+        let parsed3 = parse_css("p:not(div span) { color: red; }");
+        let p = brief("p", None, None, "", 1);
+        // div ata altında p → "div span" eşleşmez (p span değil) → :not true
+        assert!(has_color(&parsed3.rules, &ctx(&p, &ancestors, &[])));
+        let parsed4 = parse_css("p:not(div p) { color: red; }");
+        // div ata + p özne → "div p" eşleşir → :not false
+        assert!(!has_color(&parsed4.rules, &ctx(&p, &ancestors, &[])));
+    }
+
+    #[test]
+    fn root_and_universal() {
+        let parsed = parse_css(":root { color: red; }");
+        let doc = NodeInfo::new(brief("#document", None, None, "", 0));
+        let ancestors: Vec<&NodeInfo> = vec![&doc];
+        let html = brief("html", None, None, "", 1);
+        assert!(has_color(&parsed.rules, &ctx(&html, &ancestors, &[])));
+        let body = brief("body", None, None, "", 1);
+        assert!(!has_color(&parsed.rules, &ctx(&body, &ancestors, &[])));
+
+        let parsed2 = parse_css("* { color: red; }");
+        assert!(has_color(
+            &parsed2.rules,
+            &ctx(&brief("any", None, None, "", 1), &[], &[])
+        ));
     }
 }

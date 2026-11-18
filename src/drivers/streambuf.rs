@@ -218,7 +218,6 @@ impl Default for CryptoRx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
 
     #[test]
     fn stream_rx_dedups_retransmitted_overlap() {

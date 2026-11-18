@@ -164,11 +164,11 @@ minos/
 > Son güncelleme: 17 Kasım 2026 (v2.5.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 209 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | 162.097 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 223 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | 176.508 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri (`test_host.ps1`)** | 322 test (0 hata, %100 başarılı) |
+| **Birim Testleri (`test_host.ps1`)** | 440 test (0 hata, %100 başarılı) |
 | **Yerleşik Uygulama Sayısı** | 17 kayıtlı uygulama (app ID 0–16) + Başlat Menüsü + Pencere Yöneticisi |
 | **Kernel / ISO Boyutu** | ~2.0 MB Çekirdek / ~6.0 MB Hibrit Bootable ISO |
 

@@ -24,7 +24,7 @@ minos/
 │   ├── mm/                  # Physical memory manager (PMM), process table, ELF loader,
 │   │                        # memory/ submodule (huge pages, compression, profiling)
 │   └── main.rs              # Kernel entry point (_start)
-├── tests/                   # Host unit tests (322 tests)
+├── tests/                   # Host unit tests (440 tests)
 ├── boot/                    # Limine bootloader configuration (limine.conf)
 ├── docs/                    # Local Markdown documents
 ├── wiki/                    # Wiki pages (this directory)
@@ -40,13 +40,13 @@ minos/
 
 ## Unit Tests (`test_host.ps1`)
 
-Cryptography, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, filesystem, memory, driver and GUI coverage — 322 unit tests run in the host environment. TLS tests now use the production certificate-validation path and cover valid RSA/ECDSA chains plus invalid and expired intermediate CA cases.
+Cryptography, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, Canvas 2D, SVG rasterizer, filesystem, memory, driver and GUI coverage — 440 unit tests run in the host environment. TLS tests now use the production certificate-validation path and cover valid RSA/ECDSA chains plus invalid and expired intermediate CA cases.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Test results: **322 passed / 0 failed**
+Test results: **440 passed / 0 failed**
 
 ---
 
@@ -69,10 +69,10 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 | Metric | Value |
 | :--- | :--- |
-| **Total Rust Source Files** | 209 files (`src/` + `tests/` + `build.rs`) |
-| **Total Raw Rust Lines** | 162,097 lines |
+| **Total Rust Source Files** | 223 files (`src/` + `tests/` + `build.rs`) |
+| **Total Raw Rust Lines** | 176,508 lines |
 | **Language** | Rust (Nightly, `no_std`) |
 | **Build Target** | `x86_64-minos` (custom bare-metal) |
-| **Unit Tests** | 322 tests (0 failed, 100% passing) |
+| **Unit Tests** | 440 tests (0 failed, 100% passing) |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Window Manager |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |

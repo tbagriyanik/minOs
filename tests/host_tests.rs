@@ -43,6 +43,11 @@ pub mod browser_css;
 #[path = "../src/apps/browser/svg.rs"]
 pub mod browser_svg;
 
+// Canvas 2D: dolgu/fillRect, gradyan, save/restore, transform,
+// path (quad/cubic/arc), getImageData/putImageData birim testleri.
+#[path = "../src/apps/browser/canvas.rs"]
+pub mod browser_canvas;
+
 #[path = "../src/apps/calc_core.rs"]
 pub mod calc_core;
 
@@ -176,6 +181,31 @@ pub mod apps {
             (NO_APP, NO_WINDOW, false)
         }
     }
+    // canvas.rs üçgen/arc için viewer3d'nin saf matematik yardımcılarını
+    // kullanır; host testinde aynı Taylor yaklaşımlarını sağlar.
+    pub mod viewer3d {
+        const PI: f32 = core::f32::consts::PI;
+        const TWO_PI: f32 = core::f32::consts::TAU;
+        const HALF_PI: f32 = core::f32::consts::FRAC_PI_2;
+
+        pub fn sin(mut x: f32) -> f32 {
+            while x > PI {
+                x -= TWO_PI;
+            }
+            while x < -PI {
+                x += TWO_PI;
+            }
+            let x2 = x * x;
+            let x3 = x * x2;
+            let x5 = x3 * x2;
+            let x7 = x5 * x2;
+            x - (x3 / 6.0) + (x5 / 120.0) - (x7 / 5040.0)
+        }
+
+        pub fn cos(x: f32) -> f32 {
+            sin(x + HALF_PI)
+        }
+    }
 }
 
 #[path = "../src/drivers/tls.rs"]
@@ -276,12 +306,31 @@ pub mod drivers {
     pub mod video {
         pub static mut PANIC_FB_ADDR: usize = 0;
 
-        /// `font_render.rs`'deki `draw`/`blit_glyph` imzalarında kullanılan
-        /// minimal `Framebuffer` yurdu; font_render testleri bu yöntemi
-        /// çağırmıyor, sadece türün çözümlenmesi gerekir.
-        pub struct Framebuffer;
+        /// `font_render.rs`'deki `draw`/`blit_glyph` imzalarında ve
+        /// `canvas.rs`'in `render_to_fb`'sinde kullanılan minimal
+        /// `Framebuffer` yurdu; font_render testleri `put_subpixel_text`'i,
+        /// canvas testleri `put_pixel`'i çağırır.
+        pub struct Framebuffer {
+            pub width: usize,
+            pub height: usize,
+            pub pixels: alloc::vec::Vec<u32>,
+        }
 
         impl Framebuffer {
+            pub fn new(width: usize, height: usize) -> Self {
+                Framebuffer {
+                    width,
+                    height,
+                    pixels: alloc::vec![0; width * height],
+                }
+            }
+
+            pub fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
+                if x < self.width && y < self.height {
+                    self.pixels[y * self.width + x] = color;
+                }
+            }
+
             pub fn put_subpixel_text(
                 &mut self,
                 _x: usize,
@@ -503,3 +552,6 @@ mod host_mzram_tests;
 #[cfg(test)]
 #[path = "host_input_tests.rs"]
 mod host_input_tests;
+
+#[path = "host_canvas_tests.rs"]
+mod host_canvas_tests;

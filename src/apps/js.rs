@@ -2402,6 +2402,9 @@ impl JsRuntime {
         self.xhr_fire(obj_name, "onreadystatechange");
     }
 
+    // Host test derlemesinde (`cfg(test)`) ağ bloğu derlenmediği için
+    // aşağıdaki değişkenler yalnızca kernel derlemesinde mutate edilir.
+    #[cfg_attr(any(test, host_fs_tests), allow(unused_mut))]
     fn xhr_do_send(&mut self, id: u32, obj_name: &str) {
         {
             let Some(st) = self.xhrs.get(&id) else {
@@ -3750,6 +3753,13 @@ impl JsRuntime {
                         if rhs == "length" {
                             return JsValue::Number(s.len() as i64);
                         }
+                        // XHR gibi `values` içinde nesneye referans veren
+                        // dize değerler: `x.readyState` → `__xhr_obj_N`'deki
+                        // nesnenin özelliği (metot çağrısıyla aynı çözüm).
+                        if let Some(JsValue::Object(map)) = self.values.get(&s) {
+                            let mut base = JsValue::Object(map.clone());
+                            return self.get_member_mut(&mut base, rhs);
+                        }
                     }
                     JsValue::Object(map) => {
                         if rhs == "length" {
@@ -4162,9 +4172,15 @@ impl JsRuntime {
             }
         }
 
-        // Değişken tablosundan okuma
+        // Değişken tablosundan okuma (değişkenler fonksiyon adlarını gölgeler)
         if let Some(v) = self.values.get(e) {
             return v.clone();
+        }
+
+        // Fonksiyon adı referansı: `x.onerror = onerr` gibi atamalarda
+        // fonksiyonlar ad dizesi olarak saklanır (xhr_fire bunu çözer).
+        if self.functions.contains_key(e) {
+            return JsValue::String(String::from(e));
         }
         if let Some(v) = self.var_get(e) {
             return JsValue::String(String::from(v));
@@ -5176,10 +5192,24 @@ impl JsRuntime {
                     {
                         let raw_val = self.eval_val(rhs);
                         let val = self.store_function_value(raw_val);
-                        if let Some(mut target) = self.values.get(obj_name).cloned() {
-                            if matches!(target, JsValue::Object(_)) {
-                                self.set_member(&mut target, prop, val);
-                                self.values.insert(String::from(obj_name), target);
+                        if let Some(target) = self.values.get(obj_name).cloned() {
+                            // `x` değişkeni `__xhr_obj_N` gibi bir nesne
+                            // referansı taşıyorsa gerçek hedefi çöz.
+                            let (resolved, store_key) = match &target {
+                                JsValue::String(r)
+                                    if self
+                                        .values
+                                        .get(r)
+                                        .is_some_and(|v| matches!(v, JsValue::Object(_))) =>
+                                {
+                                    (self.values.get(r).cloned().unwrap(), r.clone())
+                                }
+                                _ => (target, String::from(obj_name)),
+                            };
+                            if matches!(resolved, JsValue::Object(_)) {
+                                let mut t = resolved;
+                                self.set_member(&mut t, prop, val);
+                                self.values.insert(store_key, t);
                                 self.sync_var_from_val(obj_name);
                                 return;
                             }
@@ -7498,5 +7528,67 @@ mod tests {
         rt2.page_origin = String::from(target);
         assert_eq!(rt2.local_storage_get("alpha").to_str(), "bir");
         assert_eq!(rt2.local_storage_get("beta").to_str(), "iki");
+    }
+
+    #[test]
+    fn xhr_open_send_completes_with_error_without_network() {
+        // Host test ortamında ağ yok: send() senkron tamamlanır,
+        // status=0 kalır ve onerror olayı ateşlenir.
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        rt.run(
+            r#"var x = new XMLHttpRequest();
+               var err = 0;
+               function onerr() { err = 1; }
+               x.onerror = onerr;
+               x.open("GET", "http://ornek.test/api");
+               x.send();
+               document.write(x.readyState + "|" + x.status + "|" + err);"#,
+            &mut out,
+        );
+        assert_eq!(String::from_utf8_lossy(&out), "4|0|1");
+    }
+
+    #[test]
+    fn xhr_ready_state_transitions_and_response_props() {
+        // open→1, send→2,3,4 readyState'leri sırayla onreadystatechange
+        // ile bildirilir; ağsız ortamda status=0 ve boş responseText.
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        rt.run(
+            r#"var x = new XMLHttpRequest();
+               var states = "";
+               function track() { states = states + x.readyState + ","; }
+               x.onreadystatechange = track;
+               x.open("POST", "/yerel");
+               x.send();
+               document.write(states + "|" + x.responseText.length);"#,
+            &mut out,
+        );
+        assert_eq!(String::from_utf8_lossy(&out), "1,2,3,4,|0");
+    }
+
+    #[test]
+    fn history_pushstate_sets_pending_navigation() {
+        let mut rt = JsRuntime::new();
+        rt.page_url = String::from("https://a.example/sayfa");
+        let v = rt.browser_object_method("history", "pushState", "{}, 'baslik', '/yeni-url'");
+        assert!(matches!(v, Some(JsValue::Undefined)));
+        assert_eq!(
+            rt.pending_navigation.as_deref(),
+            Some("__minos_pushstate__:/yeni-url")
+        );
+    }
+
+    #[test]
+    fn request_animation_frame_registers_timer() {
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        rt.run(
+            "function tick() {}\nvar id = requestAnimationFrame(tick);\ndocument.write(id);",
+            &mut out,
+        );
+        assert!(!String::from_utf8_lossy(&out).is_empty());
+        assert!(!rt.timers.is_empty(), "rAF zamanlayıcı kaydetmeli");
     }
 }

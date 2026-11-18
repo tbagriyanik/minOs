@@ -69,39 +69,6 @@ fn fround(x: f32) -> f32 {
     ffloor(x + 0.5)
 }
 
-/// `f32` üzerinde libm metot adlarıyla aynı arayüzü sunan uzatma; no_std
-/// çekirdekte `sin/floor/...` yerleşik olmadığı için yardımcı fonksiyonlara
-/// bağlanır. `min`/`max`/`clamp`/`abs` gibi core'da var olanlar dokunulmaz.
-trait SvgFloatExt {
-    fn sin(self) -> f32;
-    fn cos(self) -> f32;
-    fn sqrt(self) -> f32;
-    fn floor(self) -> f32;
-    fn ceil(self) -> f32;
-    fn round(self) -> f32;
-}
-
-impl SvgFloatExt for f32 {
-    fn sin(self) -> f32 {
-        fsin(self)
-    }
-    fn cos(self) -> f32 {
-        fcos(self)
-    }
-    fn sqrt(self) -> f32 {
-        fsqrt(self)
-    }
-    fn floor(self) -> f32 {
-        ffloor(self)
-    }
-    fn ceil(self) -> f32 {
-        fceil(self)
-    }
-    fn round(self) -> f32 {
-        fround(self)
-    }
-}
-
 #[derive(Clone, Copy, Default)]
 struct Mat {
     a: f32,

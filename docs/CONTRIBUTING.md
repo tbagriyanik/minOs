@@ -70,9 +70,9 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 
 ## 🧪 Test Süreci
 
-### Host birim testleri (360 test)
+### Host birim testleri (440 test)
 
-Kriptografi, X.509, TLS, JavaScript motoru, HTML ayrıştırıcı ve GUI metin tamponu testleri:
+Kriptografi, X.509, TLS, JavaScript motoru, HTML ayrıştırıcı, Canvas 2D, SVG rasterizer ve GUI metin tamponu testleri:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
@@ -310,15 +310,15 @@ For `run.ps1` options see `docs/building.md` and wiki pages.
 
 ## 🧪 Test Process
 
-### Host unit tests (360 tests)
+### Host unit tests (440 tests)
 
-Cryptography, X.509, TLS, JavaScript engine, HTML parser, and GUI text buffer tests:
+Cryptography, X.509, TLS, JavaScript engine, HTML parser, Canvas 2D, SVG rasterizer, and GUI text buffer tests:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Expected result: **360 passed / 0 failed**
+Expected result: **440 passed / 0 failed**
 
 ### QEMU integration test
 

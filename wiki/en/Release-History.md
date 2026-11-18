@@ -8,6 +8,7 @@ minOs release notes and future plans.
 
 ### What's New
 
+- **🌐 Modern Web Browser:** The browser gained HTTP/2 (HPACK, multiplexed streams) and HTTP/3/QUIC (RFC 9000 handshake, QPACK, connection pool, stream reassembly) on top of HTTP/1.1 + TLS 1.3. HTML5: inline SVG rasterizer, `<details>`/`<dialog>`/`<template>`/`<picture>` support. CSS3: context-aware selectors (`:nth-child`, `[attr=]`, `:is()`/`:not()`, combinators). Canvas 2D: gradients, transforms, Bézier/arc paths with real scanline fill, `save`/`restore`, `getImageData`/`putImageData`. minJs: `XMLHttpRequest`, `history.pushState`/`replaceState`, `requestAnimationFrame`. Live H3 testing is opt-in via `livetest_h3=`.
 - **🛡️ Watchdog Runs Independently of the Main Loop:** Frozen-app detection runs in the APIC timer interrupt (`watchdog::timer_tick()`); the interrupt context only updates state in a short `try_lock`-guarded critical section, and termination is deferred to the main loop via `drain_frozen()`. The `guard` context flags only the stuck application.
 - **🎮 FPS 3D Real Performance Metrics:** `FPS 3D Game` (app ID 16) produces real measurements from completed frames: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` serial output plus live/minimum FPS and frame time on the HUD. Verified via the `[FPS3D] Uygulama açıldı` boot marker.
 - **🧪 FPS 3D Stress Test Automation:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` opens the game from the Start menu over QMP; 10/30/60-minute runs validate QEMU liveness and positive FPS/min-FPS metrics.
@@ -15,7 +16,7 @@ minOs release notes and future plans.
 - **🎮 FPS Game Menus:** Start and result menus were added, with options to restart or exit after the game ends.
 - **⌨️ Form Keyboard Shortcuts:** Tab navigation, Enter confirmation and Esc cancellation are supported on the Welcome screen, installer and File Manager controls.
 - **🔐 TLS/X.509 Certificate Chain Validation:** Leaf and intermediate validity, CA BasicConstraints/`pathLen`, and CA `keyCertSign` plus leaf KeyUsage/EKU extensions when present are checked; unknown critical extensions are rejected. TLS host tests now use the production validation path.
-- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour. Host suite: **360 passed / 0 failed**.
+- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour. Host suite: **440 passed / 0 failed**.
 - **🎵 Direct WAV Playback:** Double-clicking a WAV file in File Manager opens it directly in Music Player.
 - **🖼️ Tiled Desktop Wallpaper:** Image Viewer can now set the loaded image as a tiled desktop wallpaper.
 - **🎨 New Desktop Images:** Three new desktop images (`desktop1.png`–`desktop3.png`) added to Settings.

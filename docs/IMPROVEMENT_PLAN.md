@@ -174,7 +174,7 @@ mode.
 ### 6.1 Unit Tests
 - **Done (host suite)**: `tests/host_tests.rs` + `test_host.ps1` run ~300
   host-side unit tests covering allocator, VFS/fs (ext4/exfat), crypto,
-  TLS, JS engine, widgets/themes readability, drivers' pure logic (360 tests).
+  TLS, JS engine, widgets/themes readability, drivers' pure logic (440 tests).
 - Remaining: in-kernel test coverage beyond boot self-tests, fuzzing.
 
 ### 6.2 Integration Tests
@@ -230,7 +230,7 @@ mode.
 
 ### 8.2 CI Pipeline
 - rustfmt/clippy checks — `cargo fmt` + `cargo clippy` run clean locally
-- Unit tests on host target — `test_host.ps1` (360 tests passing)
+- Unit tests on host target — `test_host.ps1` (440 tests passing)
 - QEMU integration tests — `test_qemu.ps1`, `boot_check.ps1`
 - Binary size tracking
 
@@ -323,7 +323,7 @@ Low-priority polish items tracked here; they do not block releases.
 
 | # | Item | Priority | Status |
 | :- | :--- | :- | :- |
-| 10.1 | UI tema ve erişilebilirlik testlerini artır | P3 | **Done (host)** — `tests/host_gui_tests.rs` tema/odak/erişilebilirlik ve `gui::screen_layout` geometri kontrolleri; `test_host.ps1` ile 358 test geçti. WCAG AAA oranları/kontrast ölçümü ayrı bir iyileştirme olarak kalıyor |
+| 10.1 | UI tema ve erişilebilirlik testlerini artır | P3 | **Done (host)** — `tests/host_gui_tests.rs` tema/odak/erişilebilirlik ve `gui::screen_layout` geometri kontrolleri; `test_host.ps1` ile 440 test geçti. WCAG AAA oranları/kontrast ölçümü ayrı bir iyileştirme olarak kalıyor |
 | 10.2 | Türkçe karakter ve font fallback testlerini otomatikleştir | P3 | **Done** — `font_render.rs`: Geist tier-0 Türkçe karakterler, sıfır olmayan bitmap/advance, `i`/`ı` ayrımı, eksik glif `?` fallback'i ve yedek tier kontrolleri |
 | 10.3 | Uygulama açılış süreleri ve bellek kullanımını ölç | P3 | **Done (app memory)** — `apps::memory` kaydı, uygulama bazlı dinamik kapasite metodları, Görev Yöneticisi "Bellek" sütunu ve `[APP-MEM]` seri raporu; açılış süresi ölçümü `boot::timing` ile mevcut |
 | 10.4 | Açılış, kapanış ve hata ekranlarını görsel olarak iyileştir | P3 | **Done** — `gui::screen_layout` ortak geometri/metin, yükleme+açılış hatası+hoş geldin+kapanış ekranları, görünür kapanış fazları ve `finish_system()` VFS sync + sürücü kapanışı |

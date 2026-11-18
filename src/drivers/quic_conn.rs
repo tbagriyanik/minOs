@@ -761,20 +761,19 @@ impl QuicConn {
                         self.note_acked(&acked);
                     }
                 }
-                0x06 | 0x07 => {
+                0x06 => {
+                    // CRYPTO frame (RFC 9000 §19.6): Offset + Length + Data —
+                    // uzunluk alanı her zaman vardır, flag biti yoktur.
                     let Some((offset, l1)) = quic::decode_varint(&payload[pos..]) else {
                         return Ok(());
                     };
                     pos += l1;
-                    let (dlen, dstart) = if ft & 0x01 != 0 {
-                        let Some((len, l2)) = quic::decode_varint(&payload[pos..]) else {
-                            return Ok(());
-                        };
-                        pos += l2;
-                        (len as usize, pos)
-                    } else {
-                        (payload.len() - pos, pos)
+                    let Some((dlen_v, l2)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
                     };
+                    pos += l2;
+                    let dlen = dlen_v as usize;
+                    let dstart = pos;
                     if dstart + dlen > payload.len() {
                         return Ok(());
                     }

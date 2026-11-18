@@ -10,6 +10,28 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// no_std ortamında `f32::floor` yok; aşağı yuvarlama.
+#[inline]
+fn ffloor(v: f32) -> f32 {
+    let i = v as isize;
+    if v < i as f32 {
+        (i - 1) as f32
+    } else {
+        i as f32
+    }
+}
+
+/// no_std ortamında `f32::ceil` yok; yukarı yuvarlama.
+#[inline]
+fn fceil(v: f32) -> f32 {
+    let i = v as isize;
+    if v > i as f32 {
+        (i + 1) as f32
+    } else {
+        i as f32
+    }
+}
+
 /// `f32::round` no_std ortamında yer almadığı için basit yuvarlama.
 #[inline]
 fn round_f32(v: f32) -> f32 {
@@ -154,7 +176,7 @@ impl ImageData {
 }
 
 /// A single path sub-command.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PathCmd {
     MoveTo(Point),
     LineTo(Point),
@@ -366,7 +388,7 @@ impl Canvas2dContext {
     }
 
     /// Get a pixel's RGB.
-    fn get_pixel(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
+    pub fn get_pixel(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
         if x >= self.width || y >= self.height {
             return None;
         }
@@ -504,54 +526,29 @@ impl Canvas2dContext {
     // ── Rectangle operations ─────────────────────────────────────────
 
     /// Fill a rectangle with the current fill style (color or gradient).
+    /// Transform (translate/scale/rotate) uygulanır — yol olarak
+    /// rasterize edildiği için döndürme altında da doğru çalışır.
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let x0 = x as usize;
-        let y0 = y as usize;
-        let x1 = (x + w) as usize;
-        let y1 = (y + h) as usize;
-        for yy in y0..y1 {
-            for xx in x0..x1 {
-                let color = self.paint_at(xx as f32, yy as f32);
-                self.put_pixel_blend(xx, yy, color);
-            }
-        }
+        let saved = core::mem::take(&mut self.path);
+        self.rect(x, y, w, h);
+        self.fill();
+        self.path = saved;
     }
 
     /// Stroke a rectangle outline with the current stroke style.
     pub fn stroke_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let color = Rgba::from_u32(self.stroke_style);
-        let x0 = x as usize;
-        let y0 = y as usize;
-        let x1 = (x + w) as usize;
-        let y1 = (y + h) as usize;
-        let lw = self.line_width as usize;
-        // Top and bottom edges
-        for xx in x0..x1 {
-            for dy in 0..lw {
-                self.put_pixel_blend(xx, y0.saturating_add(dy), color);
-                self.put_pixel_blend(xx, y1.saturating_sub(dy + 1), color);
-            }
-        }
-        // Left and right edges
-        for yy in y0..y1 {
-            for dx in 0..lw {
-                self.put_pixel_blend(x0.saturating_add(dx), yy, color);
-                self.put_pixel_blend(x1.saturating_sub(dx + 1), yy, color);
-            }
-        }
+        let saved = core::mem::take(&mut self.path);
+        self.rect(x, y, w, h);
+        self.stroke();
+        self.path = saved;
     }
 
     /// Clear a rectangle to transparent black.
     pub fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let x0 = x as usize;
-        let y0 = y as usize;
-        let x1 = (x + w) as usize;
-        let y1 = (y + h) as usize;
-        for yy in y0..y1 {
-            for xx in x0..x1 {
-                self.put_pixel_raw(xx, yy, 0, 0, 0);
-            }
-        }
+        let saved = core::mem::take(&mut self.path);
+        self.rect(x, y, w, h);
+        self.fill_raw();
+        self.path = saved;
     }
 
     // ── Path rendering ───────────────────────────────────────────────
@@ -698,44 +695,230 @@ impl Canvas2dContext {
         }
     }
 
-    /// Fill the current path using even-odd fill rule.
+    /// Fill the current path using the even-odd rule.
+    /// Path cihaz uzayına düzleştirilir (transform uygulanır), her
+    /// tarama satırında kenar kesişimleri hesaplanıp dolgu yapılır.
     pub fn fill(&mut self) {
         if self.path.is_empty() {
             return;
         }
-        // Basitleştirilmiş doldurma: yolun sınırlayıcı kutusu (gradyan
-        // dolgusu paint_at üzerinden piksel başına çözülür).
+        let subs = self.flatten_path();
+        self.fill_subpaths(&subs, false);
+    }
+
+    /// `clearRect` için aynı rasterizasyonu ham (alpha'sız) modda yapar.
+    fn fill_raw(&mut self) {
+        if self.path.is_empty() {
+            return;
+        }
+        let subs = self.flatten_path();
+        self.fill_subpaths(&subs, true);
+    }
+
+    /// Path'i cihaz uzayında kapalı alt-yollara düzleştirir.
+    /// Quad/cubic Bézier ve arc'ler doğrusal segmentlere indirgenir.
+    fn flatten_path(&self) -> Vec<Vec<Point>> {
+        let mut subs: Vec<Vec<Point>> = Vec::new();
+        let mut cur: Option<usize> = None;
+        let mut pos = Point { x: 0.0, y: 0.0 };
+        let mut start = pos;
+
+        fn push_pt(subs: &mut [Vec<Point>], cur: Option<usize>, p: Point) {
+            if let Some(i) = cur {
+                if let Some(last) = subs[i].last() {
+                    if (last.x - p.x).abs() < 0.001 && (last.y - p.y).abs() < 0.001 {
+                        return;
+                    }
+                }
+                subs[i].push(p);
+            }
+        }
+
+        for cmd in &self.path {
+            match cmd {
+                PathCmd::MoveTo(p) => {
+                    let tp = self.transform_point(*p);
+                    subs.push(vec![tp]);
+                    cur = Some(subs.len() - 1);
+                    pos = tp;
+                    start = tp;
+                }
+                PathCmd::LineTo(p) => {
+                    let tp = self.transform_point(*p);
+                    push_pt(&mut subs, cur, tp);
+                    pos = tp;
+                }
+                PathCmd::QuadTo { cp, p } => {
+                    let cpt = self.transform_point(*cp);
+                    let end = self.transform_point(*p);
+                    const SEGS: usize = 16;
+                    for i in 1..=SEGS {
+                        let t = i as f32 / SEGS as f32;
+                        let u = 1.0 - t;
+                        let pt = Point {
+                            x: u * u * pos.x + 2.0 * u * t * cpt.x + t * t * end.x,
+                            y: u * u * pos.y + 2.0 * u * t * cpt.y + t * t * end.y,
+                        };
+                        push_pt(&mut subs, cur, pt);
+                    }
+                    pos = end;
+                }
+                PathCmd::CubicTo { c1, c2, p } => {
+                    let c1t = self.transform_point(*c1);
+                    let c2t = self.transform_point(*c2);
+                    let end = self.transform_point(*p);
+                    const SEGS: usize = 20;
+                    for i in 1..=SEGS {
+                        let t = i as f32 / SEGS as f32;
+                        let u = 1.0 - t;
+                        let pt = Point {
+                            x: u * u * u * pos.x
+                                + 3.0 * u * u * t * c1t.x
+                                + 3.0 * u * t * t * c2t.x
+                                + t * t * t * end.x,
+                            y: u * u * u * pos.y
+                                + 3.0 * u * u * t * c1t.y
+                                + 3.0 * u * t * t * c2t.y
+                                + t * t * t * end.y,
+                        };
+                        push_pt(&mut subs, cur, pt);
+                    }
+                    pos = end;
+                }
+                PathCmd::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                    anticlockwise,
+                } => {
+                    let c = self.transform_point(*center);
+                    let (a, _b, _cc, d, _e, _f) = self.transform;
+                    let scale = fsqrt(a * a + d * d) * 0.5 + 0.5;
+                    let r = radius * scale;
+                    let s = *start_angle;
+                    let mut e = *end_angle;
+                    const TAU: f32 = core::f32::consts::TAU;
+                    if *anticlockwise {
+                        while e > s {
+                            e -= TAU;
+                        }
+                    } else {
+                        while e < s {
+                            e += TAU;
+                        }
+                    }
+                    let sweep = e - s;
+                    let segs = (((sweep.abs() / TAU) * 48.0) as usize + 1).max(4);
+                    let arc_start = Point {
+                        x: c.x + r * trig_cos(s),
+                        y: c.y + r * trig_sin(s),
+                    };
+                    // Mevcut nokta yay başlangıcından farklıysa canvas spec
+                    // gereği önce oraya doğru bir doğru parçası eklenir.
+                    if (pos.x - arc_start.x).abs() > 0.01 || (pos.y - arc_start.y).abs() > 0.01 {
+                        push_pt(&mut subs, cur, arc_start);
+                    }
+                    for i in 1..=segs {
+                        let ang = s + sweep * (i as f32) / (segs as f32);
+                        push_pt(
+                            &mut subs,
+                            cur,
+                            Point {
+                                x: c.x + r * trig_cos(ang),
+                                y: c.y + r * trig_sin(ang),
+                            },
+                        );
+                    }
+                    pos = subs
+                        .get(cur.unwrap_or(0))
+                        .and_then(|v| v.last())
+                        .copied()
+                        .unwrap_or(arc_start);
+                }
+                PathCmd::ClosePath => {
+                    if let Some(i) = cur {
+                        if let Some(&first) = subs[i].first() {
+                            push_pt(&mut subs, cur, first);
+                        }
+                    }
+                    pos = start;
+                }
+            }
+        }
+        // Her alt-yolu kapat (fill açık alt-yolları örtük kapatır).
+        for sub in subs.iter_mut() {
+            if sub.len() > 1 {
+                let first = sub[0];
+                let last = *sub.last().unwrap();
+                if (first.x - last.x).abs() > 0.001 || (first.y - last.y).abs() > 0.001 {
+                    sub.push(first);
+                }
+            }
+        }
+        subs.retain(|s| s.len() >= 3);
+        subs
+    }
+
+    /// Düzleştirilmiş alt-yolları even-odd kuralıyla doldurur.
+    /// `raw` modunda renk yerine şeffaf siyah yazılır (clearRect).
+    fn fill_subpaths(&mut self, subs: &[Vec<Point>], raw: bool) {
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
         let mut max_y = f32::NEG_INFINITY;
-        let note =
-            |p: Point, min_x: &mut f32, min_y: &mut f32, max_x: &mut f32, max_y: &mut f32| {
-                let tp = self.transform_point(p);
-                *min_x = min_x.min(tp.x);
-                *min_y = min_y.min(tp.y);
-                *max_x = max_x.max(tp.x);
-                *max_y = max_y.max(tp.y);
-            };
-        for cmd in &self.path {
-            match cmd {
-                PathCmd::MoveTo(p) | PathCmd::LineTo(p) => {
-                    note(*p, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
-                }
-                PathCmd::QuadTo { cp, p } => {
-                    note(*cp, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
-                    note(*p, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
-                }
-                PathCmd::CubicTo { c1, c2, p } => {
-                    note(*c1, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
-                    note(*c2, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
-                    note(*p, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
-                }
-                _ => {}
+        for sub in subs {
+            for p in sub {
+                min_x = min_x.min(p.x);
+                min_y = min_y.min(p.y);
+                max_x = max_x.max(p.x);
+                max_y = max_y.max(p.y);
             }
         }
-        if min_x.is_finite() {
-            self.fill_rect(min_x, min_y, max_x - min_x, max_y - min_y);
+        if !min_x.is_finite() || max_x <= min_x || max_y <= min_y {
+            return;
+        }
+        let y_start = (ffloor(min_y) as isize).max(0);
+        let y_end = ((fceil(max_y) as isize) + 1).min(self.height as isize);
+        let mut xs: Vec<f32> = Vec::new();
+        for yy in y_start..y_end {
+            if yy < 0 {
+                continue;
+            }
+            let yc = yy as f32 + 0.5;
+            xs.clear();
+            for sub in subs {
+                for w in sub.windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    if (a.y <= yc) == (b.y <= yc) {
+                        continue; // Yatay veya kesişmeyen kenar.
+                    }
+                    let t = (yc - a.y) / (b.y - a.y);
+                    xs.push(a.x + t * (b.x - a.x));
+                }
+            }
+            xs.sort_by(|p, q| p.partial_cmp(q).unwrap_or(core::cmp::Ordering::Equal));
+            let mut i = 0;
+            while i + 1 < xs.len() {
+                let xl = xs[i];
+                let xr = xs[i + 1];
+                if xr > xl {
+                    let xa = (ffloor(xl) as isize).max(0);
+                    let xb = ((fceil(xr) as isize) + 1).min(self.width as isize);
+                    for xx in xa..xb {
+                        let xc = xx as f32 + 0.5;
+                        if xc > xl && xc < xr {
+                            if raw {
+                                self.put_pixel_raw(xx as usize, yy as usize, 0, 0, 0);
+                            } else {
+                                let color = self.paint_at(xx as f32, yy as f32);
+                                self.put_pixel_blend(xx as usize, yy as usize, color);
+                            }
+                        }
+                    }
+                }
+                i += 2;
+            }
         }
     }
 

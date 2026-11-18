@@ -8,6 +8,7 @@ minOs sürüm notları ve gelecek planları.
 
 ### Yenilikler
 
+- **🌐 Modern Web Tarayıcısı:** Tarayıcıya HTTP/1.1 + TLS 1.3 üzerine HTTP/2 (HPACK, çoklu akış) ve HTTP/3/QUIC (RFC 9000 el sıkışma, QPACK, bağlantı havuzu, stream yeniden birleştirme) eklendi. HTML5: satır-içi SVG rasterizer, `<details>`/`<dialog>`/`<template>`/`<picture>` desteği. CSS3: bağlam-duyarlı seçiciler (`:nth-child`, `[attr=]`, `:is()`/`:not()`, birleşimleyiciler). Canvas 2D: gradyan, transform, Bézier/arc path'leriyle gerçek scanline `fill()`, `save`/`restore`, `getImageData`/`putImageData`. minJs: `XMLHttpRequest`, `history.pushState`/`replaceState`, `requestAnimationFrame`. Canlı H3 testi `livetest_h3=` ile isteğe bağlı.
 - **🛡️ Watchdog Artık Ana Döngüden Bağımsız:** Donmuş uygulama tespiti APIC zamanlayıcı kesmesinde (`watchdog::timer_tick()`) çalışır; kesme bağlamında yalnızca `try_lock` korumalı kısa kritik bölümde durum güncellenir, sonlandırma ana döngüde `drain_frozen()` ile ertelenir. `guard` bağlamı sayesinde yalnızca takılan uygulama işaretlenir.
 - **🎮 FPS 3D Gerçek Performans Metrikleri:** `FPS 3D Oyun` (app ID 16) tamamlanan karelerden gerçek ölçüm üretir: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` seri çıktısı ve HUD'da anlık/minimum FPS + kare süresi. Açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
 - **🧪 FPS 3D Stres Testi Otomasyonu:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile oyunu Başlat menüsünden açar; 10/30/60 dakikalık koşullarda QEMU canlılığı ve pozitif FPS/min-FPS metrikleri doğrulanır.
@@ -15,7 +16,7 @@ minOs sürüm notları ve gelecek planları.
 - **🎮 FPS Oyunu Menüsü:** Oyuna başlangıç ve sonuç menüleri eklendi; oyun bitince yeniden başlatma veya çıkış seçenekleri sunulur.
 - **⌨️ Form Klavye Kısayolları:** Hoş Geldin ekranı, kurulum sihirbazı ve Dosya Yöneticisi kontrollerinde Tab gezinme, Enter onaylama ve Esc vazgeçme desteklenir.
 - **🔐 TLS/X.509 Sertifika Zinciri Doğrulaması:** Yaprak ve ara sertifikaların süreleri, CA BasicConstraints/`pathLen` ve varsa CA `keyCertSign` ile yaprak KeyUsage/EKU uzantıları doğrulanır; bilinmeyen kritik uzantılar reddedilir. TLS host testleri artık üretim doğrulama yolunu kullanır.
-- **⏱️ TimeBudget Deterministik Testleri:** Enjekte edilebilir test saati; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` davranışı host testleriyle kapsanır. Toplam host testi: **360 geçti / 0 hata**.
+- **⏱️ TimeBudget Deterministik Testleri:** Enjekte edilebilir test saati; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` davranışı host testleriyle kapsanır. Toplam host testi: **440 geçti / 0 hata**.
 - **🎵 WAV Dosyası Doğrudan Çalma:** Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı doğrudan Müzik Çalar'da açar.
 - **🖼️ Döşeli Masaüstü Arka Planı:** Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - **🎨 Yeni Masaüstü Görselleri:** Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

@@ -513,7 +513,7 @@ pub fn parse_long_header_prefix(packet: &[u8]) -> Option<LongHeaderPrefix> {
 pub const FRAME_PADDING: u8 = 0x00;
 pub const FRAME_PING: u8 = 0x01;
 pub const FRAME_ACK: u8 = 0x02;
-pub const FRAME_CRYPTO: u8 = 0x07; // bit0=1: Length alanı mevcut
+pub const FRAME_CRYPTO: u8 = 0x06; // CRYPTO (RFC 9000 §19.6)
 pub const FRAME_STREAM_BASE: u8 = 0x08; // STREAM bitleri ile birlikte
 
 /// STREAM frame'i kodlar. `stream_id`, `offset`, `fin`, `data`.

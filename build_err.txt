@@ -1,2 +1,0 @@
-   Compiling minos-kernel v2.4.0 (D:\minos)
-    Finished `release` profile [optimized] target(s) in 47.52s

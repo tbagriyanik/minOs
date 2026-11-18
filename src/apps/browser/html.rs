@@ -780,6 +780,16 @@ pub fn render_html_to_lines(
     // (konteyner kapanışında `render_grid_areas` ile çizilir).
     let mut grid_line_rects: Vec<super::css::GridAreaRect> = Vec::new();
 
+    // CSS Flexbox durumu
+    let mut in_flexbox = false;
+    let mut flex_direction: u8 = 0; // 0=row, 1=row-reverse, 2=column, 3=column-reverse
+    let mut _flex_wrap: u8 = 0; // 0=nowrap, 1=wrap, 2=wrap-reverse
+    let mut flex_justify_content: u8 = 0; // 0=flex-start, 1=flex-end, 2=center, 3=space-between, 4=space-around, 5=space-evenly
+    let mut _flex_align_items: u8 = 0; // 0=stretch, 1=flex-start, 2=flex-end, 3=center, 4=baseline
+    let mut _flex_align_content: u8 = 0; // 0=stretch, 1=flex-start, 2=flex-end, 3=center, 4=space-between, 5=space-around, 6=space-evenly
+    let mut flex_gap: usize = 0;
+    let mut flex_items: Vec<(TextSpan, super::types::ElementStyle)> = Vec::new(); // (span, style) çiftleri
+
     let tag_indent = |t: HtmlTagType| -> usize {
         let base: usize = match t {
             HtmlTagType::ListItem => 18,
@@ -990,6 +1000,30 @@ pub fn render_html_to_lines(
             let is_link = active_link.is_some();
             let onclick_str = active_onclick.as_deref().unwrap_or("");
             let elem_id_str = active_id.as_deref().unwrap_or("");
+
+            // Style hesaplamasını daha önce yap (grid/flexbox için gerekli)
+            let tag_name_str = core::str::from_utf8(name).unwrap_or("");
+            let attrs = &tag_content[name_end..];
+            let class_attr = extract_attr(attrs, b"class");
+            let id_attr = extract_attr(attrs, b"id");
+            let style_attr = extract_attr(attrs, b"style");
+            let href_attr = extract_attr(attrs, b"href");
+            let onclick_attr = extract_attr(attrs, b"onclick");
+            let font_color_attr = extract_attr(attrs, b"color");
+            let bgcolor_attr = extract_attr(attrs, b"bgcolor");
+            let text_attr = extract_attr(attrs, b"text");
+            let link_attr = extract_attr(attrs, b"link");
+
+            let mut matched = match_css_style(
+                &css_rules,
+                tag_name_str,
+                class_attr,
+                id_attr,
+                style_attr,
+                wrap_width_px,
+                768,
+            );
+
             // CSS Grid modu: kelimeyi aktif öğenin hücresine ekle.
             if in_grid && !word_buf.is_empty() {
                 let word_span = TextSpan {
@@ -1036,6 +1070,29 @@ pub fn render_html_to_lines(
                         grid_cells.push(Vec::new());
                     }
                 }
+            } else if in_flexbox && !word_buf.is_empty() {
+                // CSS Flexbox modu: kelimeyi flex items listesine ekle
+                let word_span = TextSpan {
+                    text: core::mem::take(&mut word_buf),
+                    color: current_color,
+                    bg_color: current_bg,
+                    bg_image: current_bg_image.borrow().clone(),
+                    is_link,
+                    link_url: String::from(link_target),
+                    is_button: active_is_button,
+                    is_image: false,
+                    image_width: 0,
+                    image_height: 0,
+                    image_rgb: None,
+                    image_url: String::new(),
+                    bold: current_bold,
+                    underline: current_underline,
+                    onclick: String::from(onclick_str),
+                    elem_id: String::from(elem_id_str),
+                };
+                // Her bir word için style bilgisi de sakla (flex-grow, flex-shrink vb.)
+                let item_style = matched.clone();
+                flex_items.push((word_span, item_style));
             } else {
                 flush_word(
                     out_lines,
@@ -1057,28 +1114,6 @@ pub fn render_html_to_lines(
                     max_lines,
                 );
             }
-
-            let tag_name_str = core::str::from_utf8(name).unwrap_or("");
-            let attrs = &tag_content[name_end..];
-            let class_attr = extract_attr(attrs, b"class");
-            let id_attr = extract_attr(attrs, b"id");
-            let style_attr = extract_attr(attrs, b"style");
-            let href_attr = extract_attr(attrs, b"href");
-            let onclick_attr = extract_attr(attrs, b"onclick");
-            let font_color_attr = extract_attr(attrs, b"color");
-            let bgcolor_attr = extract_attr(attrs, b"bgcolor");
-            let text_attr = extract_attr(attrs, b"text");
-            let link_attr = extract_attr(attrs, b"link");
-
-            let mut matched = match_css_style(
-                &css_rules,
-                tag_name_str,
-                class_attr,
-                id_attr,
-                style_attr,
-                wrap_width_px,
-                768,
-            );
 
             // CSS animasyonu: zaman tabanlı keyframe interpolasyonu
             if let Some(kf_name) = matched.animation_name.clone() {
@@ -1276,6 +1311,27 @@ pub fn render_html_to_lines(
                     // İlk satırı oluştur
                     grid_cells.push(Vec::new());
                     // Grid konteynerı için mevcut satırı temizle
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                }
+
+                // CSS Flexbox konteynerı başlat
+                if matched.display == Some(1) && !in_flexbox {
+                    in_flexbox = true;
+                    flex_direction = matched.flex_direction;
+                    _flex_wrap = matched.flex_wrap;
+                    flex_justify_content = matched.justify_content;
+                    _flex_align_items = matched.align_items;
+                    _flex_align_content = matched.align_content;
+                    flex_gap = matched.grid_gap; // flex-gap ile aynı
+                    flex_items.clear();
+                    // Flexbox konteynerı için mevcut satırı temizle
                     flush_line(
                         out_lines,
                         &mut cur_line_spans,
@@ -2532,6 +2588,38 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                 }
+
+                // CSS Flexbox konteynerını kapat ve flex'i render et
+                if in_flexbox {
+                    render_flexbox(
+                        out_lines,
+                        &mut flex_items,
+                        flex_direction,
+                        flex_justify_content,
+                        _flex_align_items,
+                        flex_gap,
+                        wrap_width_px,
+                        max_lines,
+                    );
+
+                    in_flexbox = false;
+                    flex_items.clear();
+                    flex_direction = 0;
+                    _flex_wrap = 0;
+                    flex_justify_content = 0;
+                    _flex_align_items = 0;
+                    _flex_align_content = 0;
+                    flex_gap = 0;
+                    // Flexbox sonrasi mevcut satiri temizle
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                }
                 cur_line_indent.set(0);
                 current_bold = false;
                 current_underline = false;
@@ -3234,6 +3322,158 @@ fn render_grid_areas(
         if !line_spans.is_empty() {
             out_lines.push(BrowserLine {
                 spans: line_spans,
+                tag: HtmlTagType::Normal,
+                indent: 0,
+                align: TextAlign::Left,
+            });
+        }
+    }
+}
+
+/// CSS Flexbox render etme: flex items'ları direction, justify-content ve align-items
+/// değerlerine göre yerleştir.
+fn render_flexbox(
+    out_lines: &mut Vec<BrowserLine>,
+    flex_items: &mut [(TextSpan, super::types::ElementStyle)],
+    flex_direction: u8,
+    justify_content: u8,
+    _align_items: u8,
+    flex_gap: usize,
+    wrap_width_px: usize,
+    max_lines: usize,
+) {
+    if flex_items.is_empty() {
+        return;
+    }
+
+    // Basit implementasyon: nowrap sadece, wrap desteği sonraki faz
+    // flex-direction: row (0) için yatay yerleşim
+    let is_row = flex_direction == 0 || flex_direction == 1; // row or row-reverse
+    let _is_reverse = flex_direction == 1 || flex_direction == 3; // row-reverse or column-reverse
+
+    if is_row {
+        // Yatay yerleşim: tüm item'ları tek satıra yerleştir
+        let mut line_spans: Vec<TextSpan> = Vec::new();
+
+        // Önce tüm item'ların genişliklerini hesapla
+        let mut item_widths: Vec<usize> = Vec::new();
+        let mut total_fixed: usize = 0;
+        let mut total_grow: u32 = 0;
+
+        for (span, style) in flex_items.iter() {
+            let scale = 1; // Flexbox içinde scale 1
+            let base_w = MinGuiCompositor::text_width(&span.text, scale);
+            let button_extra = if span.is_button { 16 } else { 0 };
+            let item_w = base_w + button_extra;
+
+            // flex-grow varsa boyut hesaplaması farklı
+            let grow = style.flex_grow;
+            let _shrink = style.flex_shrink;
+            let basis = style.flex_basis;
+
+            let final_w = if basis > 0 {
+                basis
+            } else if grow > 0 {
+                // Grow varsa, space dağıtımı sonrası hesaplanacak
+                item_w
+            } else {
+                item_w
+            };
+
+            item_widths.push(final_w);
+            total_fixed += final_w;
+            total_grow += grow;
+        }
+
+        // Kullanılabilir genişlik
+        let avail_w = wrap_width_px
+            .saturating_sub(flex_gap.saturating_mul(flex_items.len().saturating_sub(1)));
+        let remaining_w = avail_w.saturating_sub(total_fixed);
+
+        // flex-grow ile dağıt
+        if total_grow > 0 && remaining_w > 0 {
+            let per_grow = remaining_w as f32 / total_grow as f32;
+            for (i, (_span, style)) in flex_items.iter().enumerate() {
+                if style.flex_grow > 0 {
+                    let extra = (per_grow * style.flex_grow as f32) as usize;
+                    item_widths[i] += extra;
+                }
+            }
+        }
+
+        // justify_content: 0=flex-start, 1=flex-end, 2=center, 3=space-between, 4=space-around, 5=space-evenly
+        let (start_x, inter_item_gap) = match justify_content {
+            1 => (avail_w.saturating_sub(total_fixed), flex_gap), // flex-end
+            2 => (avail_w.saturating_sub(total_fixed) / 2, flex_gap), // center
+            3 => {
+                // space-between: item'lar arası boşluk
+                let gap = if flex_items.len() > 1 {
+                    remaining_w / (flex_items.len() - 1)
+                } else {
+                    0
+                };
+                (0, gap)
+            }
+            4 => {
+                // space-around: her item'ın etrafında eşit boşluk
+                let total_around = remaining_w;
+                let per_item = if !flex_items.is_empty() {
+                    total_around / flex_items.len()
+                } else {
+                    0
+                };
+                (per_item / 2, per_item)
+            }
+            5 => {
+                // space-evenly: başlangıç, arası ve sonunda eşit boşluk
+                let gap = if !flex_items.is_empty() {
+                    remaining_w / (flex_items.len() + 1)
+                } else {
+                    0
+                };
+                (gap, gap)
+            }
+            _ => (0, flex_gap), // flex-start
+        };
+
+        let mut x_offset = start_x;
+
+        // Item'ları yerleştir
+        for (i, (span, _style)) in flex_items.iter().enumerate() {
+            if i > 0 {
+                x_offset += inter_item_gap;
+            }
+
+            let s = span.clone();
+            if x_offset > 0 && !s.text.starts_with(' ') {
+                let mut text = s.text;
+                text = format!("{}{}", " ".repeat(x_offset.min(50)), text);
+                line_spans.push(TextSpan { text, ..s });
+            } else {
+                line_spans.push(s);
+            }
+
+            x_offset += item_widths[i];
+        }
+
+        if !line_spans.is_empty() {
+            out_lines.push(BrowserLine {
+                spans: line_spans,
+                tag: HtmlTagType::Normal,
+                indent: 0,
+                align: TextAlign::Left,
+            });
+        }
+    } else {
+        // Column direction: her item ayrı satır
+        for (span, _style) in flex_items.iter() {
+            if out_lines.len() >= max_lines {
+                break;
+            }
+            let s = span.clone();
+            // align-items için vertical offset eklenebilir (basitlik için şimdilik yok)
+            out_lines.push(BrowserLine {
+                spans: vec![s],
                 tag: HtmlTagType::Normal,
                 indent: 0,
                 align: TextAlign::Left,

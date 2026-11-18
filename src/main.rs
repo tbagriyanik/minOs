@@ -4,6 +4,10 @@
 // Çekirdek içi API'ler (render/event/driver yolları) çok parametreli çalışır;
 // imza başına parametre demeti refactor'u bu aşamada risklidir.
 #![allow(clippy::too_many_arguments)]
+// rustc 1.102.0-nightly (2026-11-17) falsely triggers `uncommon_codepoints` on
+// purely ASCII identifiers in src/kernel/primitives.rs (reports U+1E95 'ẕ'
+// where only ASCII exists). Suppress until the compiler bug is fixed.
+#![allow(uncommon_codepoints)]
 
 extern crate alloc;
 

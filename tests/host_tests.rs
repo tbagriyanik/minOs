@@ -178,6 +178,11 @@ pub mod apps {
 #[path = "../src/drivers/tls.rs"]
 pub mod tls;
 
+// RFC 6265 çerez jarı: Set-Cookie ayrıştırma, Expires/Max-Age, Secure,
+// SameSite ve domain/path eşleştirme birim testleri.
+#[path = "../src/drivers/cookie.rs"]
+pub mod cookie_jar;
+
 #[path = "../src/time_budget.rs"]
 pub mod time_budget;
 

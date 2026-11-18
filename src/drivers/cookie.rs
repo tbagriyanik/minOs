@@ -129,7 +129,20 @@ impl CookieJar {
             same_site,
         };
 
+        // Expires geçmişte ya da Max-Age=0 ise çerez silme isteğidir (RFC 6265 §5.3).
+        let now = crate::monotonic_ms() / 1000;
+        if cookie.expires > 0 && cookie.expires <= now {
+            self.remove_cookie(&cookie.name, &cookie.domain, &cookie.path);
+            return;
+        }
+
         self.add_cookie(cookie);
+    }
+
+    /// Aynı isim+domain+path üçlüsüne sahip çerezi jar'dan kaldırır.
+    fn remove_cookie(&self, name: &str, domain: &str, path: &str) {
+        let mut cookies = self.cookies.borrow_mut();
+        cookies.retain(|c| !(c.name == name && c.domain == domain && c.path == path));
     }
 
     /// Çerezi jar'a ekler (maksimum sayı sınırlaması uygulanır).
@@ -223,6 +236,11 @@ impl CookieJar {
     pub fn is_empty(&self) -> bool {
         self.cookies.borrow().is_empty()
     }
+
+    /// Tüm çerezlerin anlık kopyasını döner (geliştirici araçları vb. için).
+    pub fn list(&self) -> Vec<Cookie> {
+        self.cookies.borrow().clone()
+    }
 }
 
 impl Default for CookieJar {
@@ -254,14 +272,94 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
     request_path.starts_with(cookie_path)
 }
 
-/// HTTP çerez tarihini (RFC 1123) epoch seconds'a çevirir.
-/// Basit implementasyon: sadece sayısal timestamp kabul edilir.
+/// HTTP çerez tarihini (RFC 1123 / RFC 850) epoch seconds'a çevirir.
+/// Desteklenen biçimler: "Wed, 21 Oct 2015 07:28:00 GMT",
+/// "21 Oct 2015 07:28:00 GMT" ve RFC 850 "Wednesday, 21-Oct-15 07:28:00 GMT".
+/// Çözülemezse 0 döner (oturum çerezi olarak işlenir).
 fn parse_cookie_date(date_str: &str) -> u64 {
-    // "Wed, 21 Oct 2015 07:28:00 GMT" formatı
-    // Şimdilik basitçe 0 döner (süresiz), gerçek implementasyon
-    // tarih ayrıştırma gerektirir.
-    let _ = date_str;
-    0
+    // Gün adı (varsa) ve GMT son eki atılır.
+    let mut s = date_str.trim();
+    if let Some(comma) = s.find(',') {
+        s = s[comma + 1..].trim_start();
+    }
+    if let Some(gmt) = s.to_ascii_lowercase().rfind("gmt") {
+        s = s[..gmt].trim_end();
+    }
+
+    // Kalan dizge: "21 Oct 2015 07:28:00" veya "21-Oct-15 07:28:00".
+    // Son belirte zaman, öncekiler gün/ay/yıl alanlarıdır.
+    let mut tokens: Vec<&str> = s.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return 0;
+    }
+    let time_part = tokens.pop().unwrap_or("");
+
+    // Tarih alanları: gün-ay-yıl (tire ile ayrılmış tek belirte ya da
+    // boşlukla ayrılmış üç belirte).
+    let date_fields: Vec<&str> = if tokens.len() == 1 && tokens[0].contains('-') {
+        tokens[0].split('-').collect()
+    } else {
+        tokens
+    };
+    if date_fields.len() < 3 {
+        return 0;
+    }
+    let day: u32 = match date_fields[0].parse() {
+        Ok(d) => d,
+        Err(_) => return 0,
+    };
+    let month = match month_number(date_fields[1]) {
+        Some(m) => m,
+        None => return 0,
+    };
+    let mut year: i64 = match date_fields[2].parse() {
+        Ok(y) => y,
+        Err(_) => return 0,
+    };
+    // RFC 850 iki haneli yıl: 70-99 → 19xx, 00-69 → 20xx
+    if year < 100 {
+        year += if year >= 70 { 1900 } else { 2000 };
+    }
+
+    // Zaman parçası: "07:28:00"
+    let mut tparts = time_part.split(':');
+    let hour: u32 = tparts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let minute: u32 = tparts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let second: u32 = tparts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    if hour > 23 || minute > 59 || second > 60 || day == 0 || day > 31 {
+        return 0;
+    }
+
+    days_from_civil(year, month, day)
+        .checked_mul(86_400)
+        .and_then(|d| d.checked_add((hour * 3600 + minute * 60 + second) as i64))
+        .filter(|&v| v > 0)
+        .map(|v| v as u64)
+        .unwrap_or(0)
+}
+
+/// Ay adını (İngilizce, büyük/küçük harf duyarsız) 1-12 numarasına çevirir.
+fn month_number(name: &str) -> Option<u32> {
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    let lower = name.to_ascii_lowercase();
+    MONTHS
+        .iter()
+        .position(|m| lower.starts_with(m))
+        .map(|i| i as u32 + 1)
+}
+
+/// Howard Hinnant'ın days_from_civil algoritması: (yıl, ay, gün) →
+/// 1970-01-01'den itibaren gün sayısı.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = ((m as i64) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + (d as i64) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// Global çerez jarı örneği.
@@ -354,6 +452,45 @@ mod tests {
         assert!(path_matches("/foo/bar", "/foo"));
         assert!(path_matches("/foo", "/foo"));
         assert!(!path_matches("/bar", "/foo"));
+    }
+
+    #[test]
+    fn test_cookie_date_parsing() {
+        // RFC 1123: "Wed, 21 Oct 2015 07:28:00 GMT"
+        assert_eq!(
+            parse_cookie_date("Wed, 21 Oct 2015 07:28:00 GMT"),
+            1445412480
+        );
+        // Hafta günü olmadan
+        assert_eq!(parse_cookie_date("21 Oct 2015 07:28:00 GMT"), 1445412480);
+        // RFC 850 iki haneli yıl
+        assert_eq!(
+            parse_cookie_date("Wednesday, 21-Oct-15 07:28:00 GMT"),
+            1445412480
+        );
+        // Geçersiz girdi
+        assert_eq!(parse_cookie_date("not a date"), 0);
+        assert_eq!(parse_cookie_date(""), 0);
+    }
+
+    #[test]
+    fn test_expires_removes_cookie() {
+        let jar = CookieJar::new();
+        // Geçmişte dolan Expires → çerez eklenmez (silme isteği).
+        jar.set_cookie(
+            "old=1; Domain=example.com; Path=/; Expires=Mon, 01 Jan 2001 00:00:00 GMT",
+            "example.com",
+            "/",
+        );
+        assert_eq!(jar.len(), 0);
+        // Gelecek tarih → çerez eklenir.
+        jar.set_cookie(
+            "future=1; Domain=example.com; Path=/; Expires=Fri, 01 Jan 2038 00:00:00 GMT",
+            "example.com",
+            "/",
+        );
+        assert_eq!(jar.len(), 1);
+        assert_eq!(jar.list()[0].name, "future");
     }
 
     #[test]

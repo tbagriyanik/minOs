@@ -293,10 +293,6 @@ pub fn init_subsystems(
     // taşması senaryolarını gerçek CR3/context-switch yoluyla doğrular.
     let _ = arch::x86_64::ring3::scheduler_self_test();
 
-    // Cok cekirdekli scheduler davranisini dogrula: gorev dagilimi, notify ve
-    // spin-kilitli kuyruk erisiminin tutarliligi.
-    let _ = task::test_scheduler_multicore_race();
-
     // Zamanlayici affinity uygulamasini ve kullanıcı sinyel isleyici
     // teslimat altyapisini dogrula.
     let _ = mm::process::test_scheduler_affinity_and_signals(

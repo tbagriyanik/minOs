@@ -2117,7 +2117,7 @@ pub fn self_test() -> bool {
 // Geriye dönük uyumluluk için adlar burada yeniden dışa aktarılır.
 // ---------------------------------------------------------------------------
 pub use crate::drivers::http2::{
-    h2, h2_send_preface, http2_get, is_http2_response, Http2Connection,
+    h2, h2_send_preface, http2_get, http2_get_full, is_http2_response, Http2Connection,
 };
 
 /// WebSocket (RFC 6455) yardımcıları. TCP/TLS taşımasını çağıran katman sağlar.

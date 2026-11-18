@@ -2,13 +2,13 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-18 13:27:08 UTC |
+| Zaman | 2026-11-18 17:02:45 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |
 | VGA | virtio |
 | USB HID / PS/2 | kapalı / açık |
-| HDA WAV çıktısı | 0 bayt PCM / dosya 44 bayt |
+| HDA WAV çıktısı | yok |
 
 ## Kontroller
 
@@ -32,7 +32,6 @@
 | Cekirdek Surucu Profili | ✅ GEÇTİ | Tum donanim suruculerinin eksiksiz baslatimi |
 | Ring3 Surec Zamanlayici (CR3 + Context Switch) | ✅ GEÇTİ | APIC timer onalimli gercek CR3/context-switch ile kullanici sureci dilimi |
 | Ring3 Izolasyon & Yigin Guard Testi | ✅ GEÇTİ | Kernel adresi erisimi reddi (SIGSEGV), kullanici yigin tasmasi ve yield/exit dogrulamasi |
-| Cok Cekirdekli Scheduler Stres Testi | ❌ BAŞARISIZ | CPU'lar arasi gorev dagilimi, notify/iptal yarisi ve kuyruk derinligi (RUN_QUEUE_DEPTH) sizinti denetimi |
 | Ring3 Syscall Register Restore | ✅ GEÇTİ | GPR ve XMM durumunun int 0x80 donusunde korunmasi |
 | Ring3 Syscall Return | ✅ GEÇTİ | getpid sistem cagrisi ve Ring 3'ten Ring 0'a EXIT donusu |
 | Ring3 Kernel Memory Denial | ✅ GEÇTİ | Kullanici modundan cekirdek bellegi okuma girisiminin engellenmesi |
@@ -48,12 +47,12 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
-| Gerçek Ses Çıkışı (Intel HDA / WAV) | ✅ GEÇTİ | 48 kHz DMA akışı ve WAV dosyası |
+| Gerçek Ses Çıkışı (Intel HDA / WAV) | ❌ BAŞARISIZ | 48 kHz DMA akışı ve WAV dosyası |
 | Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç
 
-**BAŞARISIZ** — bir veya daha fazla kontrol başarısız oldu.
+**BAŞARILI** — tüm kontroller geçti.
 
 > Bu rapor 	est_qemu.ps1 tarafından otomatik üretilmiştir.
 

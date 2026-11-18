@@ -626,6 +626,22 @@ fn is_void_tag(name: &[u8]) -> bool {
     VOID_TAGS.iter().any(|tag| name.eq_ignore_ascii_case(tag))
 }
 
+/// Origin için web storage VFS dosya yolu üretir
+/// ("https://example.com" → "/browser/webstorage/https___example.com.bin").
+fn webstorage_vfs_path(origin: &str) -> String {
+    let safe: String = origin
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("/browser/webstorage/{}.bin", safe)
+}
+
 /// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
 pub fn render_html_to_lines(
     body: &[u8],
@@ -636,18 +652,57 @@ pub fn render_html_to_lines(
     animation_start_ms: usize,
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
-    vfs: Option<&mut VirtualFileSystem>,
+    mut vfs: Option<&mut VirtualFileSystem>,
     image_cache: Option<&ImageCache>,
     page_background: &mut Option<Arc<BackgroundImage>>,
     canvases: &mut Vec<super::canvas::CanvasElement>,
     media_players: &mut super::media::MediaPlayers,
     iframes: &mut super::iframe::IFrames,
     pending_resources: &mut Vec<String>,
+    script_navigation: &mut Option<String>,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
-    // script etiketleri ise çıktidan çıkarılır.
-    let js_body = crate::apps::js::inline_scripts(body);
+    // script etiketleri ise çıktidan çıkarılır. Sayfa URL'si `location`,
+    // `navigator` ve origin bazlı web storage için çalışma zamanına aktarılır.
+    let script_origin = crate::apps::js::storage_origin_of(base_url.unwrap_or(""));
+    #[cfg(not(any(test, host_fs_tests)))]
+    {
+        // Origin'in localStorage içeriği daha önce yüklenmediyse VFS'ten al.
+        if !script_origin.is_empty() && !crate::apps::js::webstorage_is_loaded(&script_origin) {
+            if let Some(v) = vfs.as_mut() {
+                if !v.is_dir("/browser") {
+                    let _ = v.create_dir("/browser");
+                }
+                if !v.is_dir("/browser/webstorage") {
+                    let _ = v.create_dir("/browser/webstorage");
+                }
+                let path = webstorage_vfs_path(&script_origin);
+                if let Some(data) = v.read_file(&path) {
+                    let data = data.to_vec();
+                    crate::apps::js::JsRuntime::webstorage_load_local(&script_origin, &data);
+                    crate::apps::js::webstorage_mark_loaded(&script_origin);
+                }
+            }
+        }
+    }
+    let script_result = crate::apps::js::inline_scripts_ex(body, base_url);
+    let js_body = script_result.html;
     let body: &[u8] = &js_body;
+    if let Some(nav) = script_result.pending_navigation {
+        *script_navigation = Some(nav);
+    }
+    #[cfg(not(any(test, host_fs_tests)))]
+    {
+        // Güncel localStorage içeriğini VFS'e kalıcı yaz.
+        if !script_origin.is_empty() {
+            if let Some(v) = vfs.as_mut() {
+                if v.is_dir("/browser/webstorage") {
+                    let data = crate::apps::js::JsRuntime::webstorage_dump_local(&script_origin);
+                    let _ = v.write_file(&webstorage_vfs_path(&script_origin), &data);
+                }
+            }
+        }
+    }
     let vfs_ref = vfs.as_deref();
     let mut current_color;
     let mut current_bg: Option<u32>;

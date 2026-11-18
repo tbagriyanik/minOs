@@ -63,6 +63,80 @@ use alloc::vec::Vec;
 #[cfg(not(any(test, host_fs_tests)))]
 use crate::drivers::http;
 
+use core::cell::RefCell;
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+// ── Köken (origin) bazlı Web Depolama ─────────────────────────────
+// localStorage kalıcı, sessionStorage oturum içi anahtar-değer depolarıdır.
+// Her origin kendi bölmesini alır; `page_origin` boşsa (birim testleri,
+// bağlamsız çalıştırma) çalışma zamanı içi eşlemeler kullanılır.
+
+type OriginStore = BTreeMap<String, BTreeMap<String, String>>;
+
+static LOCAL_ORIGIN_STORE: AtomicPtr<RefCell<OriginStore>> = AtomicPtr::new(core::ptr::null_mut());
+static SESSION_ORIGIN_STORE: AtomicPtr<RefCell<OriginStore>> =
+    AtomicPtr::new(core::ptr::null_mut());
+
+fn origin_store(slot: &'static AtomicPtr<RefCell<OriginStore>>) -> &'static RefCell<OriginStore> {
+    let ptr = slot.load(Ordering::Acquire);
+    if ptr.is_null() {
+        let store = Box::into_raw(Box::new(RefCell::new(OriginStore::new())));
+        slot.store(store, Ordering::Release);
+        unsafe { &*store }
+    } else {
+        unsafe { &*ptr }
+    }
+}
+
+/// VFS'ten yüklenmiş origin'ler (yinelenen disk okumasını önler).
+static STORAGE_LOADED: AtomicPtr<RefCell<BTreeMap<String, ()>>> =
+    AtomicPtr::new(core::ptr::null_mut());
+
+fn storage_loaded_set() -> &'static RefCell<BTreeMap<String, ()>> {
+    let ptr = STORAGE_LOADED.load(Ordering::Acquire);
+    if ptr.is_null() {
+        let set = Box::into_raw(Box::new(RefCell::new(BTreeMap::new())));
+        STORAGE_LOADED.store(set, Ordering::Release);
+        unsafe { &*set }
+    } else {
+        unsafe { &*ptr }
+    }
+}
+
+/// Belirtilen origin için depolama daha önce VFS'ten yüklendi mi?
+pub fn webstorage_is_loaded(origin: &str) -> bool {
+    storage_loaded_set().borrow().contains_key(origin)
+}
+
+/// Depolamanın VFS'ten yüklendiğini işaretler.
+pub fn webstorage_mark_loaded(origin: &str) {
+    storage_loaded_set()
+        .borrow_mut()
+        .insert(String::from(origin), ());
+}
+
+/// `scheme://host[:port]` biçiminde origin üretir; ayrıştırılamazsa boş döner.
+pub fn storage_origin_of(url: &str) -> String {
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
+    } else if let Some(r) = url.strip_prefix("minos://") {
+        ("minos", r)
+    } else {
+        return String::new();
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.');
+    if authority.is_empty() {
+        return String::new();
+    }
+    format!("{}://{}", scheme, authority)
+}
+
 // ── DOM Veri Yapıları ──────────────────────────────────────────────
 
 /// Tek bir DOM elemanını temsil eder.
@@ -457,6 +531,13 @@ pub struct JsRuntime {
     pub modules: BTreeMap<String, JsValue>,
     /// `register_module` sırasında toplanan ESM dışa aktarımları.
     current_exports: Option<BTreeMap<String, JsValue>>,
+    /// Sayfanın tam URL'si (`location.href` için).
+    pub page_url: String,
+    /// Sayfa kökeni (origin); localStorage/sessionStorage anahtarı.
+    pub page_origin: String,
+    /// `location.assign/replace/reload` veya `history.back/forward` sonrası
+    /// tarayıcının izlemesi gereken gezinme isteği.
+    pub pending_navigation: Option<String>,
 }
 
 impl Clone for JsRuntime {
@@ -502,6 +583,9 @@ impl Clone for JsRuntime {
             next_ws_id: self.next_ws_id,
             modules: self.modules.clone(),
             current_exports: self.current_exports.clone(),
+            page_url: self.page_url.clone(),
+            page_origin: self.page_origin.clone(),
+            pending_navigation: self.pending_navigation.clone(),
         }
     }
 }
@@ -575,6 +659,9 @@ impl JsRuntime {
             next_ws_id: 1,
             modules: BTreeMap::new(),
             current_exports: None,
+            page_url: String::new(),
+            page_origin: String::new(),
+            pending_navigation: None,
         }
     }
 
@@ -1550,21 +1637,96 @@ impl JsRuntime {
         sub.call_function(name, args, &mut dummy)
     }
 
-    /// fetch(url) — HTTP GET isteği yapar ve Promise değeri döndürür.
+    /// fetch(url[, options]) — HTTP isteği yapar ve Promise değeri döndürür.
+    /// `options`: `{ method, body, headers: {ad: değer} }` desteklenir.
+    /// İstekler tarayıcının ortak çerez kavanoğundan yararlanır.
     #[cfg(not(any(test, host_fs_tests)))]
-    fn do_fetch(&mut self, url: &str) -> Result<JsValue, i32> {
+    fn do_fetch(&mut self, args: &str) -> Result<JsValue, i32> {
         if !crate::drivers::e1000::is_ready() {
             return Err(http::E_HTTP);
         }
 
-        let mut resp_buf = [0u8; 8192];
-        // http_get_impl IPv6 (AAAA) öncelikli, IPv4'ye otomatik geri düşme
-        // (TCP/TLS/HTTP hatasında) ile dual-stack bağlantı kurar.
-        let (status, hlen, total) = http::http_get_impl(url, &mut resp_buf, None)?;
+        // Argümanlar: fetch(url) veya fetch(url, { method, body, headers }).
+        let parts = split_top_level_comma(args);
+        if parts.is_empty() {
+            return Err(http::E_URL);
+        }
+        let url = self.eval_val(parts[0].trim()).to_str();
+        let url = url.trim_matches(|c| c == '\'' || c == '"').to_string();
+        if url.is_empty() {
+            return Err(http::E_URL);
+        }
 
-        let _headers = &resp_buf[..hlen];
-        let body_start = hlen;
-        let body_end = total;
+        let mut method = http::HttpMethod::Get;
+        let mut body: Option<String> = None;
+        let mut extra_headers = String::new();
+        let mut has_content_type = false;
+        if let Some(opt_expr) = parts.get(1) {
+            if let JsValue::Object(map) = self.eval_val(opt_expr.trim()) {
+                if let Some(JsValue::String(m)) = map.get("method") {
+                    method = match m.to_ascii_uppercase().as_str() {
+                        "POST" => http::HttpMethod::Post,
+                        "PUT" => http::HttpMethod::Put,
+                        "PATCH" => http::HttpMethod::Patch,
+                        "DELETE" => http::HttpMethod::Delete,
+                        "HEAD" => http::HttpMethod::Head,
+                        "OPTIONS" => http::HttpMethod::Options,
+                        _ => http::HttpMethod::Get,
+                    };
+                }
+                if let Some(JsValue::String(b)) = map.get("body") {
+                    body = Some(b.clone());
+                }
+                if let Some(JsValue::Object(hdrs)) = map.get("headers") {
+                    for (k, v) in hdrs {
+                        if k.eq_ignore_ascii_case("content-type") {
+                            has_content_type = true;
+                        }
+                        extra_headers.push_str(&format!("{}: {}\r\n", k, v.to_str()));
+                    }
+                }
+            }
+        }
+
+        // Ortak çerez kavanoğundan uygun Cookie başlığını ekle
+        // (fetch'in sayfa ile aynı oturumu paylaşması gerekir).
+        {
+            let (is_https, host, path) = Self::parse_fetch_url_parts(&url);
+            let cookie = crate::drivers::cookie::get_cookie_header(&host, &path, is_https, true);
+            if !cookie.is_empty() && !extra_headers.to_ascii_lowercase().contains("cookie:") {
+                extra_headers.push_str("Cookie: ");
+                extra_headers.push_str(&cookie);
+                extra_headers.push_str("\r\n");
+            }
+        }
+
+        let mut resp_buf = vec![0u8; 32768];
+        let body_bytes = body.as_deref().map(|b| b.as_bytes());
+        let extra = if extra_headers.is_empty() {
+            None
+        } else {
+            Some(extra_headers.as_str())
+        };
+        // http_request IPv6 öncelikli, IPv4 geri dönüşlüdür ve yönlendirmeleri
+        // kendisi izler.
+        let content_type = if body.is_some() && !has_content_type {
+            Some("text/plain;charset=UTF-8")
+        } else {
+            None
+        };
+        let (status, hlen, total) = http::http_request(
+            method,
+            &url,
+            &mut resp_buf,
+            body_bytes,
+            content_type,
+            extra,
+            None,
+        )?;
+
+        let header_bytes = &resp_buf[..hlen.min(total)];
+        let body_start = hlen.min(total);
+        let body_end = total.min(resp_buf.len());
 
         let body = core::str::from_utf8(&resp_buf[body_start..body_end]).unwrap_or("");
         let status_text = match status {
@@ -1595,7 +1757,47 @@ impl JsRuntime {
             JsValue::String(status_text.to_string()),
         );
         resp_obj.insert(String::from("body"), JsValue::String(body.to_string()));
-        resp_obj.insert(String::from("headers"), JsValue::Object(BTreeMap::new()));
+        resp_obj.insert(String::from("url"), JsValue::String(url.clone()));
+        resp_obj.insert(String::from("type"), JsValue::String(String::from("basic")));
+        resp_obj.insert(String::from("redirected"), JsValue::Bool(false));
+
+        // Yanıt başlıklarını küçük harfli adlarla nesneye dök;
+        // `r.headers['content-type']` ve `r.headers.get('content-type')`
+        // erişimi çalışır.
+        let mut headers_map = BTreeMap::new();
+        for line in header_bytes.split(|b| *b == b'\n').skip(1) {
+            let l = if line.last() == Some(&b'\r') {
+                &line[..line.len() - 1]
+            } else {
+                line
+            };
+            if let Some(colon) = l.iter().position(|&b| b == b':') {
+                if let (Ok(name), Ok(value)) = (
+                    core::str::from_utf8(&l[..colon]),
+                    core::str::from_utf8(&l[colon + 1..]),
+                ) {
+                    headers_map.insert(
+                        name.trim().to_ascii_lowercase(),
+                        JsValue::String(value.trim().to_string()),
+                    );
+                }
+            }
+        }
+        // Headers.get('ad') — büyük/küçük harf duyarsız.
+        headers_map.insert(
+            String::from("get"),
+            JsValue::Object(BTreeMap::from([
+                (
+                    String::from("__fn__"),
+                    JsValue::String(String::from("return this[k.toLowerCase()] || null;")),
+                ),
+                (
+                    String::from("__params__"),
+                    JsValue::String(String::from("k")),
+                ),
+            ])),
+        );
+        resp_obj.insert(String::from("headers"), JsValue::Object(headers_map));
 
         // text() metodu
         resp_obj.insert(
@@ -1641,56 +1843,402 @@ impl JsRuntime {
     // Host test harness'ı gerçek ağ sürücülerini bağlamaz. JS testleri ağ
     // isteğini değil, çalışma zamanının geri kalanını doğrular.
     #[cfg(any(test, host_fs_tests))]
-    fn do_fetch(&mut self, _url: &str) -> Result<JsValue, i32> {
+    fn do_fetch(&mut self, _args: &str) -> Result<JsValue, i32> {
         Err(1003)
+    }
+
+    /// URL'den çerez kapsamı için (https, host, path) döner.
+    #[cfg(not(any(test, host_fs_tests)))]
+    fn parse_fetch_url_parts(url: &str) -> (bool, String, String) {
+        let (is_https, rest) = if let Some(r) = url.strip_prefix("https://") {
+            (true, r)
+        } else if let Some(r) = url.strip_prefix("http://") {
+            (false, r)
+        } else {
+            return (false, String::new(), String::from("/"));
+        };
+        let host_end = rest.find('/').unwrap_or(rest.len());
+        let mut host = rest[..host_end].to_string();
+        // portu ayır
+        if let Some(c) = host.find(':') {
+            host.truncate(c);
+        }
+        let path = if rest.len() > host_end {
+            let p = &rest[host_end..];
+            let q = p.find('?').unwrap_or(p.len());
+            p[..q].to_string()
+        } else {
+            String::from("/")
+        };
+        (is_https, host, path)
+    }
+
+    /// Origin deposuna erişim sağlar. `page_origin` boşsa çalışma zamanı
+    /// içi eşlemeye (birim testleri) düşer.
+    fn storage_map(
+        &mut self,
+        session: bool,
+        f: impl FnOnce(&mut BTreeMap<String, String>) -> JsValue,
+    ) -> JsValue {
+        if self.page_origin.is_empty() {
+            let map = if session {
+                &mut self.session_storage
+            } else {
+                &mut self.local_storage
+            };
+            return f(map);
+        }
+        let store = if session {
+            origin_store(&SESSION_ORIGIN_STORE)
+        } else {
+            origin_store(&LOCAL_ORIGIN_STORE)
+        };
+        let mut guard = store.borrow_mut();
+        let map = guard.entry(String::from(&self.page_origin)).or_default();
+        f(map)
     }
 
     /// localStorage.getItem(key) — kalıcı depodan değer okur.
     fn local_storage_get(&mut self, key: &str) -> JsValue {
-        self.local_storage
-            .get(key)
-            .map(|v| JsValue::String(v.clone()))
-            .unwrap_or(JsValue::Null)
+        let key = String::from(key);
+        self.storage_map(false, |m| {
+            m.get(&key)
+                .map(|v| JsValue::String(v.clone()))
+                .unwrap_or(JsValue::Null)
+        })
     }
 
     /// localStorage.setItem(key, value) — kalıcı depoya değer yazar.
     fn local_storage_set(&mut self, key: &str, value: &str) {
-        self.local_storage
-            .insert(String::from(key), String::from(value));
+        let key = String::from(key);
+        let value = String::from(value);
+        let _ = self.storage_map(false, |m| {
+            m.insert(key.clone(), value.clone());
+            JsValue::Undefined
+        });
     }
 
     /// localStorage.removeItem(key) — kalıcı depodan değer siler.
     fn local_storage_remove(&mut self, key: &str) {
-        self.local_storage.remove(key);
+        let key = String::from(key);
+        let _ = self.storage_map(false, |m| {
+            m.remove(&key);
+            JsValue::Undefined
+        });
     }
 
     /// localStorage.clear() — kalıcı depoyu temizler.
     fn local_storage_clear(&mut self) {
-        self.local_storage.clear();
+        let _ = self.storage_map(false, |m| {
+            m.clear();
+            JsValue::Undefined
+        });
     }
 
     /// sessionStorage.getItem(key) — oturum deposundan değer okur.
     fn session_storage_get(&mut self, key: &str) -> JsValue {
-        self.session_storage
-            .get(key)
-            .map(|v| JsValue::String(v.clone()))
-            .unwrap_or(JsValue::Null)
+        let key = String::from(key);
+        self.storage_map(true, |m| {
+            m.get(&key)
+                .map(|v| JsValue::String(v.clone()))
+                .unwrap_or(JsValue::Null)
+        })
     }
 
     /// sessionStorage.setItem(key, value) — oturum deposuna değer yazar.
     fn session_storage_set(&mut self, key: &str, value: &str) {
-        self.session_storage
-            .insert(String::from(key), String::from(value));
+        let key = String::from(key);
+        let value = String::from(value);
+        let _ = self.storage_map(true, |m| {
+            m.insert(key.clone(), value.clone());
+            JsValue::Undefined
+        });
     }
 
     /// sessionStorage.removeItem(key) — oturum deposundan değer siler.
     fn session_storage_remove(&mut self, key: &str) {
-        self.session_storage.remove(key);
+        let key = String::from(key);
+        let _ = self.storage_map(true, |m| {
+            m.remove(&key);
+            JsValue::Undefined
+        });
     }
 
     /// sessionStorage.clear() — oturum deposunu temizler.
     fn session_storage_clear(&mut self) {
-        self.session_storage.clear();
+        let _ = self.storage_map(true, |m| {
+            m.clear();
+            JsValue::Undefined
+        });
+    }
+
+    /// Depolama uzunluğu (origin deposu ya da çalışma zamanı içi eşleme).
+    fn storage_len(&mut self, session: bool) -> usize {
+        if self.page_origin.is_empty() {
+            return if session {
+                self.session_storage.len()
+            } else {
+                self.local_storage.len()
+            };
+        }
+        let store = if session {
+            origin_store(&SESSION_ORIGIN_STORE)
+        } else {
+            origin_store(&LOCAL_ORIGIN_STORE)
+        };
+        let guard = store.borrow();
+        guard.get(&self.page_origin).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Belirtilen origin'in localStorage içeriğini ikili biçimde döndürür
+    /// (VFS kalıcılığı için). Biçim: yineleyen [u32 klen][key][u32 vlen][value].
+    pub fn webstorage_dump_local(origin: &str) -> Vec<u8> {
+        let store = origin_store(&LOCAL_ORIGIN_STORE);
+        let guard = store.borrow();
+        let mut out = Vec::new();
+        if let Some(map) = guard.get(origin) {
+            for (k, v) in map {
+                out.extend_from_slice(&(k.len() as u32).to_be_bytes());
+                out.extend_from_slice(k.as_bytes());
+                out.extend_from_slice(&(v.len() as u32).to_be_bytes());
+                out.extend_from_slice(v.as_bytes());
+            }
+        }
+        out
+    }
+
+    /// VFS'ten okunan ikili veriyi origin'in localStorage'ına yükler.
+    /// Mevcut içerik korunur; aynı anahtarlar güncellenir.
+    pub fn webstorage_load_local(origin: &str, data: &[u8]) {
+        let store = origin_store(&LOCAL_ORIGIN_STORE);
+        let mut guard = store.borrow_mut();
+        let map = guard.entry(String::from(origin)).or_default();
+        let mut p = 0usize;
+        while p + 4 <= data.len() {
+            let klen =
+                u32::from_be_bytes([data[p], data[p + 1], data[p + 2], data[p + 3]]) as usize;
+            p += 4;
+            if p + klen + 4 > data.len() {
+                break;
+            }
+            let key = match core::str::from_utf8(&data[p..p + klen]) {
+                Ok(s) => String::from(s),
+                Err(_) => {
+                    p += klen;
+                    continue;
+                }
+            };
+            p += klen;
+            let vlen =
+                u32::from_be_bytes([data[p], data[p + 1], data[p + 2], data[p + 3]]) as usize;
+            p += 4;
+            if p + vlen > data.len() {
+                break;
+            }
+            if let Ok(val) = core::str::from_utf8(&data[p..p + vlen]) {
+                map.insert(key, String::from(val));
+            }
+            p += vlen;
+        }
+    }
+
+    /// `location` nesnesi: sayfa URL'sinin bileşenlerini ve gezinme
+    /// metotlarını içerir.
+    fn location_object(&self) -> JsValue {
+        let url = self.page_url.as_str();
+        let mut map = BTreeMap::new();
+        map.insert(String::from("href"), JsValue::String(String::from(url)));
+        map.insert(
+            String::from("ancestorOrigins"),
+            JsValue::Object(BTreeMap::new()),
+        );
+
+        let (scheme, rest) = if url.contains("://") {
+            let i = url.find("://").unwrap();
+            (&url[..i], &url[i + 3..])
+        } else {
+            ("", url)
+        };
+        let (authority, path_query) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, "/"),
+        };
+        let (host, port) = match authority.rfind(':') {
+            Some(i) if !authority[..i].contains(':') => (&authority[..i], &authority[i + 1..]),
+            _ => (authority, ""),
+        };
+        let (pathname, search_hash) = match path_query.find(['?', '#']) {
+            Some(i) => (&path_query[..i], &path_query[i..]),
+            None => (path_query, ""),
+        };
+        let (search, hash) = match search_hash.find('#') {
+            Some(i) => (&search_hash[..i], &search_hash[i..]),
+            None => {
+                if search_hash.starts_with('#') {
+                    ("", search_hash)
+                } else {
+                    (search_hash, "")
+                }
+            }
+        };
+        let default_port = match scheme {
+            "https" => "443",
+            "http" => "80",
+            _ => "",
+        };
+
+        map.insert(
+            String::from("protocol"),
+            JsValue::String(format!("{}:", scheme)),
+        );
+        map.insert(
+            String::from("host"),
+            JsValue::String(String::from(authority)),
+        );
+        map.insert(
+            String::from("hostname"),
+            JsValue::String(String::from(host)),
+        );
+        map.insert(
+            String::from("port"),
+            JsValue::String(if port.is_empty() || port == default_port {
+                String::new()
+            } else {
+                String::from(port)
+            }),
+        );
+        map.insert(
+            String::from("pathname"),
+            JsValue::String(String::from(if pathname.is_empty() {
+                "/"
+            } else {
+                pathname
+            })),
+        );
+        map.insert(
+            String::from("search"),
+            JsValue::String(String::from(search)),
+        );
+        map.insert(String::from("hash"), JsValue::String(String::from(hash)));
+        map.insert(
+            String::from("origin"),
+            JsValue::String(storage_origin_of(url)),
+        );
+        JsValue::Object(map)
+    }
+
+    /// `navigator` nesnesi: tarayıcı/ yetenek bilgileri.
+    fn navigator_object(&self) -> JsValue {
+        let mut map = BTreeMap::new();
+        map.insert(
+            String::from("userAgent"),
+            JsValue::String(String::from("minOs/1.5")),
+        );
+        map.insert(
+            String::from("appVersion"),
+            JsValue::String(String::from("5.0 (minOs)")),
+        );
+        map.insert(
+            String::from("appName"),
+            JsValue::String(String::from("minOs")),
+        );
+        map.insert(
+            String::from("platform"),
+            JsValue::String(String::from("minOs")),
+        );
+        map.insert(
+            String::from("language"),
+            JsValue::String(String::from("tr-TR")),
+        );
+        map.insert(
+            String::from("languages"),
+            JsValue::Array(vec![JsValue::String(String::from("tr-TR"))]),
+        );
+        map.insert(String::from("onLine"), JsValue::Bool(true));
+        map.insert(String::from("cookieEnabled"), JsValue::Bool(true));
+        map.insert(String::from("doNotTrack"), JsValue::Null);
+        JsValue::Object(map)
+    }
+
+    /// `history` nesnesi: gezinme durumu ve geri/ileri metotları.
+    fn history_object(&self) -> JsValue {
+        let mut map = BTreeMap::new();
+        #[cfg(not(any(test, host_fs_tests)))]
+        let len = crate::apps::browser::history_count_pub();
+        #[cfg(any(test, host_fs_tests))]
+        let len = 0usize;
+        map.insert(String::from("length"), JsValue::Number(len as i64));
+        map.insert(String::from("state"), JsValue::Null);
+        JsValue::Object(map)
+    }
+
+    /// `window` nesnesi: global kapsam taklidi; temel tarayıcı nesnelerini
+    /// `window.` önekiyle erişilebilir kılar.
+    fn window_object(&mut self) -> JsValue {
+        let mut map = BTreeMap::new();
+        map.insert(String::from("location"), self.location_object());
+        map.insert(String::from("navigator"), self.navigator_object());
+        map.insert(String::from("history"), self.history_object());
+        let mut s = BTreeMap::new();
+        s.insert(
+            String::from("__storage_type__"),
+            JsValue::String(String::from("local")),
+        );
+        map.insert(String::from("localStorage"), JsValue::Object(s));
+        let mut s2 = BTreeMap::new();
+        s2.insert(
+            String::from("__storage_type__"),
+            JsValue::String(String::from("session")),
+        );
+        map.insert(String::from("sessionStorage"), JsValue::Object(s2));
+        JsValue::Object(map)
+    }
+
+    /// `location` metot çağrılarını (`assign`, `replace`, `reload`,
+    /// `toString`) ve `history` gezinmesini (`back`, `forward`, `go`)
+    /// işler. `true` dönerse çağrı tüketilmiştir.
+    fn browser_object_method(&mut self, base: &str, method: &str, args: &str) -> Option<JsValue> {
+        match base {
+            "location" | "window.location" => match method {
+                "assign" | "replace" => {
+                    let url = self.eval_val(args).to_str();
+                    let url = url.trim_matches(|c| c == '\'' || c == '"');
+                    if !url.is_empty() {
+                        self.pending_navigation = Some(String::from(url));
+                    }
+                    Some(JsValue::Undefined)
+                }
+                "reload" => {
+                    self.pending_navigation = Some(String::from("__minos_reload__"));
+                    Some(JsValue::Undefined)
+                }
+                "toString" => Some(JsValue::String(self.page_url.clone())),
+                _ => None,
+            },
+            "history" | "window.history" => match method {
+                "back" => {
+                    self.pending_navigation = Some(String::from("__minos_history_back__"));
+                    Some(JsValue::Undefined)
+                }
+                "forward" => {
+                    self.pending_navigation = Some(String::from("__minos_history_forward__"));
+                    Some(JsValue::Undefined)
+                }
+                "go" => {
+                    let n = self.eval_val(args).to_i64();
+                    self.pending_navigation = Some(if n < 0 {
+                        String::from("__minos_history_back__")
+                    } else if n > 0 {
+                        String::from("__minos_history_forward__")
+                    } else {
+                        String::from("__minos_reload__")
+                    });
+                    Some(JsValue::Undefined)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     pub fn add_event_listener(&mut self, target: &str, event_type: &str, handler: &str) {
@@ -2231,6 +2779,11 @@ impl JsRuntime {
                     }
                     _ => {}
                 },
+                "location" | "history" | "window.location" | "window.history" => {
+                    if let Some(v) = self.browser_object_method(base, method, args) {
+                        return v;
+                    }
+                }
                 "localStorage" => match method {
                     "getItem" => {
                         let key = self.eval_val(args).to_str();
@@ -2255,7 +2808,7 @@ impl JsRuntime {
                         return JsValue::Undefined;
                     }
                     "length" => {
-                        return JsValue::Number(self.local_storage.len() as i64);
+                        return JsValue::Number(self.storage_len(false) as i64);
                     }
                     _ => {}
                 },
@@ -2283,7 +2836,7 @@ impl JsRuntime {
                         return JsValue::Undefined;
                     }
                     "length" => {
-                        return JsValue::Number(self.session_storage.len() as i64);
+                        return JsValue::Number(self.storage_len(true) as i64);
                     }
                     _ => {}
                 },
@@ -3199,12 +3752,10 @@ impl JsRuntime {
             return JsValue::String(String::from(v));
         }
 
-        // fetch(url) — Promise döndürür
+        // fetch(url[, options]) — Promise döndürür
         if e.starts_with("fetch(") && e.ends_with(')') {
             if let Some((args, _)) = call_args(e, 5) {
-                let url = self.eval_val(args.trim()).to_str();
-                let url = url.trim_matches(|c| c == '\'' || c == '"');
-                match self.do_fetch(url) {
+                match self.do_fetch(args) {
                     Ok(promise_val) => {
                         return promise_val;
                     }
@@ -3213,6 +3764,20 @@ impl JsRuntime {
                     }
                 }
             }
+        }
+
+        // Tarayıcı nesneleri: navigator / location / history / window
+        if e == "navigator" {
+            return self.navigator_object();
+        }
+        if e == "location" {
+            return self.location_object();
+        }
+        if e == "history" {
+            return self.history_object();
+        }
+        if e == "window" || e == "self" || e == "globalThis" {
+            return self.window_object();
         }
 
         // localStorage / sessionStorage — depolama nesnesi döndürür
@@ -4174,6 +4739,15 @@ impl JsRuntime {
             if !s[eq_pos + 1..].trim_start().starts_with('=') {
                 let lhs = s[..eq_pos].trim();
                 let rhs = s[eq_pos + 1..].trim();
+                // `location.href = url` gezinme isteği üretir.
+                if lhs == "location.href" || lhs == "window.location.href" {
+                    let url = self.eval_val(rhs).to_str();
+                    let url = url.trim_matches(|c| c == '\'' || c == '"');
+                    if !url.is_empty() {
+                        self.pending_navigation = Some(String::from(url));
+                    }
+                    return;
+                }
                 if let Some((obj_name, prop)) = lhs.rsplit_once('.') {
                     if !obj_name.contains(' ')
                         && !prop.contains(' ')
@@ -4360,9 +4934,8 @@ impl JsRuntime {
                     }
                     out.extend_from_slice(b"undefined");
                 } else if name == "fetch" {
-                    // fetch(url) — HTTP GET isteği yapar, Promise döndürür.
-                    let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
-                    let _ = self.do_fetch(url);
+                    // fetch(url[, options]) — HTTP isteği yapar, Promise döndürür.
+                    let _ = self.do_fetch(args);
                     out.extend_from_slice(b"0");
                 } else if name == "localStorage" || name == "sessionStorage" {
                     out.extend_from_slice(b"0");
@@ -5668,8 +6241,30 @@ pub fn run_script(code: &str, rt: &mut JsRuntime, out: &mut Vec<u8>) {
 ///
 /// `document.write(...)` çıktıları, betiğin bulunduğu yere HTML olarak gömülür;
 /// betik etiketleri ise çıktidan çıkarılır.
-pub fn inline_scripts(html: &[u8]) -> Vec<u8> {
+/// `<script>` çalıştırma sonucu: işlenmiş HTML ve (varsa) betiğin istediği
+/// gezinme (`location.assign`, `history.back` vb.).
+pub struct InlineScriptResult {
+    pub html: Vec<u8>,
+    pub pending_navigation: Option<String>,
+}
+
+/// `inline_scripts`'in sayfa bağlamlı sürümü: `base_url` `location`,
+/// `navigator` ve origin bazlı depolama için çalışma zamanına aktarılır.
+pub fn inline_scripts_ex(html: &[u8], base_url: Option<&str>) -> InlineScriptResult {
     let mut rt = JsRuntime::new();
+    if let Some(url) = base_url {
+        rt.page_url = String::from(url);
+        rt.page_origin = storage_origin_of(url);
+    }
+    let html_out = inline_scripts_run(html, &mut rt);
+    InlineScriptResult {
+        html: html_out,
+        pending_navigation: rt.pending_navigation.take(),
+    }
+}
+
+/// `<script>` bloklarını verilen çalışma zamanında çalıştırır.
+fn inline_scripts_run(html: &[u8], rt: &mut JsRuntime) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(html.len());
     let mut p = 0usize;
     while p < html.len() {
@@ -5714,6 +6309,14 @@ pub fn inline_scripts(html: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// HTML içindeki tüm `<script>` bloklarını sırayla çalıştırır (bağlamsız;
+/// testler ve iframe'ler için). Sayfa bağlamı gerekiyorsa
+/// `inline_scripts_ex` kullanılır.
+pub fn inline_scripts(html: &[u8]) -> Vec<u8> {
+    let mut rt = JsRuntime::new();
+    inline_scripts_run(html, &mut rt)
 }
 
 #[cfg(test)]
@@ -6370,5 +6973,93 @@ mod tests {
             if ("hidden" in o) { document.write("yes"); }
         "#;
         assert_eq!(render(code), "yes");
+    }
+
+    #[test]
+    fn storage_origin_of_parses_scheme_host_port() {
+        assert_eq!(
+            storage_origin_of("https://Example.com:8443/a/b?x=1"),
+            "https://Example.com:8443"
+        );
+        assert_eq!(storage_origin_of("http://a.b.c/"), "http://a.b.c");
+        assert_eq!(storage_origin_of("minos://settings"), "minos://settings");
+        assert_eq!(storage_origin_of("not a url"), "");
+        assert_eq!(storage_origin_of(""), "");
+    }
+
+    #[test]
+    fn origin_storage_is_isolated_per_origin() {
+        let mut rt = JsRuntime::new();
+        rt.page_origin = String::from("https://t-a.example");
+        rt.local_storage_set("k", "v-a");
+        rt.session_storage_set("s", "sv-a");
+
+        // Farklı origin aynı anahtarı görmez.
+        let mut rt2 = JsRuntime::new();
+        rt2.page_origin = String::from("https://t-b.example");
+        assert!(matches!(rt2.local_storage_get("k"), JsValue::Null));
+        assert!(matches!(rt2.session_storage_get("s"), JsValue::Null));
+
+        // Aynı origin'u paylaşan ayrı çalışma zamanı veriyi görür.
+        let mut rt3 = JsRuntime::new();
+        rt3.page_origin = String::from("https://t-a.example");
+        assert_eq!(rt3.local_storage_get("k").to_str(), "v-a");
+        assert_eq!(rt3.session_storage_get("s").to_str(), "sv-a");
+
+        rt3.local_storage_remove("k");
+        assert!(matches!(rt3.local_storage_get("k"), JsValue::Null));
+    }
+
+    #[test]
+    fn location_object_exposes_url_components() {
+        let mut rt = JsRuntime::new();
+        rt.page_url = String::from("https://ornek.com:8443/dizin/sayfa?q=1#bolum");
+        rt.page_origin = String::from("https://ornek.com:8443");
+        let loc = rt.location_object();
+        if let JsValue::Object(map) = loc {
+            assert_eq!(map.get("protocol").unwrap().to_str(), "https:");
+            assert_eq!(map.get("host").unwrap().to_str(), "ornek.com:8443");
+            assert_eq!(map.get("hostname").unwrap().to_str(), "ornek.com");
+            assert_eq!(map.get("port").unwrap().to_str(), "8443");
+            assert_eq!(map.get("pathname").unwrap().to_str(), "/dizin/sayfa");
+            assert_eq!(map.get("search").unwrap().to_str(), "?q=1");
+            assert_eq!(map.get("hash").unwrap().to_str(), "#bolum");
+            assert_eq!(map.get("href").unwrap().to_str(), rt.page_url);
+        } else {
+            panic!("location nesnesi Object olmalı");
+        }
+    }
+
+    #[test]
+    fn location_assign_sets_pending_navigation() {
+        let mut rt = JsRuntime::new();
+        rt.page_url = String::from("https://a.example/");
+        let v = rt.browser_object_method("location", "assign", "'/sonraki'");
+        assert!(matches!(v, Some(JsValue::Undefined)));
+        assert_eq!(rt.pending_navigation.as_deref(), Some("/sonraki"));
+        let _ = rt.browser_object_method("history", "back", "");
+        assert_eq!(
+            rt.pending_navigation.as_deref(),
+            Some("__minos_history_back__")
+        );
+    }
+
+    #[test]
+    fn webstorage_dump_load_roundtrip() {
+        let origin = "https://rt.example";
+        let mut rt = JsRuntime::new();
+        rt.page_origin = String::from(origin);
+        rt.local_storage_set("alpha", "bir");
+        rt.local_storage_set("beta", "iki");
+        let data = JsRuntime::webstorage_dump_local(origin);
+        assert!(!data.is_empty());
+
+        // Temiz bir origin deposuna yükle ve geri oku.
+        let target = "https://rt-load.example";
+        JsRuntime::webstorage_load_local(target, &data);
+        let mut rt2 = JsRuntime::new();
+        rt2.page_origin = String::from(target);
+        assert_eq!(rt2.local_storage_get("alpha").to_str(), "bir");
+        assert_eq!(rt2.local_storage_get("beta").to_str(), "iki");
     }
 }

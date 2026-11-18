@@ -60,6 +60,10 @@ const BROWSER_ERROR_LOG_LIMIT: usize = 64;
 /// sistem kilitlenmez, olay döngüsü çalışmaya devam eder.
 const HTML_LOAD_TIME_BUDGET_MS: u64 = 8;
 
+/// Bir gezinme sırasında izlenebilecek azami HTTP yönlendirme sayısı
+/// (modern tarayıcılarla uyumlu; döngü koruması).
+const MAX_REDIRECTS: usize = 10;
+
 /// HTTP yanıt tamponunun başlangıç boyutu (bayt).
 const RESPONSE_BUF_MIN: usize = 64 * 1024;
 /// HTTP yanıt tamponunun azami boyutu (bayt). Büyük resimler için büyütülür.
@@ -215,6 +219,122 @@ fn split_resource_url(url: &str) -> Option<(bool, &str, u16, &str)> {
     let path = suffix.split('#').next().unwrap_or("");
     let path = if path.is_empty() { "/" } else { path };
     Some((is_https, host, port, path))
+}
+
+/// Set-Cookie için varsayılan `Path` değeri (RFC 6265 §5.1.4): istek
+/// yolunun dizin kısmı. Sorgu/fragment atılır.
+fn cookie_default_path(path: &str) -> &str {
+    let path = path.split(['?', '#']).next().unwrap_or("/");
+    match path.rfind('/') {
+        Some(0) | None => "/",
+        Some(i) => &path[..=i],
+    }
+}
+
+/// Betik gezinme hedefini (`location.assign`, `location.href = ...`)
+/// sayfa URL'sine göre mutlak URL'ye çözer. Şema içeren adresler, `//host`
+/// ağ-yolu referansları, `#fragment`, `?sorgu`, `/kök` ve göreli yollar
+/// desteklenir; `minos:` şeması da korunur.
+fn resolve_script_url(nav: &str, page_url: &str) -> String {
+    let nav = nav.trim();
+    if nav.is_empty() {
+        return String::new();
+    }
+    if nav.starts_with("http://")
+        || nav.starts_with("https://")
+        || nav.starts_with("minos:")
+        || nav.starts_with("data:")
+        || nav.starts_with("about:")
+    {
+        return String::from(nav);
+    }
+
+    // Sayfa URL'sini şema + yetki + yol olarak ayrıştır.
+    let (scheme, rest) = match page_url.find("://") {
+        Some(i) => (&page_url[..i], &page_url[i + 3..]),
+        None => ("", page_url),
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let base = format!("{}://{}", scheme, authority);
+
+    if nav.starts_with("//") {
+        return format!("{}:{}", scheme, nav);
+    }
+    if nav.starts_with('/') {
+        return format!("{}{}", base, nav);
+    }
+    if nav.starts_with('?') {
+        let path_only = path.split('#').next().unwrap_or("/");
+        let path_only = path_only.split('?').next().unwrap_or("/");
+        return format!("{}{}{}", base, path_only, nav);
+    }
+    if nav.starts_with('#') {
+        let path_only = path.split('?').next().unwrap_or("/");
+        return format!("{}{}{}", base, path_only, nav);
+    }
+    // Göreli yol: sayfa yolunun dizin kısmına eklenir.
+    let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mut out = base;
+    out.push_str(dir);
+    if !dir.ends_with('/') {
+        out.push('/');
+    }
+    out.push_str(nav);
+    out
+}
+
+/// HTTP yönlendirme `Location` değerini geçerli sayfa bağlamına göre mutlak
+/// URL'ye çözer (göreli yol, `//host`, `?sorgu` ve `#fragment` biçimlerini
+/// destekler). `current_path` sorgu/fragment içermemelidir.
+fn resolve_redirect_target(
+    loc: &str,
+    is_https: bool,
+    host: &str,
+    port: u16,
+    current_path: &str,
+) -> String {
+    let current_scheme = if is_https { "https://" } else { "http://" };
+    let default_port = if is_https { 443 } else { 80 };
+    // `#fragment` başvuruları sorguyu da devralır (RFC 3986 §5.2.2);
+    // `?sorgu` ve göreli yollar yalnızca yol bölümünü kullanır.
+    let current_path_full = current_path;
+    let current_path = current_path.split('?').next().unwrap_or("/");
+    let base_path = current_path
+        .rsplit_once('/')
+        .map(|(base, _)| base)
+        .unwrap_or("");
+
+    let mut target = String::new();
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        target.push_str(loc);
+    } else if loc.starts_with("//") {
+        target.push_str(if is_https { "https:" } else { "http:" });
+        target.push_str(loc);
+    } else {
+        target.push_str(current_scheme);
+        target.push_str(host);
+        if port != default_port {
+            use core::fmt::Write as _;
+            let _ = write!(target, ":{}", port);
+        }
+        if loc.starts_with('/') {
+            target.push_str(loc);
+        } else if loc.starts_with('#') {
+            target.push_str(current_path_full);
+            target.push_str(loc);
+        } else if loc.starts_with('?') {
+            target.push_str(current_path);
+            target.push_str(loc);
+        } else {
+            target.push_str(base_path);
+            target.push('/');
+            target.push_str(loc);
+        }
+    }
+    target
 }
 
 /// Belirtilen etiketin (`<body ...>`) nitelik dilimini döndürür.
@@ -435,6 +555,11 @@ fn history_count() -> usize {
     HISTORY_COUNT.load(Ordering::Acquire)
 }
 
+/// JS `history.length` için genel erişim.
+pub fn history_count_pub() -> usize {
+    history_count()
+}
+
 /// Yeni bir adresi geçmişe ekler (art arda yinelemeleri atlar).
 fn history_push(url: &str) {
     if url.is_empty() {
@@ -627,7 +752,6 @@ pub struct BrowserApp {
     pub is_https: bool,
     pub is_post: bool,
     pub post_body: Vec<u8>,
-    pub cookies: Vec<HttpCookie>,
     pub response_data: Vec<u8>,
     pub response_len: usize,
     pub tls_session: Option<crate::drivers::tls::TlsSession>,
@@ -772,7 +896,11 @@ impl BrowserApp {
             .saturating_add(self.original_html.capacity())
             .saturating_add(self.current_resource_url.capacity())
             .saturating_add(self.post_body.capacity())
-            .saturating_add(vec_bytes(&self.cookies))
+            .saturating_add(
+                unsafe { &*crate::drivers::cookie::cookie_jar() }
+                    .len()
+                    .saturating_mul(128),
+            )
             .saturating_add(self.response_data.capacity())
             .saturating_add(self.tls_app_data.capacity())
             .saturating_add(self.tls_pending_request.capacity());
@@ -909,7 +1037,6 @@ impl BrowserApp {
             is_https: false,
             is_post: false,
             post_body: Vec::new(),
-            cookies: Vec::new(),
             response_data: Vec::new(),
             response_len: 0,
             tls_session: None,
@@ -1838,6 +1965,7 @@ impl BrowserApp {
 
         let current_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
         let mut pending_resources: Vec<String> = Vec::new();
+        let mut script_nav: Option<String> = None;
         let mut page_bg_image = None;
         render_html_to_lines(
             &preprocessed_html,
@@ -1855,7 +1983,12 @@ impl BrowserApp {
             &mut self.media_players,
             &mut self.iframes,
             &mut pending_resources,
+            &mut script_nav,
         );
+        // Betik kaynaklı gezinme istekleri (location.assign, history.back...).
+        if let Some(nav) = script_nav {
+            self.handle_script_navigation(&nav);
+        }
         self.page_bg_image = page_bg_image;
         self.pending_resources = pending_resources;
         self.resource_fetch_state = if self.pending_resources.is_empty() {
@@ -3543,20 +3676,9 @@ impl BrowserApp {
                     }
                     req_buf.extend_from_slice(b"Connection: close\r\n");
 
-                    // Cookie başlığı ekle (uygun domain ve path için)
-                    let mut cookie_header = String::new();
-                    for c in &self.cookies {
-                        if (c.domain.is_empty() || host.ends_with(&c.domain))
-                            && (c.path.is_empty() || path.starts_with(&c.path))
-                        {
-                            if !cookie_header.is_empty() {
-                                cookie_header.push_str("; ");
-                            }
-                            cookie_header.push_str(&c.name);
-                            cookie_header.push('=');
-                            cookie_header.push_str(&c.value);
-                        }
-                    }
+                    // Cookie başlığı ekle (RFC 6265 global jar: domain/path/Secure/SameSite)
+                    let cookie_header =
+                        crate::drivers::cookie::get_cookie_header(host, path, self.is_https, true);
                     if !cookie_header.is_empty() {
                         req_buf.extend_from_slice(b"Cookie: ");
                         req_buf.extend_from_slice(cookie_header.as_bytes());
@@ -3865,13 +3987,25 @@ impl BrowserApp {
                         core::str::from_utf8(&self.request_path[..self.request_path_len])
                             .unwrap_or("/");
                     let mut url = HeaplessString::<256>::new();
-                    let _ = write!(
-                        url,
-                        "{}://{}{}",
-                        if self.is_https { "https" } else { "http" },
-                        host_str,
-                        path_str
-                    );
+                    let default_port = if self.is_https { 443 } else { 80 };
+                    if self.request_port != default_port {
+                        let _ = write!(
+                            url,
+                            "{}://{}:{}{}",
+                            if self.is_https { "https" } else { "http" },
+                            host_str,
+                            self.request_port,
+                            path_str
+                        );
+                    } else {
+                        let _ = write!(
+                            url,
+                            "{}://{}{}",
+                            if self.is_https { "https" } else { "http" },
+                            host_str,
+                            path_str
+                        );
+                    }
 
                     self.load_progress = 55;
                     self.status = crate::gui::ui_text(
@@ -3879,8 +4013,27 @@ impl BrowserApp {
                         "Establishing HTTP/2 connection...",
                     );
 
+                    // Ortak çerez jar'ından uygun Cookie başlığını hazırla.
+                    let h2_cookie = crate::drivers::cookie::get_cookie_header(
+                        host_str,
+                        path_str,
+                        self.is_https,
+                        true,
+                    );
+                    let h2_extra: &[(&[u8], &[u8])] = if h2_cookie.is_empty() {
+                        &[]
+                    } else {
+                        &[(b"cookie".as_slice(), h2_cookie.as_bytes())]
+                    };
+                    let mut h2_headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+
                     let mut resp_buf = vec![0u8; 64 * 1024];
-                    match crate::drivers::http::http2_get(&url, &mut resp_buf) {
+                    match crate::drivers::http::http2_get_full(
+                        &url,
+                        &mut resp_buf,
+                        h2_extra,
+                        &mut h2_headers,
+                    ) {
                         Ok((status, _hlen, body_len)) => {
                             self.load_progress = 100;
                             self.status = crate::gui::ui_text(
@@ -3889,21 +4042,79 @@ impl BrowserApp {
                             );
                             let body = &resp_buf[..body_len.min(resp_buf.len())];
 
-                            // Yönlendirme kodlarını işle
+                            // Set-Cookie başlıklarını çerez jar'ına işle.
+                            let cookie_path = cookie_default_path(path_str);
+                            for (name, value) in &h2_headers {
+                                if name.eq_ignore_ascii_case(b"set-cookie") {
+                                    if let Ok(cs) = core::str::from_utf8(value) {
+                                        let cs = cs.trim();
+                                        if !cs.is_empty() {
+                                            crate::drivers::cookie::process_set_cookie(
+                                                cs,
+                                                host_str,
+                                                cookie_path,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Yönlendirme kodlarını işle (Location başlığı HPACK'ten çözülmüş gelir)
                             if (status == 301
                                 || status == 302
                                 || status == 303
                                 || status == 307
                                 || status == 308)
-                                && self.redirect_count < 3
+                                && self.redirect_count < MAX_REDIRECTS
                             {
-                                self.redirect_count += 1;
-                                // Location başlığı HTTP/2'de HPACK ile kodlu;
-                                // http2_get gövdeyi döndürür, başlıkları ayrıştırılabilir.
-                                // Basitlik için aynı URL'yi yeniden dene.
+                                if let Some(loc) = h2_headers
+                                    .iter()
+                                    .find(|(n, _)| n.eq_ignore_ascii_case(b"location"))
+                                    .and_then(|(_, v)| core::str::from_utf8(v).ok())
+                                {
+                                    let current_path = path_str.split('?').next().unwrap_or("/");
+                                    let target = resolve_redirect_target(
+                                        loc.trim(),
+                                        self.is_https,
+                                        host_str,
+                                        self.request_port,
+                                        current_path,
+                                    );
+                                    {
+                                        self.redirect_count += 1;
+                                        crate::drivers::netstack::tcp_close();
+                                        crate::drivers::netstack::tcp_clear_result();
+                                        self.response_len = 0;
+                                        self.response_data.clear();
+                                        self.response_data.resize(RESPONSE_BUF_MIN, 0);
+                                        self.tls_app_data.clear();
+                                        self.tls_session = None;
+                                        self.tls_pending_request.clear();
+                                        self.tls_request_sent = false;
+                                        self.tls13_finished_sent = false;
+
+                                        if target.len() <= self.url.len() {
+                                            self.set_url(target.as_bytes());
+                                            self.request_pending = false;
+                                            self.request_state = 0;
+                                            self.request_deadline = 0;
+                                            crate::drivers::netstack::tcp_clear_result();
+                                            self.suppress_history = true;
+                                            let redirect_count = self.redirect_count;
+                                            self.navigate();
+                                            self.redirect_count = redirect_count;
+                                        } else {
+                                            self.finish_network_error(crate::gui::ui_text(
+                                                "Yönlendirme adresi çok uzun.",
+                                                "Redirect URL is too long.",
+                                            ));
+                                        }
+                                        return;
+                                    }
+                                }
                                 self.finish_network_error(crate::gui::ui_text(
-                                    "HTTP/2 yönlendirme henüz desteklenmiyor.",
-                                    "HTTP/2 redirect not yet supported.",
+                                    "Yönlendirme hedefi çözülemedi.",
+                                    "Could not resolve redirect target.",
                                 ));
                                 self.request_pending = false;
                                 self.request_state = 0;
@@ -4016,10 +4227,16 @@ impl BrowserApp {
                             None
                         };
 
-                        // Set-Cookie başlıklarını ayrıştır ve sakla
+                        // Set-Cookie başlıklarını RFC 6265 çerez jar'ına işle
+                        // (Expires/Max-Age, Domain, Path, Secure, HttpOnly,
+                        // SameSite öznitelikleri dahil).
                         let current_host_str =
                             core::str::from_utf8(&self.request_host[..self.request_host_len])
                                 .unwrap_or("");
+                        let current_path_str =
+                            core::str::from_utf8(&self.request_path[..self.request_path_len])
+                                .unwrap_or("/");
+                        let cookie_path = cookie_default_path(current_path_str);
                         for line in headers.split(|b| *b == b'\n') {
                             let l = if line.last() == Some(&b'\r') {
                                 &line[..line.len() - 1]
@@ -4030,150 +4247,105 @@ impl BrowserApp {
                                 if l[..colon].eq_ignore_ascii_case(b"Set-Cookie") {
                                     let cookie_str =
                                         core::str::from_utf8(&l[colon + 1..]).unwrap_or("").trim();
-                                    if let Some(first_part) = cookie_str.split(';').next() {
-                                        if let Some((k, v)) = first_part.split_once('=') {
-                                            let name = k.trim();
-                                            let val = v.trim();
-                                            if !name.is_empty() {
-                                                if let Some(pos) =
-                                                    self.cookies.iter().position(|c| c.name == name)
-                                                {
-                                                    self.cookies[pos].value = String::from(val);
-                                                } else if self.cookies.len() < 32 {
-                                                    self.cookies.push(HttpCookie {
-                                                        name: String::from(name),
-                                                        value: String::from(val),
-                                                        domain: String::from(current_host_str),
-                                                        path: String::from("/"),
-                                                    });
-                                                }
-                                            }
-                                        }
+                                    if !cookie_str.is_empty() {
+                                        crate::drivers::cookie::process_set_cookie(
+                                            cookie_str,
+                                            current_host_str,
+                                            cookie_path,
+                                        );
                                     }
                                 }
                             }
-                            if let Some(code) = status_code {
-                                if (code == 301
-                                    || code == 302
-                                    || code == 303
-                                    || code == 307
-                                    || code == 308)
-                                    && self.redirect_count < 3
-                                {
-                                    let mut loc_target: Option<&[u8]> = None;
-                                    for line in headers.split(|b| *b == b'\n') {
-                                        let l = if line.last() == Some(&b'\r') {
-                                            &line[..line.len() - 1]
-                                        } else {
-                                            line
-                                        };
-                                        if let Some(colon) = l.iter().position(|&b| b == b':') {
-                                            let key = &l[..colon];
-                                            if key.eq_ignore_ascii_case(b"Location") {
-                                                let mut val = &l[colon + 1..];
-                                                while val
-                                                    .first()
-                                                    .is_some_and(|b| b.is_ascii_whitespace())
-                                                {
-                                                    val = &val[1..];
-                                                }
-                                                while val
-                                                    .last()
-                                                    .is_some_and(|b| b.is_ascii_whitespace())
-                                                {
-                                                    val = &val[..val.len() - 1];
-                                                }
-                                                loc_target = Some(val);
-                                                break;
+                        }
+                        if let Some(code) = status_code {
+                            if (code == 301
+                                || code == 302
+                                || code == 303
+                                || code == 307
+                                || code == 308)
+                                && self.redirect_count < MAX_REDIRECTS
+                            {
+                                let mut loc_target: Option<&[u8]> = None;
+                                for line in headers.split(|b| *b == b'\n') {
+                                    let l = if line.last() == Some(&b'\r') {
+                                        &line[..line.len() - 1]
+                                    } else {
+                                        line
+                                    };
+                                    if let Some(colon) = l.iter().position(|&b| b == b':') {
+                                        let key = &l[..colon];
+                                        if key.eq_ignore_ascii_case(b"Location") {
+                                            let mut val = &l[colon + 1..];
+                                            while val
+                                                .first()
+                                                .is_some_and(|b| b.is_ascii_whitespace())
+                                            {
+                                                val = &val[1..];
                                             }
+                                            while val
+                                                .last()
+                                                .is_some_and(|b| b.is_ascii_whitespace())
+                                            {
+                                                val = &val[..val.len() - 1];
+                                            }
+                                            loc_target = Some(val);
+                                            break;
                                         }
                                     }
+                                }
 
-                                    if let Some(loc) = loc_target {
-                                        let mut loc_buf = [0u8; 256];
-                                        let loc_len = loc.len().min(loc_buf.len());
-                                        loc_buf[..loc_len].copy_from_slice(&loc[..loc_len]);
+                                if let Some(loc) = loc_target {
+                                    let mut loc_buf = [0u8; 256];
+                                    let loc_len = loc.len().min(loc_buf.len());
+                                    loc_buf[..loc_len].copy_from_slice(&loc[..loc_len]);
 
-                                        self.redirect_count += 1;
-                                        crate::drivers::netstack::tcp_close();
+                                    self.redirect_count += 1;
+                                    crate::drivers::netstack::tcp_close();
+                                    crate::drivers::netstack::tcp_clear_result();
+                                    self.response_len = 0;
+                                    self.response_data.clear();
+                                    self.response_data.resize(RESPONSE_BUF_MIN, 0);
+                                    self.tls_app_data.clear();
+                                    self.tls_session = None;
+                                    self.tls_pending_request.clear();
+                                    self.tls_request_sent = false;
+                                    self.tls13_finished_sent = false;
+
+                                    let loc_slice = &loc_buf[..loc_len];
+                                    let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
+                                    let host = core::str::from_utf8(
+                                        &self.request_host[..self.request_host_len],
+                                    )
+                                    .unwrap_or("");
+                                    let current_path = core::str::from_utf8(
+                                        &self.request_path[..self.request_path_len],
+                                    )
+                                    .unwrap_or("/");
+                                    let target = resolve_redirect_target(
+                                        loc_str.trim(),
+                                        self.is_https,
+                                        host,
+                                        self.request_port,
+                                        current_path,
+                                    );
+                                    if target.len() <= self.url.len() {
+                                        self.set_url(target.as_bytes());
+                                        self.request_pending = false;
+                                        self.request_state = 0;
+                                        self.request_deadline = 0;
                                         crate::drivers::netstack::tcp_clear_result();
-                                        self.response_len = 0;
-                                        self.response_data.clear();
-                                        self.response_data.resize(RESPONSE_BUF_MIN, 0);
-                                        self.tls_app_data.clear();
-                                        self.tls_session = None;
-                                        self.tls_pending_request.clear();
-                                        self.tls_request_sent = false;
-                                        self.tls13_finished_sent = false;
-
-                                        let loc_slice = &loc_buf[..loc_len];
-                                        let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
-                                        let current_scheme =
-                                            if self.is_https { "https://" } else { "http://" };
-                                        let host = core::str::from_utf8(
-                                            &self.request_host[..self.request_host_len],
-                                        )
-                                        .unwrap_or("");
-                                        let current_path = core::str::from_utf8(
-                                            &self.request_path[..self.request_path_len],
-                                        )
-                                        .unwrap_or("/");
-                                        let current_path =
-                                            current_path.split('?').next().unwrap_or("/");
-                                        let base_path = current_path
-                                            .rsplit_once('/')
-                                            .map(|(base, _)| base)
-                                            .unwrap_or("");
-                                        let mut target = String::new();
-                                        if loc_str.starts_with("http://")
-                                            || loc_str.starts_with("https://")
-                                        {
-                                            target.push_str(loc_str);
-                                        } else if loc_str.starts_with("//") {
-                                            target.push_str(if self.is_https {
-                                                "https:"
-                                            } else {
-                                                "http:"
-                                            });
-                                            target.push_str(loc_str);
-                                        } else {
-                                            target.push_str(current_scheme);
-                                            target.push_str(host);
-                                            let default_port = if self.is_https { 443 } else { 80 };
-                                            if self.request_port != default_port {
-                                                use core::fmt::Write as _;
-                                                let _ = write!(target, ":{}", self.request_port);
-                                            }
-                                            if loc_str.starts_with('/') {
-                                                target.push_str(loc_str);
-                                            } else if loc_str.starts_with('?') {
-                                                target.push_str(current_path);
-                                                target.push_str(loc_str);
-                                            } else {
-                                                target.push_str(base_path);
-                                                target.push('/');
-                                                target.push_str(loc_str);
-                                            }
-                                        }
-                                        if target.len() <= self.url.len() {
-                                            self.set_url(target.as_bytes());
-                                            self.request_pending = false;
-                                            self.request_state = 0;
-                                            self.request_deadline = 0;
-                                            crate::drivers::netstack::tcp_clear_result();
-                                            self.suppress_history = true;
-                                            let redirect_count = self.redirect_count;
-                                            self.navigate();
-                                            // navigate() normal gezinme için sayacı sıfırlar.
-                                            self.redirect_count = redirect_count;
-                                        } else {
-                                            self.finish_network_error(crate::gui::ui_text(
-                                                "Yönlendirme adresi çok uzun.",
-                                                "Redirect URL is too long.",
-                                            ));
-                                        }
-                                        return;
+                                        self.suppress_history = true;
+                                        let redirect_count = self.redirect_count;
+                                        self.navigate();
+                                        // navigate() normal gezinme için sayacı sıfırlar.
+                                        self.redirect_count = redirect_count;
+                                    } else {
+                                        self.finish_network_error(crate::gui::ui_text(
+                                            "Yönlendirme adresi çok uzun.",
+                                            "Redirect URL is too long.",
+                                        ));
                                     }
+                                    return;
                                 }
                             }
                         }
@@ -4528,6 +4700,26 @@ impl BrowserApp {
     /// Render audio for all playing media players.
     pub fn render_audio(&mut self, audio: &mut crate::drivers::audio::AudioDevice) {
         self.media_players.render_audio_all(audio);
+    }
+
+    /// Betik kaynaklı gezinme isteğini uygular (`location.assign/replace`,
+    /// `location.href = ...`, `history.back/forward/go`, `location.reload`).
+    fn handle_script_navigation(&mut self, nav: &str) {
+        match nav {
+            "__minos_reload__" => {
+                self.navigate();
+            }
+            "__minos_history_back__" => self.back(),
+            "__minos_history_forward__" => self.forward(),
+            _ => {
+                let page = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+                let target = resolve_script_url(nav, page);
+                if !target.is_empty() && target.len() <= self.url.len() {
+                    self.set_url(target.as_bytes());
+                    self.navigate();
+                }
+            }
+        }
     }
 
     pub fn back(&mut self) {

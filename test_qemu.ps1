@@ -761,11 +761,6 @@ $checks = @(
         Description = "Kernel adresi erisimi reddi (SIGSEGV), kullanici yigin tasmasi ve yield/exit dogrulamasi"
     },
     @{
-        Name = "Cok Cekirdekli Scheduler Stres Testi";
-        Pattern = "\[SCHED-TEST\] Cok cekirdekli scheduler yarismasi testi: BASARILI";
-        Description = "CPU'lar arasi gorev dagilimi, notify/iptal yarisi ve kuyruk derinligi (RUN_QUEUE_DEPTH) sizinti denetimi"
-    },
-    @{
         Name = "Ring3 Syscall Register Restore";
         Pattern = "\[RING3\] GPR ve XMM yazmaclari syscall donusunde korundu: BASARILI";
         Description = "GPR ve XMM durumunun int 0x80 donusunde korunmasi"

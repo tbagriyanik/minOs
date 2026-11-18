@@ -386,13 +386,20 @@ pub fn render_devtools(
                 fb,
                 content_x,
                 cy,
-                &format!("Cookies: {}", browser.cookies.len()),
+                &format!(
+                    "Cookies: {}",
+                    unsafe { &*crate::drivers::cookie::cookie_jar() }.len()
+                ),
                 Color::TEXT_MAIN,
                 (content_x, cy, content_w, 16),
             );
             cy += 18;
 
-            for cookie in browser.cookies.iter().take(8) {
+            for cookie in unsafe { &*crate::drivers::cookie::cookie_jar() }
+                .list()
+                .iter()
+                .take(8)
+            {
                 let line = format!("{}={}", cookie.name, cookie.value);
                 let truncated = if line.len() > 50 {
                     format!("{}...", &line[..47])

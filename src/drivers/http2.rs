@@ -260,6 +260,29 @@ pub mod h2 {
         out
     }
 
+    /// `encode_get_headers`'ın ek başlık çiftleri kabul eden sürümü.
+    /// Ek başlıklar "without indexing" literal alan olarak kodlanır; istek
+    /// başına değişen değerler (ör. Cookie) dinamik tabloyu kirletmez.
+    pub fn encode_get_headers_ex(
+        authority: &[u8],
+        path: &[u8],
+        https: bool,
+        dyn_table: &mut HpackDynamicTable,
+        extra: &[(&[u8], &[u8])],
+    ) -> Vec<u8> {
+        let mut out = encode_get_headers(authority, path, https, dyn_table);
+        for (name, value) in extra {
+            if name.is_empty() {
+                continue;
+            }
+            // Literal header field without indexing, new name (4-bit prefix = 0).
+            encode_int(&mut out, 0, 4, 0x00);
+            encode_string(&mut out, name);
+            encode_string(&mut out, value);
+        }
+        out
+    }
+
     /// Genel HTTP/2 frame oluşturucu. Stream ID'nin reserved biti temizlenir.
     pub fn build_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(9 + payload.len());
@@ -1533,18 +1556,23 @@ impl Http2Connection {
     }
 
     /// HTTP GET isteği gönderir ve yanıtı `resp_buf`'a yazar.
-    /// ALPN `h2` ise HTTP/2, değilse HTTP/1.1 kullanılır.
+    /// ALPN `h2` seçildiyse HTTP/2, değilse HTTP/1.1 kullanılır.
+    /// `extra_headers` istek başlıklarına eklenir (ör. Cookie);
+    /// `resp_headers` çözümlenmiş yanıt başlıklarıyla doldurulur
+    /// (yönlendirme `Location` ve `Set-Cookie` işleme için).
     /// Dönen: (durum_kodu, başlık_uzunluğu, toplam_uzunluk)
     pub fn get(
         &mut self,
         authority: &[u8],
         path: &[u8],
         resp_buf: &mut [u8],
+        extra_headers: &[(&[u8], &[u8])],
+        resp_headers: &mut h2::HeaderList,
     ) -> Result<(u16, usize, usize), i32> {
         if self.h2_enabled {
-            self.get_h2(authority, path, resp_buf)
+            self.get_h2(authority, path, resp_buf, extra_headers, resp_headers)
         } else {
-            self.get_http11(authority, path, resp_buf)
+            self.get_http11(authority, path, resp_buf, extra_headers, resp_headers)
         }
     }
 
@@ -1554,6 +1582,8 @@ impl Http2Connection {
         authority: &[u8],
         path: &[u8],
         resp_buf: &mut [u8],
+        extra_headers: &[(&[u8], &[u8])],
+        resp_headers: &mut h2::HeaderList,
     ) -> Result<(u16, usize, usize), i32> {
         // Akış eşzamanlılık sınırını kontrol et (SETTINGS_MAX_CONCURRENT_STREAMS).
         if self.open_stream_count >= self.max_concurrent_streams {
@@ -1565,7 +1595,13 @@ impl Http2Connection {
         let is_https = self.is_https;
 
         // HEADERS çerçevesi oluştur (HPACK ile).
-        let headers_block = h2::encode_get_headers(authority, path, is_https, &mut self.dyn_table);
+        let headers_block = h2::encode_get_headers_ex(
+            authority,
+            path,
+            is_https,
+            &mut self.dyn_table,
+            extra_headers,
+        );
         let headers_frame = h2::build_frame(
             h2::FRAME_HEADERS,
             h2::FLAG_END_HEADERS | h2::FLAG_END_STREAM,
@@ -1745,9 +1781,11 @@ impl Http2Connection {
             }
         }
 
-        // Stream durumunu kapat.
+        // Akış durumunu kapat ve çözümlenmiş başlıkları dışa aktar.
         if let Some(s) = self.stream_mut(stream_id) {
             s.state = H2StreamState::Closed;
+            resp_headers.clear();
+            resp_headers.extend(s.headers.iter().cloned());
         }
         self.open_stream_count = self.open_stream_count.saturating_sub(1);
 
@@ -1793,15 +1831,25 @@ impl Http2Connection {
         authority: &[u8],
         path: &[u8],
         resp_buf: &mut [u8],
+        extra_headers: &[(&[u8], &[u8])],
+        resp_headers: &mut h2::HeaderList,
     ) -> Result<(u16, usize, usize), i32> {
         let mut req = Vec::with_capacity(256 + path.len() + authority.len());
         req.extend_from_slice(b"GET ");
         req.extend_from_slice(path);
         req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
         req.extend_from_slice(authority);
-        req.extend_from_slice(
-            b"\r\nUser-Agent: minOs/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-        );
+        req.extend_from_slice(b"\r\nUser-Agent: minOs/1.0\r\nAccept: */*\r\nConnection: close\r\n");
+        for (name, value) in extra_headers {
+            if name.is_empty() {
+                continue;
+            }
+            req.extend_from_slice(name);
+            req.extend_from_slice(b": ");
+            req.extend_from_slice(value);
+            req.extend_from_slice(b"\r\n");
+        }
+        req.extend_from_slice(b"\r\n");
         self.send_app_data(&req)?;
 
         // Yanıtı topla: başlık sonu + gövde.
@@ -1849,6 +1897,24 @@ impl Http2Connection {
             .ok_or(E_HTTP)?;
         let headers = &raw[..hpos];
         let status = parse_http11_status(headers).unwrap_or(200);
+
+        // Yanıt başlıklarını (durum satırı hariç) `Name: value` çiftleri
+        // olarak dışa aktar; HTTP/2 yoluyla aynı arayüzü sağlar.
+        resp_headers.clear();
+        for line in headers.split(|b| *b == b'\n').skip(1) {
+            let l = if line.last() == Some(&b'\r') {
+                &line[..line.len() - 1]
+            } else {
+                line
+            };
+            if let Some(colon) = l.iter().position(|&b| b == b':') {
+                let name = l[..colon].trim_ascii();
+                let value = l[colon + 1..].trim_ascii();
+                if !name.is_empty() {
+                    resp_headers.push((name.to_vec(), value.to_vec()));
+                }
+            }
+        }
         let mut body = raw[hpos..].to_vec();
 
         // Chunked gövdeyi çöz.
@@ -1920,6 +1986,19 @@ fn parse_status_code(v: &[u8]) -> Option<u16> {
 /// HTTP/2 üzerinden GET isteği yapar.
 /// Yeni bir bağlantı kurar, istek gönderir, yanıtı okur ve bağlantıyı kapatır.
 pub fn http2_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i32> {
+    let mut headers = Vec::new();
+    http2_get_full(url, resp_buf, &[], &mut headers)
+}
+
+/// `http2_get`'in genişletilmiş sürümü: `req_extra` ile ek istek başlıkları
+/// (ör. Cookie) gönderilir; çözümlenmiş yanıt başlıkları (Location,
+/// Set-Cookie dahil) `resp_headers` ile döner.
+pub fn http2_get_full(
+    url: &str,
+    resp_buf: &mut [u8],
+    req_extra: &[(&[u8], &[u8])],
+    resp_headers: &mut h2::HeaderList,
+) -> Result<(u16, usize, usize), i32> {
     let mut host = [0u8; MAX_HOST];
     let mut path = [0u8; MAX_PATH];
     let (port, host_len, path_len) = parse_url(url, &mut host, &mut path)?;
@@ -1927,7 +2006,13 @@ pub fn http2_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), 
     let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
 
     let mut conn = Http2Connection::connect(host_str, port, is_https)?;
-    let result = conn.get(&host[..host_len], &path[..path_len], resp_buf);
+    let result = conn.get(
+        &host[..host_len],
+        &path[..path_len],
+        resp_buf,
+        req_extra,
+        resp_headers,
+    );
     let _ = conn.close();
     result
 }

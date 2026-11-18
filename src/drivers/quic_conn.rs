@@ -11,7 +11,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::drivers::netstack::Ipv4Address;
+use crate::drivers::netstack::IpAddress;
 use crate::drivers::quic::{self, QuicKeys};
 use crate::drivers::socket;
 use crate::drivers::streambuf::{CryptoRx, StreamRx};
@@ -64,10 +64,26 @@ struct PendingChunk {
     fin: bool,
 }
 
+/// Peer'ın NEW_CONNECTION_ID frame'iyle sağladığı alternatif bağlantı
+/// kimliği (RFC 9000 §19.15). Bağlantı göçü (migration) için saklanır.
+struct PeerCid {
+    seq: u64,
+    retire_prior_to: u64,
+    cid: Vec<u8>,
+    reset_token: [u8; 16],
+}
+
+/// Bizim NEW_CONNECTION_ID ile verdiğimiz yedek CID (seq >= 1;
+/// seq 0 örtük olarak `scid`'dir). RETIRE_CONNECTION_ID geldiğinde
+/// seq ile eşleştirilir.
+struct IssuedCid {
+    seq: u64,
+}
+
 /// QUIC istemci bağlantısı.
 pub struct QuicConn {
     fd: i32,
-    peer_ip: Ipv4Address,
+    peer_ip: IpAddress,
     peer_port: u16,
     /// İlk Initial DCID (anahtar türetimi). Retry'da güncellenir.
     dcid: [u8; CID_LEN],
@@ -127,13 +143,38 @@ pub struct QuicConn {
     tx_pending: Vec<Option<PendingChunk>>,
     /// App uzayında gönderilen paketler: (pn, tx_pending slot id listesi).
     sent_app: Vec<(u64, Vec<usize>)>,
+    /// Peer'ın NEW_CONNECTION_ID ile verdiği alternatif CID'ler.
+    peer_cids: Vec<PeerCid>,
+    /// PATH_CHALLENGE'a yanıt olarak gönderilecek PATH_RESPONSE verisi.
+    pending_path_response: Option<[u8; 8]>,
+    /// Bizim gönderdiğimiz yedek CID'ler (NEW_CONNECTION_ID, seq >= 1).
+    issued_cids: Vec<IssuedCid>,
+    /// Yedek CID'ler 1-RTT anahtarları hazır olunca gönderildi mi?
+    cids_issued: bool,
+    /// 0-RTT (erken veri) paket anahtarları — PSK teklif edilmişse
+    /// ClientHello ile birlikte türetilir (RFC 9001 §5.1).
+    early_keys: Option<QuicKeys>,
+    /// 0-RTT paket numarası (kendi paket numarası uzayı).
+    early_tx_pn: u64,
+    /// 0-RTT ile gönderilen stream parçaları — 1-RTT anahtarları
+    /// hazır olunca normal yolla tekrar iletilir (alıcı aynı
+    /// offset'teki örtüşen veriyi eler; PSK reddedilirse bu tekrar
+    /// veri kaybını önler).
+    early_chunks: Vec<PendingChunk>,
+    /// Erken parçaların 1-RTT tekrarı yapıldı mı?
+    early_resend_done: bool,
 }
 
 impl QuicConn {
     /// UDP soketi açar, Initial paketini gönderir ve el sıkışma moduna
     /// geçer. `hostname` SNI + sertifika doğrulaması için kullanılır.
-    pub fn connect(ip: Ipv4Address, port: u16, hostname: &str) -> Result<Self, String> {
-        let fd = socket::socket(socket::AF_INET, socket::SOCK_DGRAM)
+    /// `ip` IPv4 veya IPv6 olabilir; soket ailesi buna göre seçilir.
+    pub fn connect(ip: IpAddress, port: u16, hostname: &str) -> Result<Self, String> {
+        let domain = match ip {
+            IpAddress::V4(_) => socket::AF_INET,
+            IpAddress::V6(_) => socket::AF_INET6,
+        };
+        let fd = socket::socket(domain, socket::SOCK_DGRAM)
             .map_err(|e| alloc::format!("socket: {}", e))?;
         socket::set_timeout(fd, 5_000).ok();
 
@@ -151,20 +192,20 @@ impl QuicConn {
         let mut tls = TlsSession::new(hostname, client_random);
         tls.set_negotiated_protocol(alloc::vec![b'h', b'3']);
 
-        // ClientHello (TLS kaydı -> handshake mesajı)
+        // ClientHello (TLS kaydı -> handshake mesajı). Önbellekte
+        // oturum varsa PSK ile resumption denenir (0-RTT temeli).
         let mut rec = Vec::new();
         let mut ecdhe = [0u8; 32];
         let mut x25519 = [0u8; 32];
-        tls::build_client_hello_with_alpn(
+        let mut psk_offer = None;
+        tls::build_client_hello_cached(
             hostname,
             &client_random,
             &mut rec,
             &mut ecdhe,
             &mut x25519,
-            false,
-            None,
-            None,
             &[b"h3"],
+            &mut psk_offer,
         );
         if rec.len() < 5 {
             socket::close(fd);
@@ -173,6 +214,9 @@ impl QuicConn {
         let mut hello = rec.split_off(5);
         tls.set_client_ecdhe_secret(ecdhe);
         tls.set_client_x25519_secret(x25519);
+        if let Some(p) = psk_offer {
+            tls.set_psk(&p);
+        }
 
         // quic_transport_parameters (0xffa5) ekle — RFC 9000 §18.2
         // Biçim: (parametre_id varint, uzunluk varint, değer baytları).
@@ -200,7 +244,15 @@ impl QuicConn {
         quic::encode_varint(0x0f, &mut params);
         quic::encode_varint(scid.len() as u64, &mut params);
         params.extend_from_slice(&scid);
+        // QUIC yalnızca AES-128-GCM (0x1301) destekler — sunulabilir
+        // TLS 1.3 paket listesinden gerisini çıkar (yoksa sunucu 0x1302
+        // seçip bağlantıyı imkânsız kılar).
+        quic::strip_client_hello_cipher_suites(&mut hello, &[tls::TLS_AES_256_GCM_SHA384]);
         quic::inject_quic_transport_params(&mut hello, &params);
+        // TLS transcript'ine ClientHello eklenir — QUIC el sıkışma
+        // anahtarları (ve 0-RTT early traffic secret) bu transcript
+        // hash'ine bağlıdır. Parametre enjeksiyonundan SONRA çağrılmalı.
+        tls.note_client_hello(&hello);
 
         let mut conn = Self {
             fd,
@@ -234,9 +286,24 @@ impl QuicConn {
             tx_queue: Vec::new(),
             tx_pending: Vec::new(),
             sent_app: Vec::new(),
+            peer_cids: Vec::new(),
+            pending_path_response: None,
+            issued_cids: Vec::new(),
+            cids_issued: false,
+            early_keys: None,
+            early_tx_pn: 0,
+            early_chunks: Vec::new(),
+            early_resend_done: false,
         };
         conn.initial.tx = quic::client_initial_keys(&dcid);
         conn.initial.rx = quic::server_initial_keys(&dcid);
+        // PSK teklif edildiyse 0-RTT erken trafik anahtarlarını türet
+        // (RFC 9001 §5.1: client_early_traffic_secret -> QUIC keys).
+        if let Some(sec) = conn.tls.quic_client_early_traffic_secret() {
+            if let Some(k) = quic::traffic_keys(&sec) {
+                conn.early_keys = Some(k);
+            }
+        }
         let _ = conn.send_crypto_segments(quic::PT_INITIAL, &hello);
         Ok(conn)
     }
@@ -311,6 +378,9 @@ impl QuicConn {
         self.pump_crypto()?;
         self.update_key_phases()?;
         self.send_pending_acks()?;
+        self.send_path_response()?;
+        self.maybe_issue_cids()?;
+        self.resend_early_data()?;
         self.flush_crypto_tx_hs()?;
         self.flush_tx_queue()?;
         // RTO dolduysa el sıkışma verisini yeniden gönder
@@ -471,11 +541,21 @@ impl QuicConn {
         let result = quic::seal_packet(&keys, pn, PN_LEN, header, &frames, false);
         self.app.tx = Some(keys);
         if let Some(pkt) = result {
-            socket::sendto(self.fd, self.peer_ip, self.peer_port, &pkt)
-                .map_err(|e| alloc::format!("sendto: {}", e))?;
+            self.send_pkt(&pkt)?;
             return Ok(Some(pn));
         }
         Ok(None)
+    }
+
+    /// UDP datagramını peer'ın adres ailesine uygun `sendto` varyantıyla
+    /// gönderir (IPv4 veya IPv6).
+    fn send_pkt(&mut self, pkt: &[u8]) -> Result<(), String> {
+        match self.peer_ip {
+            IpAddress::V4(ip) => socket::sendto(self.fd, ip, self.peer_port, pkt),
+            IpAddress::V6(ip) => socket::sendto_v6(self.fd, ip, self.peer_port, pkt),
+        }
+        .map_err(|e| alloc::format!("sendto: {}", e))?;
+        Ok(())
     }
 
     /// Akışın gönderebileceği azami offset: MAX_STREAM_DATA çerçevesi
@@ -501,6 +581,90 @@ impl QuicConn {
 
     /// `(offset, len)` aralığının akış ve bağlantı düzeyi akış
     /// kontrolü sınırlarına uyup uymadığını denetler.
+    /// 0-RTT uygun mu? (erken anahtarlar türetilmiş ve el sıkışma
+    /// hâlâ sürüyor — sunucu ilk uçuşunu göndermeden erken veri
+    /// gönderilebilir, RFC 9001 §4.5).
+    pub fn zero_rtt_available(&self) -> bool {
+        self.early_keys.is_some() && self.state == ConnState::Handshake
+    }
+
+    /// Erken veri (0-RTT) paketiyle stream verisi gönderir (RFC 9001
+    /// §4.5). `Ok(true)` = 0-RTT olarak gönderildi; parça 1-RTT
+    /// anahtarları hazır olunca normal akış yoluyla otomatik tekrar
+    /// iletilir. `Ok(false)` = erken anahtar yok veya el sıkışma
+    /// tamamlandı — çağıran normal `send_stream_data` yoluna düşmeli.
+    pub fn send_stream_data_early(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<bool, String> {
+        // 0-RTT yalnızca el sıkışma sürerken ve tek UDP datagramına
+        // sığacak kadar küçük veride anlamlıdır.
+        if self.state != ConnState::Handshake || data.len() > 1200 {
+            return Ok(false);
+        }
+        let Some(keys) = self.early_keys.take() else {
+            return Ok(false);
+        };
+        let mut frames = Vec::new();
+        quic::encode_stream_frame(stream_id, offset, fin, data, &mut frames);
+        // 0-RTT long header'da DCID, istemcinin ilk Initial'ındaki
+        // orijinal DCID'dir (sunucu SCID'si henüz bilinmiyor).
+        let dcid = self.dcid.to_vec();
+        let header = quic::build_long_header(
+            quic::PT_0RTT,
+            quic::VERSION_1,
+            &dcid,
+            &self.scid,
+            None,
+            PN_LEN,
+            0,
+            frames.len() + 16,
+        );
+        let pn = self.early_tx_pn;
+        self.early_tx_pn += 1;
+        let pkt = header.and_then(|h| quic::seal_packet(&keys, pn, PN_LEN, h, &frames, true));
+        self.early_keys = Some(keys);
+        let Some(pkt) = pkt else {
+            return Ok(false);
+        };
+        self.send_pkt(&pkt)?;
+        self.early_chunks.push(PendingChunk {
+            stream_id,
+            offset,
+            data: data.to_vec(),
+            fin,
+        });
+        Ok(true)
+    }
+
+    /// `(stream_id, offset, data)` 0-RTT ile gönderildiyse `true`.
+    /// Çağıran normal gönderimi atlayabilir — conn 1-RTT'de aynı
+    /// baytları tekrarlar, alıcı örtüşen offset'i eler.
+    pub fn early_covered(&self, stream_id: u64, offset: u64, data: &[u8]) -> bool {
+        self.early_chunks
+            .iter()
+            .any(|c| c.stream_id == stream_id && c.offset == offset && c.data == data)
+    }
+
+    /// 0-RTT parçalarını 1-RTT anahtarları hazır olunca normal akış
+    /// yoluyla tekrar gönderir. PSK kabul edilse bile tekrar zararsızdır
+    /// (alıcı aynı offset'teki örtüşen veriyi `StreamRx` ile eler);
+    /// PSK reddedilirse bu tekrar veri kaybını önler.
+    fn resend_early_data(&mut self) -> Result<(), String> {
+        if self.early_resend_done || !self.app_keys_ready || self.early_chunks.is_empty() {
+            return Ok(());
+        }
+        self.early_resend_done = true;
+        let chunks = self.early_chunks.clone();
+        for c in chunks {
+            self.send_stream_data_off(c.stream_id, c.offset, &c.data, c.fin)?;
+        }
+        Ok(())
+    }
+
     fn stream_send_allowed(&self, stream_id: u64, offset: u64, len: usize) -> bool {
         let end = offset.saturating_add(len as u64);
         end <= self.stream_tx_limit(stream_id)
@@ -845,11 +1009,71 @@ impl QuicConn {
                         }
                     }
                 }
-                0x18..=0x1b => {
-                    // NEW_CONNECTION_ID / RETIRE_CONNECTION_ID /
-                    // PATH_CHALLENGE / PATH_RESPONSE — ayrıntılı parse yerine
-                    // paketin kalanını at (tek çerçeve varsayımı).
-                    return Ok(());
+                0x18 => {
+                    // NEW_CONNECTION_ID (RFC 9000 §19.15):
+                    // seq, retire_prior_to, len(1..=20), cid, token(16).
+                    let Some((seq, l1)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
+                    };
+                    pos += l1;
+                    let Some((retire, l2)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
+                    };
+                    pos += l2;
+                    if pos >= payload.len() {
+                        return Ok(());
+                    }
+                    let cid_len = payload[pos] as usize;
+                    pos += 1;
+                    if cid_len == 0 || cid_len > 20 || pos + cid_len + 16 > payload.len() {
+                        return Ok(());
+                    }
+                    let cid = payload[pos..pos + cid_len].to_vec();
+                    pos += cid_len;
+                    let mut token = [0u8; 16];
+                    token.copy_from_slice(&payload[pos..pos + 16]);
+                    pos += 16;
+                    // retire_prior_to'dan küçük seq'ler artık kullanılmaz.
+                    self.peer_cids.retain(|c| c.seq >= retire && c.seq != seq);
+                    self.peer_cids.push(PeerCid {
+                        seq,
+                        retire_prior_to: retire,
+                        cid,
+                        reset_token: token,
+                    });
+                    self.peer_cids.sort_by_key(|c| c.seq);
+                    // active_connection_id_limit (4) civarında tut.
+                    while self.peer_cids.len() > 8 {
+                        self.peer_cids.remove(0);
+                    }
+                }
+                0x19 => {
+                    // RETIRE_CONNECTION_ID (§19.16): peer bizim
+                    // NEW_CONNECTION_ID ile verdiğimiz bir CID'yi
+                    // emekliye ayırdı — defterden düş.
+                    let Some((seq, l)) = quic::decode_varint(&payload[pos..]) else {
+                        return Ok(());
+                    };
+                    pos += l;
+                    self.issued_cids.retain(|c| c.seq != seq);
+                }
+                0x1a => {
+                    // PATH_CHALLENGE (§19.17): 8 bayt veri — aynı veri
+                    // PATH_RESPONSE ile yankılanır (yol doğrulama).
+                    if pos + 8 > payload.len() {
+                        return Ok(());
+                    }
+                    let mut d = [0u8; 8];
+                    d.copy_from_slice(&payload[pos..pos + 8]);
+                    pos += 8;
+                    self.pending_path_response = Some(d);
+                }
+                0x1b => {
+                    // PATH_RESPONSE (§19.18): 8 bayt — tüket.
+                    if pos + 8 > payload.len() {
+                        return Ok(());
+                    }
+                    pos += 8;
                 }
                 _ => return Ok(()), // bilinmeyen frame — paketin sonu
             }
@@ -1171,8 +1395,7 @@ impl QuicConn {
         let pn = space.next_pn;
         space.next_pn += 1;
         if let Some(pkt) = quic::seal_packet(keys, pn, PN_LEN, header, frames, true) {
-            socket::sendto(self.fd, self.peer_ip, self.peer_port, &pkt)
-                .map_err(|e| alloc::format!("sendto: {}", e))?;
+            self.send_pkt(&pkt)?;
         }
         Ok(())
     }
@@ -1184,9 +1407,92 @@ impl QuicConn {
         let pn = self.app.next_pn;
         self.app.next_pn += 1;
         if let Some(pkt) = quic::seal_packet(keys, pn, PN_LEN, header, frames, false) {
-            socket::sendto(self.fd, self.peer_ip, self.peer_port, &pkt)
-                .map_err(|e| alloc::format!("sendto: {}", e))?;
+            self.send_pkt(&pkt)?;
         }
         Ok(())
+    }
+
+    /// PATH_CHALLENGE'a alınan PATH_RESPONSE'u 1-RTT paketinde yankılar
+    /// (RFC 9000 §8.2.2 yol doğrulama). Anahtarlar henüz hazır değilse
+    /// veri bekletilir; sonraki poll'da gönderilir.
+    fn send_path_response(&mut self) -> Result<(), String> {
+        let Some(data) = self.pending_path_response else {
+            return Ok(());
+        };
+        if !self.app_keys_ready {
+            return Ok(());
+        }
+        let Some(keys) = self.app.tx.take() else {
+            return Ok(());
+        };
+        let mut frames = Vec::new();
+        quic::encode_path_response_frame(&data, &mut frames);
+        let r = self.send_short_pkt(&keys, &frames);
+        self.app.tx = Some(keys);
+        r?;
+        self.pending_path_response = None;
+        Ok(())
+    }
+
+    /// 1-RTT anahtarları hazır olunca `active_connection_id_limit` (4)
+    /// toplam CID sunmak için seq 1..=3 NEW_CONNECTION_ID frame'leri
+    /// gönderir; seq 0 örtük olarak `scid`'dir. Peer bu CID'leri
+    /// bağlantı göçünde (migration) hedef olarak kullanabilir.
+    fn maybe_issue_cids(&mut self) -> Result<(), String> {
+        if self.cids_issued || !self.app_keys_ready {
+            return Ok(());
+        }
+        self.cids_issued = true;
+        for seq in 1..=3u64 {
+            let mut raw = [0u8; CID_LEN];
+            if !crate::random::secure_fill_bytes(&mut raw) {
+                break;
+            }
+            let mut token = [0u8; 16];
+            if !crate::random::secure_fill_bytes(&mut token) {
+                break;
+            }
+            let cid = raw.to_vec();
+            let mut frames = Vec::new();
+            quic::encode_new_connection_id_frame(seq, 0, &cid, &token, &mut frames);
+            let Some(keys) = self.app.tx.take() else {
+                break;
+            };
+            let r = self.send_short_pkt(&keys, &frames);
+            self.app.tx = Some(keys);
+            r?;
+            self.issued_cids.push(IssuedCid { seq });
+        }
+        Ok(())
+    }
+
+    /// Peer'ın NEW_CONNECTION_ID ile sağladığı alternatif CID sayısı
+    /// (bağlantı göçü için).
+    pub fn peer_cid_count(&self) -> usize {
+        self.peer_cids.len()
+    }
+
+    /// `seq` numaralı peer CID'inin ham bağlantı kimliği.
+    pub fn peer_cid_bytes(&self, seq: u64) -> Option<&[u8]> {
+        self.peer_cids
+            .iter()
+            .find(|c| c.seq == seq)
+            .map(|c| c.cid.as_slice())
+    }
+
+    /// `seq` numaralı peer CID'inin stateless reset token'ı.
+    pub fn peer_cid_reset_token(&self, seq: u64) -> Option<&[u8; 16]> {
+        self.peer_cids
+            .iter()
+            .find(|c| c.seq == seq)
+            .map(|c| &c.reset_token)
+    }
+
+    /// `seq` numaralı peer CID'inin retire_prior_to değeri.
+    pub fn peer_cid_retire_prior_to(&self, seq: u64) -> Option<u64> {
+        self.peer_cids
+            .iter()
+            .find(|c| c.seq == seq)
+            .map(|c| c.retire_prior_to)
     }
 }

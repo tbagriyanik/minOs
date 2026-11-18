@@ -6,12 +6,13 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 ## Güncel · v2.5.0
 
 - **Modern web tarayıcısı:** HTTP/1.1 + TLS 1.3 altyapısına HTTP/2 (HPACK, çoklu akış, PRIORITY) ve HTTP/3/QUIC (RFC 9000 el sıkışma, QPACK, QUIC bağlantı havuzu, stream yeniden birleştirme tamponları) eklendi; `livetest_h3=` ile canlı H3 doğrulaması opsiyonel çalışır.
+- **QUIC ileri seviye:** `QuicConn` artık `IpAddress` tabanlı (IPv4/IPv6 hazır); NEW_CONNECTION_ID/RETIRE_CONNECTION_ID/PATH_CHALLENGE→PATH_RESPONSE frame'leri encode+parse ediliyor; 0-RTT hazırlığı TLS `quic_early_traffic_secret` dışa aktarımı + erken-veri paket yolu ile tamamlandı (reddedilirse 1-RTT'de tek sefer yeniden deneme); stream akış kontrolü `MAX_DATA`/`MAX_STREAM_DATA` güncellemeleriyle çalışıyor; `tools/h3_test_server.py` (aioquic) canlı H3 doğrulaması için hazır ve host üzerinden doğrulandı.
 - **HTML5:** satır-içi `<svg>` ayrıştırıcı + rasterizer (şekiller, `path` M/L/H/V/C/S/Q/T/Z, `viewBox`, nested `<g>` transformları); `<details>`/`<summary>` tıklamayla açılıp kapanan kalıcı durum; `<dialog>` (açık/gizli), `<template>` (inert) ve `<picture>`/`<source>` medya/sorgu seçimli kaynak çözümü.
 - **CSS3 seçici motoru:** bağlam-duyarlı eşleştirme — ata zinciri, kardeş bağlamı, `:nth-child(an+b)`/`:nth-of-type`, `:first-child`, `:root`, iç içe `:is()`/`:not()`/`:where()`, öznitelik seçicileri (`=`, `~=`, `|=`, `^=`, `$=`, `*=`) ve ` `/`>`/`+`/`~` birleşimleyicileri; virgüllü seçici listeleri parantez duyarlı ayrıştırılır.
 - **Canvas 2D:** doğrusal/radyal gradyanlar (`addColorStop`), `save`/`restore` durum yığını, `translate`/`scale`/`rotate`/`setTransform` CTM, ikinci/üçüncü derece Bézier ve arc içeren gerçek scanline polygon `fill()` (eski bounding-box dolgusu kaldırıldı), `fillRect`/`strokeRect`/`clearRect`'in transform-duyarlı hâle gelmesi, `getImageData`/`putImageData`/`drawImage`/`createImageData` ve `rect_clip`/`clear_clip`.
 - **minJs tarayıcı API'leri:** `XMLHttpRequest` (open/send, readyState 1-2-3-4 geçişleri, `onreadystatechange`/`onload`/`onerror`, `getResponseHeader`, senkron HTTP + çerez başlığı), `history.pushState`/`replaceState` (sayfasız gezinme işaretçisi) ve `requestAnimationFrame`/`cancelAnimationFrame` (~16 ms zamanlayıcı). JS motorunda nesne-referanslı değişkenlerin (`__xhr_obj_N`) üye okuma/yazma çözümlemesi ve fonksiyon-adı atamalarının (`x.onerror = fn`) doğru saklanması düzeltildi.
 - **Canlı test hijyeni:** `livetest_h3` hedefi yalnızca açıkça verilirse denenir; opsiyonel H3/H2 hataları genel sonucu etkilemez. `boot/limine.conf` varsayılan girdisinden livetest parametreleri kaldırıldı.
-- Host test paketi **440 test** içerir (440 geçti / 0 hata); `tests/host_canvas_tests.rs` ve `browser_canvas`/`browser_svg` host modülleri eklendi.
+- Host test paketi **443 test** içerir (443 geçti / 0 hata); `tests/host_canvas_tests.rs` ve `browser_canvas`/`browser_svg` host modülleri eklendi.
 - **P1 bellek/süreç doğrulaması:** `brk` büyütme/küçültme, `mmap`/`munmap` sınır ve hata yolları, FD yaşam döngüsü, kaynak limitlerinin `fork` ile aktarımı ve COW yazma hatası QEMU `default` profilinde ✅ geçti (36/36 kontrol). PMM/VMM/allocator öz-testleri ve `test_stress_24h.ps1` soak harness'i mevcut; 24h tekrarları ⚠️ henüz raporlanmadı.
 - **GUI duman testleri:** `gui::screen_layout` açılış/yükleme/hoş geldin/kapanış geometrisini ve yerelleştirilmiş metinleri tek kaynakta topladı; `[GUI-SMOKE]` seri marker'ı ve host geometri testleri eklendi.
 - **Hata mesajları ve kurtarma:** `apps::errors` sabit hata kodları, TR/EN başlık/açıklama/kurtarma metinleri üretir; Dosya Yöneticisi bırakma hataları ve guard fault toast'ları bu sınıfa bağlandı.
@@ -27,7 +28,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp tamamlanmazsa geri yüklenir.
 - `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi.
 - TLS/X.509 sertifika zinciri doğrulaması sıkılaştırıldı: güvenilmeyen zincir sertifikalarının tarihleri ve CA BasicConstraints/pathLen kısıtları; varsa CA `keyCertSign` ve yaprak KeyUsage/EKU uzantıları denetlenir. Bilinmeyen kritik uzantılar reddedilir. Host TLS testlerinde doğrulama kestirmesi kaldırıldı; geçerli RSA/ECDSA el sıkışmaları ile geçersiz ara CA senaryoları doğrulanır.
-- Host test paketi 440 test içerir (440 geçti / 0 hata).
+- Host test paketi 443 test içerir (443 geçti / 0 hata).
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

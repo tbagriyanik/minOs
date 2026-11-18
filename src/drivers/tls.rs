@@ -1403,8 +1403,8 @@ impl TlsSession {
                 // bildirir. `selected_identity` 0 ise ilk (ve tek) teklif
                 // kabul edilmiştir.
                 self.handle_pre_shared_key_extension(&body[pos..pos + len])?;
-            } else if ext_type == 0xffa5 {
-                // quic_transport_parameters (RFC 9000 §18.2)
+            } else if ext_type == 0x0039 {
+                // quic_transport_parameters (RFC 9001 §8.2)
                 self.quic_transport_params = Some(body[pos..pos + len].to_vec());
             }
             pos += len;
@@ -2496,9 +2496,9 @@ impl TlsSession {
     /// `process_handshake_records` eksik mesajları kendi tamponunda
     /// biriktirdiğinden keyfi parçalar halinde çağrılabilir.
     pub fn feed_quic_handshake(&mut self, payload: &[u8]) -> Result<(), ()> {
-        if !self.tls13_mode {
-            return Err(());
-        }
+        // QUIC her zaman TLS 1.3'tür; `tls13_mode` ilk ServerHello
+        // işlenene dek kapalıdır — burada bekletmek SH'in hiç
+        // işlenememesine yol açar.
         self.process_handshake_records(payload, &mut Vec::new())
     }
 
@@ -2544,6 +2544,26 @@ impl TlsSession {
         Some((
             self.tls13_client_ap_secret.as_deref()?,
             self.tls13_server_ap_secret.as_deref()?,
+        ))
+    }
+
+    /// QUIC 0-RTT `client_early_traffic_secret` (RFC 9001 §5.1):
+    /// `HKDF-Expand-Label(Early Secret, "c e traffic", ClientHello)`.
+    /// Yalnızca PSK teklif edilmişse ve ClientHello transcript'teyse
+    /// `Some` döner; aksi halde `None`.
+    pub fn quic_client_early_traffic_secret(&self) -> Option<Vec<u8>> {
+        let psk = self.psk.as_ref().filter(|p| !p.is_empty())?;
+        let alg = self.tls13_hash_alg;
+        let zeros = tls13_zero_secret(alg);
+        // early_secret = HKDF-Extract(0, PSK) — RFC 8446 §7.1.
+        let early = Self::hkdf_extract(alg, &zeros, psk);
+        let ch_hash = alg.hash(&self.tls13_transcript);
+        Some(Self::hkdf_expand_label(
+            alg,
+            &early,
+            b"c e traffic",
+            &ch_hash,
+            alg.hash_len(),
         ))
     }
 
@@ -4789,6 +4809,37 @@ mod tests {
             plain.tls13_handshake_secret, with_psk.tls13_handshake_secret,
             "PSK early secret'i el sıkısma sirlarini degistirmeli"
         );
+    }
+
+    #[test]
+    fn quic_early_traffic_secret_requires_psk() {
+        let mut s = TlsSession::new("example.com", [0x11u8; 32]);
+        // PSK yok → 0-RTT anahtarı üretilemez.
+        assert!(s.quic_client_early_traffic_secret().is_none());
+        s.set_psk(&[0x42u8; 32]);
+        let sec = s
+            .quic_client_early_traffic_secret()
+            .expect("psk varken secret olmali");
+        assert_eq!(sec.len(), SHA256_HASH_LEN);
+        // Deterministik: aynı PSK + aynı transcript → aynı secret.
+        let mut s2 = TlsSession::new("example.com", [0x11u8; 32]);
+        s2.set_psk(&[0x42u8; 32]);
+        assert_eq!(
+            s.quic_client_early_traffic_secret(),
+            s2.quic_client_early_traffic_secret()
+        );
+        // ClientHello transcript'i secret'ı değiştirir.
+        s.note_client_hello(b"\x01\x00\x00\x04test");
+        let mut s3 = TlsSession::new("example.com", [0x11u8; 32]);
+        s3.set_psk(&[0x42u8; 32]);
+        s3.note_client_hello(b"\x01\x00\x00\x04test");
+        assert_eq!(
+            s.quic_client_early_traffic_secret(),
+            s3.quic_client_early_traffic_secret()
+        );
+        let before = s3.quic_client_early_traffic_secret().unwrap();
+        s3.note_client_hello(b"\x02\x00\x00\x04more");
+        assert_ne!(s3.quic_client_early_traffic_secret().unwrap(), before);
     }
 
     #[test]

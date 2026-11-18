@@ -778,7 +778,7 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     // Soket UDP portuna gelen datagram soket tamponuna gider (DNS yolu korunur).
     if dst_port != 68
         && src_port != DNS_PORT
-        && crate::drivers::socket::on_udp_datagram(src_ip, src_port, dst_port, data)
+        && crate::drivers::socket::on_udp_datagram(IpAddress::V4(src_ip), src_port, dst_port, data)
     {
         return;
     }
@@ -2606,7 +2606,7 @@ pub fn handle_ipv6(payload: &[u8]) {
                 if ulen >= 8 && 40 + ulen <= payload.len() {
                     let udata = &payload[48..40 + ulen];
                     crate::drivers::socket::on_udp_datagram(
-                        Ipv4Address([127, 0, 0, 1]),
+                        IpAddress::V6(src_ip),
                         src_port,
                         dst_port,
                         udata,

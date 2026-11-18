@@ -575,6 +575,43 @@ pub fn encode_max_streams_frame(is_uni: bool, count: u64, out: &mut Vec<u8>) {
     encode_varint(count, out);
 }
 
+/// NEW_CONNECTION_ID frame'i (RFC 9000 §19.15): seq, retire_prior_to,
+/// cid uzunluğu (1..=20), bağlantı kimliği ve 16 bayt stateless
+/// reset token'ı.
+pub fn encode_new_connection_id_frame(
+    seq: u64,
+    retire_prior_to: u64,
+    cid: &[u8],
+    reset_token: &[u8; 16],
+    out: &mut Vec<u8>,
+) {
+    out.push(0x18);
+    encode_varint(seq, out);
+    encode_varint(retire_prior_to, out);
+    out.push(cid.len() as u8);
+    out.extend_from_slice(cid);
+    out.extend_from_slice(reset_token);
+}
+
+/// RETIRE_CONNECTION_ID frame'i (RFC 9000 §19.16): seq numarası.
+pub fn encode_retire_connection_id_frame(seq: u64, out: &mut Vec<u8>) {
+    out.push(0x19);
+    encode_varint(seq, out);
+}
+
+/// PATH_CHALLENGE frame'i (RFC 9000 §19.17): 8 bayt doğrulama verisi.
+pub fn encode_path_challenge_frame(data: &[u8; 8], out: &mut Vec<u8>) {
+    out.push(0x1a);
+    out.extend_from_slice(data);
+}
+
+/// PATH_RESPONSE frame'i (RFC 9000 §19.18): PATH_CHALLENGE verisinin
+/// aynısı yankılanır.
+pub fn encode_path_response_frame(data: &[u8; 8], out: &mut Vec<u8>) {
+    out.push(0x1b);
+    out.extend_from_slice(data);
+}
+
 /// ClientHello handshake mesajına `quic_transport_parameters` (0xffa5)
 /// uzantısını ekler ve uzunluk alanlarını günceller.
 /// `msg` biçimi: type(1) + len(3) + body. Gövde sonundaki extensions
@@ -612,10 +649,13 @@ pub fn inject_quic_transport_params(msg: &mut Vec<u8>, params_body: &[u8]) {
     if ext_end != msg.len() {
         return; // beklenmedik biçim — ekleme yapma
     }
-    let ext_len = (4 + params_body.len()) as u16;
+    // TLS uzantı başlığı: type(2) + length(2) + data — length yalnızca
+    // params_body uzunluğudur; ext_total_size tüm girdiyi (başlık+data)
+    // kapsar.
+    let ext_len = params_body.len() as u16;
     let ext_total_size = 4 + params_body.len();
     // Yeni uzantıyı sona ekle
-    msg.extend_from_slice(&0xffa5u16.to_be_bytes());
+    msg.extend_from_slice(&0x0039u16.to_be_bytes()); // quic_transport_parameters
     msg.extend_from_slice(&ext_len.to_be_bytes());
     msg.extend_from_slice(params_body);
     // extensions toplam uzunluğunu güncelle
@@ -627,6 +667,57 @@ pub fn inject_quic_transport_params(msg: &mut Vec<u8>, params_body: &[u8]) {
     msg[1] = ((hs_len >> 16) & 0xff) as u8;
     msg[2] = ((hs_len >> 8) & 0xff) as u8;
     msg[3] = (hs_len & 0xff) as u8;
+}
+
+/// ClientHello handshake mesajındaki (`type+len+body`) cipher_suites
+/// vektöründen verilen paketleri çıkarır ve uzunluk alanlarını düzeltir.
+/// QUIC'te yalnızca AES-128-GCM-SHA256 (0x1301) desteklendiğinden 0x1302
+/// gibi uygulanamayan TLS 1.3 paketleri sunucuya sunulmamalıdır —
+/// aksi halde sunucu onları seçip el sıkışmayı imkânsız kılar.
+pub fn strip_client_hello_cipher_suites(msg: &mut Vec<u8>, drop: &[u16]) {
+    // msg: type(1) + len(3) + body; body: ver(2)+random(32)+sid(1+n)+
+    // cs(2+n)+comp(1+n)+ext(2+n)
+    if msg.len() < 4 + 2 + 32 + 1 + 2 {
+        return;
+    }
+    let mut pos = 4 + 2 + 32;
+    let sid_len = msg[pos] as usize;
+    pos += 1 + sid_len;
+    if pos + 2 > msg.len() {
+        return;
+    }
+    let cs_pos = pos;
+    let cs_len = u16::from_be_bytes([msg[pos], msg[pos + 1]]) as usize;
+    pos += 2;
+    let cs_end = pos + cs_len;
+    if cs_end > msg.len() || cs_len % 2 != 0 {
+        return;
+    }
+    let mut kept: Vec<u16> = Vec::new();
+    let mut i = pos;
+    while i + 2 <= cs_end {
+        let suite = u16::from_be_bytes([msg[i], msg[i + 1]]);
+        if !drop.contains(&suite) {
+            kept.push(suite);
+        }
+        i += 2;
+    }
+    if kept.len() * 2 == cs_len {
+        return; // çıkarılacak paket yok
+    }
+    let mut nb = Vec::with_capacity(msg.len());
+    nb.extend_from_slice(&msg[..cs_pos]);
+    nb.extend_from_slice(&((kept.len() * 2) as u16).to_be_bytes());
+    for s in &kept {
+        nb.extend_from_slice(&s.to_be_bytes());
+    }
+    nb.extend_from_slice(&msg[cs_end..]);
+    // handshake mesaj uzunluğunu güncelle (type+3bayt)
+    let hs_len = (nb.len() - 4) as u32;
+    nb[1] = ((hs_len >> 16) & 0xff) as u8;
+    nb[2] = ((hs_len >> 8) & 0xff) as u8;
+    nb[3] = (hs_len & 0xff) as u8;
+    *msg = nb;
 }
 
 /// PADDING frame'leriyle datagramı minimum boyuta doldurur (Initial için
@@ -757,5 +848,37 @@ mod tests {
         // type 0x0f? stream_id=0 → ft=0x08|0x02|0x01=0x0b
         assert_eq!(out[0], 0x0b);
         assert_eq!(&out[3..8], b"hello");
+    }
+
+    #[test]
+    fn new_connection_id_frame_layout() {
+        let mut out = Vec::new();
+        let cid = [0xAAu8; 8];
+        let token = [0x55u8; 16];
+        encode_new_connection_id_frame(3, 1, &cid, &token, &mut out);
+        assert_eq!(out[0], 0x18);
+        // seq=3 (tek bayt varint), retire=1, len=8, cid, token
+        assert_eq!(&out[1..4], &[0x03, 0x01, 0x08]);
+        assert_eq!(&out[4..12], &cid);
+        assert_eq!(&out[12..28], &token);
+        assert_eq!(out.len(), 28);
+    }
+
+    #[test]
+    fn retire_and_path_frames_encode() {
+        let mut out = Vec::new();
+        encode_retire_connection_id_frame(7, &mut out);
+        assert_eq!(out, alloc::vec![0x19, 0x07]);
+
+        let mut out = Vec::new();
+        let data = [0xDEu8, 0xAD, 0xBE, 0xEF, 1, 2, 3, 4];
+        encode_path_challenge_frame(&data, &mut out);
+        assert_eq!(out[0], 0x1a);
+        assert_eq!(&out[1..9], &data);
+
+        let mut out = Vec::new();
+        encode_path_response_frame(&data, &mut out);
+        assert_eq!(out[0], 0x1b);
+        assert_eq!(&out[1..9], &data);
     }
 }

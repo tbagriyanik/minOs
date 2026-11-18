@@ -98,8 +98,8 @@ pub struct Socket {
     unacked_len: usize,
     unacked_seq: u32,
     fin_seq: u32,
-    // UDP için son datagramın kaynağı.
-    udp_peer_ip: Ipv4Address,
+    // UDP için son datagramın kaynağı (IPv4 veya IPv6).
+    udp_peer_ip: IpAddress,
     udp_peer_port: u16,
     udp_pending: bool,
     timeout_ms: u64,
@@ -126,7 +126,7 @@ impl Socket {
             unacked_len: 0,
             unacked_seq: 0,
             fin_seq: 0,
-            udp_peer_ip: Ipv4Address([0; 4]),
+            udp_peer_ip: IpAddress::V4(Ipv4Address([0; 4])),
             udp_peer_port: 0,
             udp_pending: false,
             timeout_ms: DEFAULT_TIMEOUT_MS,
@@ -618,7 +618,8 @@ pub fn sendto_v6(fd: i32, ip: Ipv6Address, port: u16, data: &[u8]) -> Result<usi
 }
 
 /// `recvfrom(fd, buf)` — gönderen adresiyle birlikte bir datagram döner.
-pub fn recvfrom(fd: i32, buf: &mut [u8]) -> Result<(usize, Ipv4Address, u16), i32> {
+/// Dönen adres `IpAddress::V4` veya `IpAddress::V6` olabilir.
+pub fn recvfrom(fd: i32, buf: &mut [u8]) -> Result<(usize, IpAddress, u16), i32> {
     let idx = fd as usize;
     let s = sock_mut(fd).ok_or(E_BADFD)?;
     if s.sock_type != SockType::Dgram {
@@ -1225,7 +1226,7 @@ pub(crate) fn on_tcp_segment_ipv6(src_ip: Ipv6Address, payload: &[u8]) -> bool {
 
 /// Gelen bir UDP datagramını ilgili sokete dağıtır. Tüketildiyse `true`.
 pub(crate) fn on_udp_datagram(
-    src_ip: Ipv4Address,
+    src_ip: IpAddress,
     src_port: u16,
     dst_port: u16,
     data: &[u8],

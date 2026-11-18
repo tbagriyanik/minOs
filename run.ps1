@@ -128,7 +128,9 @@ if ($Minimal) {
         "-device", "intel-hda",
         # Yalnızca çıkış codec'i: DirectSoundCapture / mikrofon başlatılmaz.
         "-device", "hda-output,audiodev=snd0",
-        # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
+        # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP/UDP sağlar ---
+        # NOT: SLIRP UDP hostfwd desteklemez; guest, host'taki servislere
+        # doğrudan 10.0.2.2 üzerinden ulaşır (örn. tools/h3_test_server.py :4433).
         "-netdev", "user,id=n0,hostfwd=tcp::8082-:80",
         "-device", "e1000,netdev=n0"
     )

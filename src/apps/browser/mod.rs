@@ -3539,6 +3539,11 @@ impl BrowserApp {
             normalized[..normalized_len].copy_from_slice(&entered.as_bytes()[..normalized_len]);
         }
         let value = core::str::from_utf8(&normalized[..normalized_len]).unwrap_or("");
+        {
+            let mut s: heapless::String<160> = heapless::String::new();
+            let _ = write!(s, "[NAV] url={}", value);
+            crate::serial_print(&s);
+        }
         if value.as_bytes() != &self.url[..self.url_len] {
             self.set_url(value.as_bytes());
         }
@@ -3900,6 +3905,7 @@ impl BrowserApp {
                     self.status =
                         crate::gui::ui_text("Ağ meşgul, bekleniyor...", "Network busy, waiting...");
                 } else if crate::drivers::netstack::dns_query(host) {
+                    crate::serial_print("[NAV] dns_query gonderildi, state=4\n");
                     self.request_state = 4;
                     self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 20;
@@ -3921,6 +3927,7 @@ impl BrowserApp {
                     self.status =
                         crate::gui::ui_text("Ağ meşgul, bekleniyor...", "Network busy, waiting...");
                 } else if let Some(ip) = crate::drivers::netstack::take_dns_result() {
+                    crate::serial_print("[NAV] dns sonucu alindi\n");
                     self.request_ip = ip;
                     self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 30;
@@ -4966,6 +4973,11 @@ impl BrowserApp {
     }
 
     fn finish_network_error_with_detail(&mut self, status: &'static str, detail: &str) {
+        {
+            let mut s: heapless::String<200> = heapless::String::new();
+            let _ = write!(s, "[NAV-ERR] {}", detail);
+            crate::serial_print(&s);
+        }
         self.record_network_error(detail);
         // Alt kaynak isteği başarısız olduysa sayfa bozulmaz; yalnızca
         // başarısız kaynak kuyruktan düşürülür (sonsuz tekrar denemesin).

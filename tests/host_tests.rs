@@ -381,9 +381,9 @@ pub mod drivers {
         pub fn poll() {}
     }
     pub mod socket {
-        use super::netstack::Ipv4Address;
+        use super::netstack::{IpAddress, Ipv4Address};
         use crate::netstack_mod::Ipv6Address;
-        pub fn on_udp_datagram(_src: Ipv4Address, _sport: u16, _dport: u16, _data: &[u8]) -> bool {
+        pub fn on_udp_datagram(_src: IpAddress, _sport: u16, _dport: u16, _data: &[u8]) -> bool {
             false
         }
         pub fn on_tcp_segment(_src: Ipv4Address, _data: &[u8]) -> bool {

@@ -150,6 +150,9 @@ pub struct H3Client {
     max_push_id: u64,
     /// Sunucu SETTINGS parametreleri (id -> değer).
     peer_settings: Vec<(u64, u64)>,
+    /// 0-RTT ile gönderilmiş istek akışı (varsa) — `send_request_body`
+    /// bu stream id için normal gönderimi atlar.
+    early_stream: Option<u64>,
 }
 
 impl H3Client {
@@ -171,6 +174,7 @@ impl H3Client {
             goaway_stream_id: 0,
             max_push_id: u64::MAX,
             peer_settings: Vec::new(),
+            early_stream: None,
         };
         client.send_control_stream()?;
         client.send_decoder_stream()?;
@@ -244,22 +248,17 @@ impl H3Client {
         self.send_request_body(method, path, authority, extra_headers, None)
     }
 
-    /// İstek gönderir; `body` verilirse HEADERS'tan sonra DATA frame'i
-    /// eklenir ve akış FIN ile kapatılır.
-    pub fn send_request_body(
-        &mut self,
+    /// İstek için QUIC stream baytlarını üretir (HEADERS frame'i +
+    /// opsiyonel DATA frame'i). 0-RTT erken gönderimiyle normal
+    /// gönderimin bayt-bayt aynı üretmesi gerekir — `early_covered`
+    /// karşılaştırması bu üretime dayanır.
+    fn request_stream_bytes(
         method: &str,
         path: &str,
         authority: &str,
         extra_headers: &[(String, String)],
         body: Option<&[u8]>,
-    ) -> Result<u64, String> {
-        if !self.conn.ready() {
-            return Err(String::from("quic_not_ready"));
-        }
-        let stream_id = self.next_stream;
-        self.next_stream += 4; // client bidi stream'leri 0,4,8...
-
+    ) -> Vec<u8> {
         let mut headers: Vec<(String, String)> = alloc::vec![
             (String::from(":method"), String::from(method)),
             (String::from(":scheme"), String::from("https")),
@@ -285,6 +284,34 @@ impl H3Client {
         encode_frame(FRAME_HEADERS, &qpack_block, &mut stream_data);
         if let Some(b) = body {
             encode_frame(FRAME_DATA, b, &mut stream_data);
+        }
+        stream_data
+    }
+
+    /// İstek gönderir; `body` verilirse HEADERS'tan sonra DATA frame'i
+    /// eklenir ve akış FIN ile kapatılır.
+    pub fn send_request_body(
+        &mut self,
+        method: &str,
+        path: &str,
+        authority: &str,
+        extra_headers: &[(String, String)],
+        body: Option<&[u8]>,
+    ) -> Result<u64, String> {
+        if !self.conn.ready() {
+            return Err(String::from("quic_not_ready"));
+        }
+        let stream_id = self.next_stream;
+        self.next_stream += 4; // client bidi stream'leri 0,4,8...
+
+        let stream_data = Self::request_stream_bytes(method, path, authority, extra_headers, body);
+        // 0-RTT ile gönderildiyse normal gönderimi atla — conn 1-RTT'de
+        // aynı baytları tekrarlar (alıcı örtüşen offset'i eler).
+        if self.early_stream == Some(stream_id)
+            && self.conn.early_covered(stream_id, 0, &stream_data)
+        {
+            self.track_response(stream_id);
+            return Ok(stream_id);
         }
         // Gövde olsun ya da olmasın istek akışını FIN ile kapat
         // (sunucu yanıtı aynı akışta döner; FIN göndermek server'ın
@@ -745,9 +772,10 @@ fn livetest_insecure_enabled() -> bool {
 /// gerektirdiğinden `H3Client::new` ancak `conn.ready()` sonrası
 /// çağrılabilir.
 fn h3_connect(
-    ip: crate::drivers::netstack::Ipv4Address,
+    ip: crate::drivers::netstack::IpAddress,
     port: u16,
     host: &str,
+    early_request: Option<&[u8]>,
 ) -> Result<H3Client, i32> {
     use crate::drivers::socket;
     let mut conn = QuicConn::connect(ip, port, host).map_err(|_| socket::E_NOTCONN)?;
@@ -755,21 +783,48 @@ fn h3_connect(
     if livetest_insecure_enabled() {
         conn.tls_mut().set_skip_cert_validation(true);
     }
+    // 0-RTT: PSK teklif edildiyse istek akışını (stream 0) el
+    // sıkışma tamamlanmadan erken gönder. `send_request_body` aynı
+    // baytları görünce normal gönderimi atlar.
+    let mut early_sid = None;
+    if let Some(bytes) = early_request {
+        if conn
+            .send_stream_data_early(0, 0, bytes, true)
+            .unwrap_or(false)
+        {
+            early_sid = Some(0u64);
+        }
+    }
     let mut ready = false;
     for _ in 0..40 {
         if conn.ready() {
             ready = true;
             break;
         }
-        if !conn.poll().map_err(|_| socket::E_IO)? {
-            break;
+        match conn.poll() {
+            Ok(alive) => {
+                if !alive {
+                    break;
+                }
+            }
+            Err(e) => {
+                crate::serial_print("[H3] conn.poll hata: ");
+                crate::serial_print(&e);
+                crate::serial_print(
+                    "
+",
+                );
+                return Err(socket::E_IO);
+            }
         }
     }
     if !ready {
         conn.close();
         return Err(socket::E_TIMEOUT);
     }
-    H3Client::new(conn).map_err(|_| socket::E_NOTCONN)
+    let mut client = H3Client::new(conn).map_err(|_| socket::E_NOTCONN)?;
+    client.early_stream = early_sid;
+    Ok(client)
 }
 
 /// `https://` URL'sini HTTP/3 (QUIC) üzerinden istek yapar.
@@ -797,7 +852,19 @@ pub fn http3_request_full(
     }
     let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
     let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
-    let ip = socket::resolve_host(host_str)?;
+    // A/AAAA çiftini çöz; ilk yanıtlanan aile seçilir (IPv6 dahil).
+    let ip = socket::resolve_host_ip(host_str)?;
+
+    let authority = if port == 443 {
+        host_str.to_string()
+    } else {
+        alloc::format!("{}:{}", host_str, port)
+    };
+    // 0-RTT adayı: istek akış baytları bağlantı kurulmadan önce
+    // kodlanır; yalnızca yeni bağlantı gerektiğinde ve sunucunun
+    // PSK'yı kabul ettiği durumda erken gönderilir.
+    let early_bytes =
+        H3Client::request_stream_bytes(method, path_str, &authority, req_headers, body);
 
     // Havuzdan al; yoksa ya da bağlantı öldüyse yeni kur.
     let mut client = match h3_pool_acquire(host_str, port) {
@@ -808,16 +875,10 @@ pub fn http3_request_full(
                 c
             } else {
                 c.close();
-                h3_connect(ip, port, host_str)?
+                h3_connect(ip, port, host_str, Some(&early_bytes))?
             }
         }
-        None => h3_connect(ip, port, host_str)?,
-    };
-
-    let authority = if port == 443 {
-        host_str.to_string()
-    } else {
-        alloc::format!("{}:{}", host_str, port)
+        None => h3_connect(ip, port, host_str, Some(&early_bytes))?,
     };
     let result = h3_do_request(
         &mut client,
@@ -848,9 +909,18 @@ fn h3_do_request(
     resp_headers: &mut Vec<(String, String)>,
 ) -> Result<(u16, usize), i32> {
     use crate::drivers::socket;
-    let stream_id = client
-        .send_request_body(method, path, authority, req_headers, body)
-        .map_err(|_| socket::E_IO)?;
+    let stream_id = match client.send_request_body(method, path, authority, req_headers, body) {
+        Ok(id) => id,
+        Err(e) => {
+            crate::serial_print("[H3] send_request_body hata: ");
+            crate::serial_print(&e);
+            crate::serial_print(
+                "
+",
+            );
+            return Err(socket::E_IO);
+        }
+    };
 
     // Yanıtı bekle (maks ~30 sn)
     let mut result: Option<H3Response> = None;
@@ -859,8 +929,21 @@ fn h3_do_request(
             result = Some(r);
             break;
         }
-        if !client.poll().map_err(|_| socket::E_IO)? {
-            break;
+        match client.poll() {
+            Ok(alive) => {
+                if !alive {
+                    break;
+                }
+            }
+            Err(e) => {
+                crate::serial_print("[H3] client.poll hata: ");
+                crate::serial_print(&e);
+                crate::serial_print(
+                    "
+",
+                );
+                return Err(socket::E_IO);
+            }
         }
     }
     let resp = result.ok_or(socket::E_TIMEOUT)?;

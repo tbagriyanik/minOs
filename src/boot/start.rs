@@ -164,6 +164,13 @@ pub fn early_init() -> BootDisplay {
     serial_print("\n");
     drivers::set_hhdm_offset(hhdm_offset);
 
+    // Map APIC physical range to prevent page faults early in boot.
+    let apic_phys_base = crate::arch::x86_64::smp::lapic_phys_base();
+    if apic_phys_base != 0 {
+        let aligned = apic_phys_base & !0x1F_FFFF;
+        crate::arch::x86_64::map_phys_readable(aligned);
+    }
+
     // KASLR: Limine'in seçtiği yükleme tabanını ve türetilen kaymayı günlüğe
     // yaz. `virtual_base` ET_DYN kayması uygulanmış gerçek sanal tabandır.
     if let Some((kphys, kvirt)) = crate::boot::limine::limine_kernel_address() {

@@ -1327,6 +1327,10 @@ impl Http2Connection {
                             return Err(super::http::E_CERT);
                         }
 
+                        // İptal kontrolü (CRL/OCSP; stapled OCSP zaten
+                        // el sıkışmada doğrulanmıştır).
+                        super::http::require_cert_verified(&session, host.as_bytes())?;
+
                         // TLS session'ı sakla — istek gönderilirken şifreleme için kullanılacak.
                         Ok(Some(session))
                     };

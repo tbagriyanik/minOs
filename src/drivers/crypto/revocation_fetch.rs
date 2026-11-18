@@ -17,10 +17,46 @@
 
 #![allow(dead_code)]
 
-use alloc::{string::String, string::ToString, vec::Vec};
+use alloc::{boxed::Box, string::String, string::ToString, vec::Vec};
+use core::cell::RefCell;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use super::revocation::RevocationResult;
 use super::revocation_core;
+
+type RevCache = RefCell<alloc::collections::BTreeMap<String, (RevocationResult, u64)>>;
+
+/// Canlı iptal sorgusu sonuçları için seri numarası bazlı kısa süreli önbellek.
+/// Her HTTPS bağlantısında CDP/AIA uç noktalarına tekrar tekrar gitmek
+/// bağlantı maliyetini katlar; sonuçlar 24 saat geçerlidir.
+static REV_CACHE: AtomicPtr<RevCache> = AtomicPtr::new(core::ptr::null_mut());
+
+fn rev_cache() -> &'static RevCache {
+    let ptr = REV_CACHE.load(Ordering::Acquire);
+    if ptr.is_null() {
+        let c = Box::into_raw(Box::new(RefCell::new(alloc::collections::BTreeMap::new())));
+        REV_CACHE.store(c, Ordering::Release);
+        unsafe { &*c }
+    } else {
+        unsafe { &*ptr }
+    }
+}
+
+const REV_CACHE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+/// Tek bir iptal sorgu turunun toplam üst sınırı (ms).
+const REV_FETCH_BUDGET_MS: u64 = 8_000;
+
+fn rev_cache_key(leaf_der: &[u8]) -> String {
+    let serial = revocation_core::certificate_serial(leaf_der).unwrap_or_default();
+    let mut s = String::with_capacity(serial.len() * 2);
+    for b in serial {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0xF) as usize] as char);
+    }
+    s
+}
+
+const HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// GET şablonu ile OCSP isteği URL'i üretir (RFC 6960 §A.1):
 /// `{ocsp_url}/{url_encode(base64(der_encode(CertID)))}`
@@ -201,13 +237,20 @@ fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
 
 /// HTTP GET ile verilen URL'den DER gövdesi indirir.
 /// Yalnızca `http://` şeması desteklenir; HTTPS URL'leri `None` döner.
+/// `deadline_ms` (monotonic) aşılırsa istek denenmez.
 /// Dönüş: 200 durum kodu + gövde (Response Content-Length / chunked / EOF).
-fn http_fetch_der(url: &str) -> Option<Vec<u8>> {
+fn http_fetch_der(url: &str, deadline_ms: u64) -> Option<Vec<u8>> {
+    if crate::monotonic_ms() > deadline_ms {
+        return None;
+    }
     let (host, port, path) = parse_http_url(url)?;
     let host: &str = &host;
     let path: &str = &path;
     let fd = crate::drivers::socket::socket(crate::drivers::socket::AF_INET, 1).ok()?;
-    let _ = crate::drivers::socket::set_timeout(fd, 10_000);
+    let remaining = deadline_ms
+        .saturating_sub(crate::monotonic_ms())
+        .clamp(500, 5000);
+    let _ = crate::drivers::socket::set_timeout(fd, remaining);
     let ip = crate::drivers::socket::resolve_host(host).ok()?;
     crate::drivers::socket::connect(fd, ip, port).ok()?;
 
@@ -325,37 +368,70 @@ fn apply_ocsp_verified(
 /// Sertifika zincirindeki yaprak (leaf) sertifika için iptal durumunu otomatik
 /// sorgular: önce CRL DP, sonra OCSP AIA. İlk `Good`/`Revoked` sonucu depoya
 /// yazılır ve döndürülür; hiçbir kaynak bulunamazsa `Unknown` döner.
+///
+/// Sonuçlar seri numarası bazında 24 saat önbelleklenir; uç noktalara
+/// toplam `REV_FETCH_BUDGET_MS` bütçesiyle erişilir.
 pub fn fetch_and_apply_revocation(
     leaf_der: &[u8],
     issuer_der: &[u8],
     now: &super::x509::X509Time,
 ) -> RevocationResult {
-    let mut last = RevocationResult::unknown();
-
-    // 1) CRL Dağıtım Noktaları
-    let crl_urls = super::x509::find_crl_urls(leaf_der);
-    for url in crl_urls.iter().take(2) {
-        if !url.starts_with("http://") {
-            continue; // HTTPS/ldap desteği yok
-        }
-        if let Some(crl_der) = http_fetch_der(url) {
-            last = super::revocation::apply_crl(&crl_der, issuer_der, &serial_of(leaf_der), now);
-            if last.status != revocation_core::RevocationStatus::Unknown {
-                return last;
+    // Önbellek: aynı sertifika için yakın zamanda sorgulandıysa tekrar sorma.
+    let key = rev_cache_key(leaf_der);
+    {
+        let cache = rev_cache().borrow();
+        if let Some((result, checked_ms)) = cache.get(&key) {
+            if crate::monotonic_ms().wrapping_sub(*checked_ms) < REV_CACHE_TTL_MS {
+                super::revocation::set_status(super::revocation::RevocationSource::Manual, *result);
+                return *result;
             }
         }
     }
 
-    // 2) OCSP (AIA)
-    let ocsp_urls = super::x509::find_ocsp_urls(leaf_der);
-    for url in ocsp_urls.iter().take(2) {
-        if !url.starts_with("http://") {
-            continue;
+    let deadline = crate::monotonic_ms() + REV_FETCH_BUDGET_MS;
+    let mut last = RevocationResult::unknown();
+    let serial = serial_of(leaf_der);
+
+    // 1) CRL Dağıtım Noktaları
+    let crl_urls = super::x509::find_crl_urls(leaf_der);
+    for url in crl_urls.iter().take(2) {
+        if !url.starts_with("http://") || crate::monotonic_ms() > deadline {
+            continue; // HTTPS/ldap desteği yok
         }
-        if let Some(ocsp_der) = http_fetch_der(url) {
-            last = apply_ocsp_verified(&ocsp_der, issuer_der, &serial_of(leaf_der), now);
+        if let Some(crl_der) = http_fetch_der(url, deadline) {
+            last = super::revocation::apply_crl(&crl_der, issuer_der, &serial, now);
             if last.status != revocation_core::RevocationStatus::Unknown {
-                return last;
+                break;
+            }
+        }
+    }
+
+    // 2) OCSP (AIA) — CRL kesin sonuç vermediyse
+    if last.status == revocation_core::RevocationStatus::Unknown {
+        let ocsp_urls = super::x509::find_ocsp_urls(leaf_der);
+        for url in ocsp_urls.iter().take(2) {
+            if !url.starts_with("http://") || crate::monotonic_ms() > deadline {
+                continue;
+            }
+            if let Some(ocsp_der) = http_fetch_der(url, deadline) {
+                last = apply_ocsp_verified(&ocsp_der, issuer_der, &serial, now);
+                if last.status != revocation_core::RevocationStatus::Unknown {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Yalnızca kesin sonuçları önbelleğe al (Unknown tekrar denenebilir).
+    if last.status != revocation_core::RevocationStatus::Unknown {
+        let mut cache = rev_cache().borrow_mut();
+        cache.insert(key, (last, crate::monotonic_ms()));
+        if cache.len() > 256 {
+            // Basit sınır: en eski kayıtları at.
+            let drop_n = cache.len() - 256;
+            let keys: Vec<String> = cache.keys().take(drop_n).cloned().collect();
+            for k in keys {
+                cache.remove(&k);
             }
         }
     }
@@ -379,7 +455,8 @@ pub fn fetch_and_apply_ocsp(
     let Some(url) = build_ocsp_get_url(ocsp_url, leaf_der, issuer_der) else {
         return RevocationResult::unknown();
     };
-    let Some(ocsp_der) = http_fetch_der(&url) else {
+    let deadline = crate::monotonic_ms() + REV_FETCH_BUDGET_MS;
+    let Some(ocsp_der) = http_fetch_der(&url, deadline) else {
         return RevocationResult::unknown();
     };
     apply_ocsp_verified(&ocsp_der, issuer_der, &serial_of(leaf_der), now)

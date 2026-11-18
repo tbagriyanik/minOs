@@ -1776,10 +1776,12 @@ impl JsRuntime {
                     core::str::from_utf8(&l[..colon]),
                     core::str::from_utf8(&l[colon + 1..]),
                 ) {
-                    headers_map.insert(
-                        name.trim().to_ascii_lowercase(),
-                        JsValue::String(value.trim().to_string()),
-                    );
+                    let name_l = name.trim().to_ascii_lowercase();
+                    if name_l == "set-cookie" {
+                        let (_, h, p) = Self::parse_fetch_url_parts(&url);
+                        crate::drivers::cookie::process_set_cookie(value.trim(), &h, &p);
+                    }
+                    headers_map.insert(name_l, JsValue::String(value.trim().to_string()));
                 }
             }
         }

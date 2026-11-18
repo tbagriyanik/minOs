@@ -275,7 +275,7 @@ fn hsts_max_age(headers: &[u8]) -> Option<u64> {
 /// kök CA deposu (`drivers/crypto/roots`) ile doğrulanmış olduğundan emin olur.
 /// Doğrulama başarısız olursa HTTPS isteği `E_CERT` ile reddedilir (gidişimli /
 /// MITM bağlantıları engellenir).
-fn require_cert_verified(session: &TlsSession, host: &[u8]) -> Result<(), i32> {
+pub(crate) fn require_cert_verified(session: &TlsSession, host: &[u8]) -> Result<(), i32> {
     if !session.is_cert_verified() {
         let host_str = core::str::from_utf8(host).unwrap_or("");
         let err_txt = session
@@ -286,6 +286,29 @@ fn require_cert_verified(session: &TlsSession, host: &[u8]) -> Result<(), i32> {
             "[HTTPS] {host_str}: sertifika doğrulama başarısız: {err_txt}\n"
         ));
         return Err(E_CERT);
+    }
+
+    // İptal kontrolü: stapled OCSP el sıkışmada fail-closed doğrulandıysa
+    // tekrar sorgulanmaz. Aksi halde sertifikanın CRL/OCSP uç noktalarından
+    // canlı kontrol yapılır (seri bazlı 24s önbellekli). Yalnızca açıkça
+    // `revoked` sonuç bağlantıyı reddeder; `unknown` soft-fail'dir
+    // (birçok sunucu iptal uç noktası yayınlamaz).
+    if !session.had_stapled_ocsp() {
+        if let (Some(leaf), Some(issuer)) = (session.leaf_cert_der(), session.issuer_cert_der()) {
+            let leaf_v = leaf.to_vec();
+            let issuer_v = issuer.to_vec();
+            let now = crate::drivers::crypto::x509::X509Time::now();
+            let result = crate::drivers::crypto::revocation_fetch::fetch_and_apply_revocation(
+                &leaf_v, &issuer_v, &now,
+            );
+            if result.status == crate::drivers::crypto::revocation_core::RevocationStatus::Revoked {
+                crate::serial_print(&format!(
+                    "[HTTPS] {}: sertifika iptal edilmiş (revoked), bağlantı reddedildi\n",
+                    core::str::from_utf8(host).unwrap_or("")
+                ));
+                return Err(E_CERT);
+            }
+        }
     }
     Ok(())
 }
@@ -2333,6 +2356,8 @@ impl WebSocketConnection {
                             }
                         }
 
+                        // WSS de sertifika zinciri + iptal kontrolünden geçer.
+                        require_cert_verified(&session, host.as_bytes())?;
                         Ok(Some(session))
                     };
 

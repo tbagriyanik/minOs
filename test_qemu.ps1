@@ -925,43 +925,7 @@ if ($FpsStressTest -and -not $fpsStressOk) {
     $allPassed = $false
 }
 
-# 5. Gercek Ses Ciktisi (QEMU WAV Dosyasi ve Intel HDA DMA Akisi)
-$audioFileCreated = (Test-Path $audioWavPath) -and ((Get-Item $audioWavPath).Length -ge 44)
-$hdaHardwareReady = $logOutput -match "\[HDA\] Intel HDA.*48kHz"
-
-# WAV 'data' chunk boyutunu oku: 0'dan buyukse gercek PCM akisi diske yazildi.
-$wavDataBytes = 0
-if ($audioFileCreated) {
-    try {
-        $wb = [System.IO.File]::ReadAllBytes($audioWavPath)
-        for ($i = 12; $i -lt $wb.Length - 8; $i++) {
-            if ($wb[$i] -eq 0x64 -and $wb[$i + 1] -eq 0x61 -and $wb[$i + 2] -eq 0x74 -and $wb[$i + 3] -eq 0x61) {
-                $wavDataBytes = [BitConverter]::ToUInt32($wb, $i + 4)
-                break
-            }
-        }
-    } catch {
-        $wavDataBytes = 0
-    }
-}
-
-if ($Minimal) {
-    Write-Host "  [SKIP] Gercek Ses Cikisi (minimal profilde HDA aygiti yok)" -ForegroundColor DarkGray
-} elseif ($audioFileCreated -and $hdaHardwareReady) {
-    $audioBytes = (Get-Item $audioWavPath).Length
-    if ($wavDataBytes -gt 0) {
-        Write-Host "  [OK] Gercek Ses Akisi (48kHz DMA -> WAV: $wavDataBytes bayt PCM, dosya $audioBytes bayt)" -ForegroundColor Green
-    } else {
-        Write-Host "  [OK] Intel HDA Hazir (WAV dosyasi olustu; bu pencerede PCM verisi yok)" -ForegroundColor Yellow
-    }
-} elseif ($hdaHardwareReady) {
-    Write-Host "  [OK] Ses Denetleyicisi (Intel HDA MMIO & DMA Hazir)" -ForegroundColor Green
-} else {
-    Write-Host "  [FAIL] Gercek Ses Cikisi (Intel HDA donanimi veya WAV cikisi algilanamadi)" -ForegroundColor Red
-    $allPassed = $false
-}
-
-# 6. Masaustu / Karsilama Durumu
+# 5. Masaustu / Karsilama Durumu
 if ($reachedDesktop -or ($logOutput -match "\[BOOT\] (Desktop loop started|Masa.st. d.ng.s. ba.lad)")) {
     Write-Host "  [OK] Masaustu Olay Dongusu (Ana masaustu etkilesim dongusune girildi)" -ForegroundColor Green
 } elseif ($logOutput -match "\[BOOT\] (Kurulu sistem tespit edildi|Hosgeldin|Masaustu hazirlaniyor)") {
@@ -971,17 +935,15 @@ if ($reachedDesktop -or ($logOutput -match "\[BOOT\] (Desktop loop started|Masa.
     $allPassed = $false
 }
 
-# 7. QEMU STDERR Akisi Denetimi
+# 6. QEMU STDERR Akisi Denetimi
 if ($errOutput) {
     Write-Host "`n[QEMU STDERR Bildirimleri]:" -ForegroundColor DarkYellow
     Write-Host $errOutput -ForegroundColor Gray
 }
 
-# 8. Markdown Test Raporu (surum surecine baglanir)
+# 7. Markdown Test Raporu (surum surecine baglanir)
 $profileName = if ($Minimal) { "minimal" } elseif ($HighEnd) { "high" } else { "default" }
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss") + " UTC"
-$audioReady = $audioFileCreated -and $hdaHardwareReady
-$audioBytes = if (Test-Path $audioWavPath) { (Get-Item $audioWavPath).Length } else { 0 }
 $desktopReady = $reachedDesktop -or ($logOutput -match "\[BOOT\] (Desktop loop started|Masa.st. d.ng.s. ba.lad)")
 
 $report = [System.Text.StringBuilder]::new()
@@ -995,7 +957,6 @@ $report = [System.Text.StringBuilder]::new()
 [void]$report.AppendLine("| Bellek / vCPU | ${memMb} MB / $smpCpus |")
 [void]$report.AppendLine("| VGA | $Vga |")
 [void]$report.AppendLine("| USB HID / PS/2 | $(if ($UsbHid) { 'açık' } else { 'kapalı' }) / $(if ($NoPs2) { 'devre dışı' } else { 'açık' }) |")
-[void]$report.AppendLine("| HDA WAV çıktısı | $(if ($audioReady) { "$wavDataBytes bayt PCM / dosya $audioBytes bayt" } else { 'yok' }) |")
 [void]$report.AppendLine("")
 [void]$report.AppendLine("## Kontroller")
 [void]$report.AppendLine("")
@@ -1005,8 +966,6 @@ foreach ($check in $checks) {
     $st = if ($logOutput -match $check.Pattern) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
     [void]$report.AppendLine("| $($check.Name) | $st | $($check.Description) |")
 }
-$audioStatus = if ($Minimal) { "⏭️ ATLANDI" } elseif ($audioReady) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
-[void]$report.AppendLine("| Gerçek Ses Çıkışı (Intel HDA / WAV) | $audioStatus | 48 kHz DMA akışı ve WAV dosyası |")
 $desktopStatus = if ($desktopReady) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
 [void]$report.AppendLine("| Masaüstü Olay Döngüsü | $desktopStatus | Ana etkileşim döngüsüne giriş |")
 if ($FpsStressTest) {

@@ -803,6 +803,24 @@ impl TlsSession {
         self.cert_verified
     }
 
+    /// Doğrulanmış yaprak (leaf) sertifikanın DER kodlaması.
+    /// İptal kontrolü (CRL/OCSP) için gereklidir.
+    pub fn leaf_cert_der(&self) -> Option<&[u8]> {
+        self.leaf_cert_der.as_deref()
+    }
+
+    /// Zincirdeki issuer sertifikanın DER kodlaması.
+    pub fn issuer_cert_der(&self) -> Option<&[u8]> {
+        self.issuer_cert_der.as_deref()
+    }
+
+    /// Sunucu el sıkışmada stapled OCSP yanıtı gönderdi mi?
+    /// Gönderildiyse `apply_stapled_ocsp` fail-closed doğrulama yapmıştır;
+    /// ayrı canlı sorgu gerekmez.
+    pub fn had_stapled_ocsp(&self) -> bool {
+        self.stapled_ocsp_response.is_some()
+    }
+
     pub fn cert_error(&self) -> Option<crate::drivers::crypto::x509::CertValidationError> {
         self.cert_error
     }

@@ -241,6 +241,112 @@ impl CookieJar {
     pub fn list(&self) -> Vec<Cookie> {
         self.cookies.borrow().clone()
     }
+
+    /// Çerezleri ikili biçimde serileştirir (VFS kalıcılığı için).
+    /// Biçim: [u32 adet] yineleyen [u32 klen][ad][u32 vlen][değer]
+    /// [u32 dlen][domain][u32 plen][path][u64 expires][u8 flags]
+    /// flags: bit0 secure, bit1 http_only, bit2-3 same_site (0=Lax,1=Strict,2=None)
+    pub fn dump(&self) -> Vec<u8> {
+        let cookies = self.cookies.borrow();
+        let mut out = Vec::new();
+        out.extend_from_slice(&(cookies.len() as u32).to_be_bytes());
+        for c in cookies.iter() {
+            out.extend_from_slice(&(c.name.len() as u32).to_be_bytes());
+            out.extend_from_slice(c.name.as_bytes());
+            out.extend_from_slice(&(c.value.len() as u32).to_be_bytes());
+            out.extend_from_slice(c.value.as_bytes());
+            out.extend_from_slice(&(c.domain.len() as u32).to_be_bytes());
+            out.extend_from_slice(c.domain.as_bytes());
+            out.extend_from_slice(&(c.path.len() as u32).to_be_bytes());
+            out.extend_from_slice(c.path.as_bytes());
+            out.extend_from_slice(&c.expires.to_be_bytes());
+            let ss = match c.same_site {
+                SameSite::Lax => 0u8,
+                SameSite::Strict => 1,
+                SameSite::None => 2,
+            };
+            let flags = (c.secure as u8) | ((c.http_only as u8) << 1) | (ss << 2);
+            out.push(flags);
+        }
+        out
+    }
+
+    /// `dump()` çıktısını jar'a yükler. Mevcut çerezler korunur; aynı
+    /// (ad, domain, path) üçlüsü güncellenir. Bozuk veri güvenle yok sayılır.
+    pub fn load(&self, data: &[u8]) {
+        if data.len() < 4 {
+            return;
+        }
+        let count = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        if count > 10_000 {
+            return; // bozuk/huge count
+        }
+        let mut p = 4usize;
+        let mut loaded: Vec<Cookie> = Vec::new();
+        for _ in 0..count {
+            let read_str = |p: &mut usize| -> Option<String> {
+                if *p + 4 > data.len() {
+                    return None;
+                }
+                let len = u32::from_be_bytes([data[*p], data[*p + 1], data[*p + 2], data[*p + 3]])
+                    as usize;
+                *p += 4;
+                if len > 8192 || *p + len > data.len() {
+                    return None;
+                }
+                let s = core::str::from_utf8(&data[*p..*p + len]).ok()?.to_string();
+                *p += len;
+                Some(s)
+            };
+            let (Some(name), Some(value), Some(domain), Some(path)) = (
+                read_str(&mut p),
+                read_str(&mut p),
+                read_str(&mut p),
+                read_str(&mut p),
+            ) else {
+                return;
+            };
+            if p + 9 > data.len() {
+                return;
+            }
+            let mut eb = [0u8; 8];
+            eb.copy_from_slice(&data[p..p + 8]);
+            let expires = u64::from_be_bytes(eb);
+            p += 8;
+            let flags = data[p];
+            p += 1;
+            let same_site = match (flags >> 2) & 0x3 {
+                1 => SameSite::Strict,
+                2 => SameSite::None,
+                _ => SameSite::Lax,
+            };
+            loaded.push(Cookie {
+                name,
+                value,
+                domain,
+                path,
+                expires,
+                secure: flags & 1 != 0,
+                http_only: flags & 2 != 0,
+                same_site,
+            });
+        }
+        let mut cookies = self.cookies.borrow_mut();
+        for c in loaded {
+            if let Some(pos) = cookies
+                .iter()
+                .position(|e| e.name == c.name && e.domain == c.domain && e.path == c.path)
+            {
+                cookies[pos] = c;
+            } else {
+                cookies.push(c);
+            }
+        }
+        // Kapasite sınırlarını koru
+        while cookies.len() > self.max_cookies {
+            cookies.remove(0);
+        }
+    }
 }
 
 impl Default for CookieJar {
@@ -504,5 +610,76 @@ mod tests {
         );
         let header = jar.get_cookie_header("example.com", "/", true, true);
         assert_eq!(header, "session=abc123");
+    }
+
+    #[test]
+    fn test_dump_load_roundtrip() {
+        let jar = CookieJar::new();
+        jar.set_cookie(
+            "a=1; Domain=example.com; Path=/; Secure; SameSite=Strict",
+            "example.com",
+            "/",
+        );
+        jar.set_cookie(
+            "b=iki; Domain=alt.example.com; Path=/x; HttpOnly; SameSite=None",
+            "alt.example.com",
+            "/x",
+        );
+        jar.set_cookie(
+            "c=3; Domain=example.com; Path=/; Expires=Fri, 01 Jan 2038 00:00:00 GMT",
+            "example.com",
+            "/",
+        );
+        let data = jar.dump();
+
+        let jar2 = CookieJar::new();
+        jar2.load(&data);
+        assert_eq!(jar2.len(), 3);
+
+        let c_a = jar2
+            .list()
+            .into_iter()
+            .find(|c| c.name == "a")
+            .expect("a çerezi yüklenmedi");
+        assert!(c_a.secure);
+        assert!(!c_a.http_only);
+        assert_eq!(c_a.same_site, SameSite::Strict);
+        assert_eq!(c_a.domain, "example.com");
+
+        let c_b = jar2
+            .list()
+            .into_iter()
+            .find(|c| c.name == "b")
+            .expect("b çerezi yüklenmedi");
+        assert!(c_b.http_only);
+        assert_eq!(c_b.same_site, SameSite::None);
+        assert_eq!(c_b.path, "/x");
+
+        // Yüklenen jar aynı Cookie başlığını üretmeli.
+        let h1 = jar.get_cookie_header("example.com", "/", true, true);
+        let h2 = jar2.get_cookie_header("example.com", "/", true, true);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_load_rejects_truncated_and_overwrites() {
+        let jar = CookieJar::new();
+        jar.set_cookie("k=v; Domain=example.com; Path=/", "example.com", "/");
+        let data = jar.dump();
+
+        // Kesik veri yükleme hatasız tamamlanmalı, çerez eklememeli.
+        let jar2 = CookieJar::new();
+        jar2.load(&data[..data.len() - 3]);
+        assert_eq!(jar2.len(), 0);
+        // Boş/çok kısa veri de güvenli.
+        jar2.load(&[]);
+        jar2.load(&[0xff; 2]);
+        assert_eq!(jar2.len(), 0);
+
+        // Aynı üçlü yüklemede güncellenir (duplicate oluşmaz).
+        let jar3 = CookieJar::new();
+        jar3.load(&data);
+        jar3.load(&data);
+        assert_eq!(jar3.len(), 1);
     }
 }

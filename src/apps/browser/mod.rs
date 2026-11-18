@@ -752,6 +752,8 @@ pub struct BrowserApp {
     pub is_https: bool,
     pub is_post: bool,
     pub post_body: Vec<u8>,
+    cookies_vfs_loaded: bool,
+    revocation_checked: bool,
     pub response_data: Vec<u8>,
     pub response_len: usize,
     pub tls_session: Option<crate::drivers::tls::TlsSession>,
@@ -1037,6 +1039,8 @@ impl BrowserApp {
             is_https: false,
             is_post: false,
             post_body: Vec::new(),
+            cookies_vfs_loaded: false,
+            revocation_checked: false,
             response_data: Vec::new(),
             response_len: 0,
             tls_session: None,
@@ -1094,6 +1098,15 @@ impl BrowserApp {
     }
 
     /// Save user bookmarks to VFS for persistence across sessions.
+    /// Ortak çerez kavanoğunu `/browser/cookies.bin` dosyasına kalıcı yazar.
+    fn save_cookies_to_vfs(&self, vfs: &mut crate::fs::vfs::VirtualFileSystem) {
+        if !vfs.is_dir("/browser") {
+            let _ = vfs.create_dir("/browser");
+        }
+        let data = unsafe { &*crate::drivers::cookie::cookie_jar() }.dump();
+        let _ = vfs.write_file("/browser/cookies.bin", &data);
+    }
+
     pub fn save_bookmarks_to_vfs(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
         if !vfs.is_dir("/browser") {
             let _ = vfs.create_dir("/browser");
@@ -3137,6 +3150,7 @@ impl BrowserApp {
         self.tls_pending_request.clear();
         self.tls_request_sent = false;
         self.tls13_finished_sent = false;
+        self.revocation_checked = false;
         self.reset_response_buffer();
         crate::drivers::netstack::tcp_close();
         crate::drivers::netstack::tcp_clear_result();
@@ -3329,6 +3343,7 @@ impl BrowserApp {
                 self.tls_pending_request.clear();
                 self.tls_request_sent = false;
                 self.tls13_finished_sent = false;
+                self.revocation_checked = false;
                 self.tls_app_data.clear();
                 self.reset_response_buffer();
                 self.status = if is_https {
@@ -3497,6 +3512,18 @@ impl BrowserApp {
         // Media player'ları her karede güncelle (ses oynatma için).
         let now = crate::boot::time::main_monotonic_ms() as u64;
         self.media_players.update_all(now);
+
+        // Çerez kavanoğunu ilk ağ turunda VFS'ten bir kez yükle.
+        if !self.cookies_vfs_loaded {
+            self.cookies_vfs_loaded = true;
+            if !vfs.is_dir("/browser") {
+                let _ = vfs.create_dir("/browser");
+            }
+            if let Some(data) = vfs.read_file("/browser/cookies.bin") {
+                let data = data.to_vec();
+                unsafe { &*crate::drivers::cookie::cookie_jar() }.load(&data);
+            }
+        }
 
         // Ana istek yokken sıradaki harici kaynağı (img/CSS) başlat.
         // Bu blok, ana istek durum makinesinden önce gelmelidir; aksi halde
@@ -3968,6 +3995,27 @@ impl BrowserApp {
                     .as_ref()
                     .is_some_and(|t| t.state() == crate::drivers::tls::TlsState::Established);
 
+                // İptal kontrolü: stapled OCSP el sıkışmada doğrulandıysa
+                // atlanır; aksi halde CRL/OCSP uç noktalarından canlı sorgu
+                // (seri bazlı önbellekli). `revoked` sonucu bağlantıyı reddeder.
+                if tls_established && !self.revocation_checked {
+                    self.revocation_checked = true;
+                    let rev_result = self.tls_session.as_ref().and_then(|tls| {
+                        crate::drivers::http::require_cert_verified(
+                            tls,
+                            &self.request_host[..self.request_host_len],
+                        )
+                        .err()
+                    });
+                    if rev_result.is_some() {
+                        self.finish_network_error(crate::gui::ui_text(
+                            "Sertifika iptal edilmiş; güvenli bağlantı reddedildi.",
+                            "The certificate has been revoked; the secure connection was rejected.",
+                        ));
+                        return;
+                    }
+                }
+
                 // ── HTTP/2 entegrasyonu ─────────────────────────────────────
                 // ALPN ile h2leşmişse http2_get üzerinden HTTP/2 isteği yapar.
                 // http2_get kendi TCP/TLS bağlantısını kurar; mevcut bağlantı
@@ -4044,6 +4092,7 @@ impl BrowserApp {
 
                             // Set-Cookie başlıklarını çerez jar'ına işle.
                             let cookie_path = cookie_default_path(path_str);
+                            let mut cookies_dirty = false;
                             for (name, value) in &h2_headers {
                                 if name.eq_ignore_ascii_case(b"set-cookie") {
                                     if let Ok(cs) = core::str::from_utf8(value) {
@@ -4054,9 +4103,13 @@ impl BrowserApp {
                                                 host_str,
                                                 cookie_path,
                                             );
+                                            cookies_dirty = true;
                                         }
                                     }
                                 }
+                            }
+                            if cookies_dirty {
+                                self.save_cookies_to_vfs(vfs);
                             }
 
                             // Yönlendirme kodlarını işle (Location başlığı HPACK'ten çözülmüş gelir)
@@ -4237,6 +4290,7 @@ impl BrowserApp {
                             core::str::from_utf8(&self.request_path[..self.request_path_len])
                                 .unwrap_or("/");
                         let cookie_path = cookie_default_path(current_path_str);
+                        let mut cookies_dirty = false;
                         for line in headers.split(|b| *b == b'\n') {
                             let l = if line.last() == Some(&b'\r') {
                                 &line[..line.len() - 1]
@@ -4253,9 +4307,13 @@ impl BrowserApp {
                                             current_host_str,
                                             cookie_path,
                                         );
+                                        cookies_dirty = true;
                                     }
                                 }
                             }
+                        }
+                        if cookies_dirty {
+                            self.save_cookies_to_vfs(vfs);
                         }
                         if let Some(code) = status_code {
                             if (code == 301

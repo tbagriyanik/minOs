@@ -350,6 +350,58 @@ impl MinGuiCompositor {
             .map_or(idx, |win| win.app_id as usize)
     }
 
+    /// Verilen pencerenin etkin temasi: pencere bazlı override varsa onu,
+    /// yoksa global temayı miras alir (per-app tema mirasi).
+    pub fn theme_for_window(&self, idx: usize) -> theme::ThemeId {
+        match self.windows.get(idx).and_then(|slot| *slot) {
+            Some(win) => theme::resolve_theme(theme::current(), win.theme_override),
+            None => theme::current(),
+        }
+    }
+
+    /// Bir pencereye uygulama bazli tema override'u uygular.
+    ///
+    /// Override uygulandıktan sonra ilgili pencereyi kirli bölge listesine
+    /// işler (tema değişikliği yeniden çizimi gerektirir).
+    pub fn set_window_theme(&mut self, idx: usize, theme_id: theme::ThemeId) {
+        if let Some(ref mut win) = self.windows.get_mut(idx).and_then(|slot| *slot) {
+            win.theme_override = Some(theme_id);
+        }
+        let (x, y, w, h) = self
+            .windows
+            .get(idx)
+            .and_then(|slot| *slot)
+            .map(|win| (win.x, win.y, win.width, win.height))
+            .unwrap_or((0, 0, 0, 0));
+        self.dirty_tracker
+            .mark_window(idx, crate::gui::dirty_rect::DirtyRect::new(x, y, w, h));
+    }
+
+    /// Pencere bazlı tema override'unu temizler; etkin tema global temaya doner.
+    pub fn clear_window_theme(&mut self, idx: usize) {
+        if let Some(ref mut win) = self.windows.get_mut(idx).and_then(|slot| *slot) {
+            win.theme_override = None;
+        }
+        let (x, y, w, h) = self
+            .windows
+            .get(idx)
+            .and_then(|slot| *slot)
+            .map(|win| (win.x, win.y, win.width, win.height))
+            .unwrap_or((0, 0, 0, 0));
+        self.dirty_tracker
+            .mark_window(idx, crate::gui::dirty_rect::DirtyRect::new(x, y, w, h));
+    }
+
+    /// Verilen pencere slotu icin kirli bölge render listesini döndürür.
+    ///
+    /// `None` → bu pencere bu frame'de yeniden cizilmeye gerek yoktur.
+    /// Tam kare yeniden cizimler (`dirty_rect == None`) bu sorgulamayi bypass eder.
+    pub fn window_dirty_rect(&self, idx: usize) -> Option<(usize, usize, usize, usize)> {
+        self.dirty_tracker
+            .window_dirty(idx)
+            .map(|r| (r.x, r.y, r.width, r.height))
+    }
+
     /// Belirtilen pencereyi odaklar ve z-sırasında en öne taşır.
     /// Kapalı (`is_open == false`) veya boş slotlar reddedilir; Alt+Tab
     /// sıralaması bayatladıktan sonra ölü bir pencere öne gelemez.

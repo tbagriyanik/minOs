@@ -548,6 +548,123 @@ pub fn contrast_ratio(a: u32, b: u32) -> f32 {
     (light + 0.05) / (dark + 0.05)
 }
 
+// ---------------------------------------------------------------------------
+// WCAG 2.x erisim ve metin kontrast olcum/esikleri
+// ---------------------------------------------------------------------------
+
+/// WCAG AA normal metin icin minimum kontrast orani (4.5:1).
+pub const WCAG_AA_NORMAL: f32 = 4.5;
+/// WCAG AAA normal metin icin minimum kontrast orani (7.0:1).
+pub const WCAG_AAA_NORMAL: f32 = 7.0;
+/// WCAG AA buyuk metin icin minimum kontrast orani (3.0:1).
+pub const WCAG_AA_LARGE_TEXT: f32 = 3.0;
+/// WCAG AAA buyuk metin icin minimum kontrast orani (4.5:1).
+pub const WCAG_AAA_LARGE_TEXT: f32 = 4.5;
+
+/// Olcum sonucundaki WCAG uyum seviyesi.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum WcagLevel {
+    /// A: en dusuk esik (3:1 normal / 3:1 buyuk metin).
+    A,
+    /// AA: 4.5:1 normal metin, 3.0:1 buyuk metin.
+    AA,
+    /// AAA: 7.0:1 normal metin, 4.5:1 buyuk metin.
+    AAA,
+}
+
+impl WcagLevel {
+    /// Verilen metin turune uygulanan esigi dondurur.
+    pub fn threshold(self, large_text: bool) -> f32 {
+        match self {
+            WcagLevel::A => 3.0,
+            WcagLevel::AA => {
+                if large_text {
+                    WCAG_AA_LARGE_TEXT
+                } else {
+                    WCAG_AA_NORMAL
+                }
+            }
+            WcagLevel::AAA => {
+                if large_text {
+                    WCAG_AAA_LARGE_TEXT
+                } else {
+                    WCAG_AAA_NORMAL
+                }
+            }
+        }
+    }
+
+    /// Verilen olcum (`ratio`) esigi `passes` ile gecti mi?
+    pub fn passes(self, ratio: f32, large_text: bool) -> bool {
+        ratio >= self.threshold(large_text)
+    }
+}
+
+/// Bir kontrast oranini WCAG seviyesine degerlendirir (olcum sonucu).
+///
+/// `large_text` buyuk metin kabul edilirse AAA esigi 4.5:1, normal metin icin
+/// 7:1 kullanilir; aksi halde AA esigi 4.5:1 (normal) veya 3.0:1 (buyuk metin).
+pub fn assess_contrast(ratio: f32, large_text: bool) -> WcagLevel {
+    let aa = if large_text {
+        WCAG_AA_LARGE_TEXT
+    } else {
+        WCAG_AA_NORMAL
+    };
+    let aaa = if large_text {
+        WCAG_AAA_LARGE_TEXT
+    } else {
+        WCAG_AAA_NORMAL
+    };
+    const EPS: f32 = 1e-6;
+    if ratio + EPS >= aaa {
+        WcagLevel::AAA
+    } else if ratio + EPS >= aa {
+        WcagLevel::AA
+    } else {
+        WcagLevel::A
+    }
+}
+
+/// Bir tema icin metin / vurgu renkleri ile arka plan arasinda en duser
+/// olcuunlu (düşük) kontrast oranini olcer; erisimlestirme raporu icin.
+///
+/// Donus: `(ratio, fg_idx, bg_idx)` — en dusuk kesis orani ile o ciftin
+/// palet indisleri. Erisilebilirlik denetimi ve duzenleme buradan beslenir.
+pub fn min_text_contrast(id: ThemeId) -> (f32, u32, u32) {
+    let p = palette(id);
+    let pairs = [
+        (IDX_TEXT_MAIN, IDX_WINDOW_BG),
+        (IDX_TEXT_MUTED, IDX_WINDOW_BG),
+        (IDX_TEXT_MUTED, IDX_TASKBAR_BG),
+        (IDX_TEXT_MUTED, IDX_TITLEBAR),
+    ];
+    let mut best = (
+        contrast_ratio(p[IDX_TEXT_MAIN as usize], p[IDX_WINDOW_BG as usize]),
+        IDX_TEXT_MAIN,
+        IDX_WINDOW_BG,
+    );
+    for (fg_idx, bg_idx) in pairs {
+        let ratio = contrast_ratio(p[fg_idx as usize], p[bg_idx as usize]);
+        if ratio < best.0 {
+            best = (ratio, fg_idx, bg_idx);
+        }
+    }
+    for accent_idx in [
+        IDX_ACCENT_BLUE,
+        IDX_ACCENT_GREEN,
+        IDX_ACCENT_RED,
+        IDX_ACCENT_YELLOW,
+        IDX_ACCENT_PINK,
+        IDX_ACCENT_CAT,
+    ] {
+        let ratio = contrast_ratio(p[accent_idx as usize], p[IDX_WINDOW_BG as usize]);
+        if ratio < best.0 {
+            best = (ratio, accent_idx, IDX_WINDOW_BG);
+        }
+    }
+    best
+}
+
 /// Returns preview colors for a theme (desktop bg + accent blue).
 ///
 /// Used for theme swatches in the settings UI. Does not modify the active palette.
@@ -632,6 +749,61 @@ pub fn get(idx: u32) -> u32 {
     } else {
         0
     }
+}
+
+// ---------------------------------------------------------------------------
+// Otomatik gundus/gece tema ve uygulama bazli tema mirasi
+// ---------------------------------------------------------------------------
+
+/// Otomatik gundus/gece modunda gundus baslangici saati (0-23).
+pub const AUTO_DAY_START_HOUR: u8 = 7;
+/// Otomatik gundus/gece modunda gece baslangici saati (0-23).
+pub const AUTO_NIGHT_START_HOUR: u8 = 19;
+
+static AUTO_THEME_ENABLED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Otomatik gundus/gece temasini ac/kapatir.
+///
+/// Aktifken saat bazli tema (`auto_theme_for`) senkronlanir ve uygulanir;
+/// kapatildiginda global tema (ayar/hoş geldin) geri devreye cikar.
+pub fn set_auto_theme(enabled: bool) {
+    AUTO_THEME_ENABLED.store(enabled, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Otomatik gundus/gece modu aktif mi?
+pub fn auto_theme_enabled() -> bool {
+    AUTO_THEME_ENABLED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Saat bazli otomatik tema corespondu: gundus araliginda [`ThemeId::Daylight`],
+/// diger saatlerde [`ThemeId::VelvetDark`].
+pub fn auto_theme_for(hour: u8, _minute: u8) -> ThemeId {
+    if (AUTO_DAY_START_HOUR..AUTO_NIGHT_START_HOUR).contains(&hour) {
+        ThemeId::Daylight
+    } else {
+        ThemeId::VelvetDark
+    }
+}
+
+/// Otomatik modu senkronlar: aktifse saat bazli tema uygulanir ve dondurulan
+/// tema dondurulur; pasifse o anki global tema dondurulur.
+pub fn sync_auto_theme_at(hour: u8, minute: u8) -> ThemeId {
+    if auto_theme_enabled() {
+        let next = auto_theme_for(hour, minute);
+        if next != current() {
+            apply(next);
+        }
+        next
+    } else {
+        current()
+    }
+}
+
+/// Uygulama/pencere bazli tema mirasi: pencere override'u (`Some`) yoksa global
+/// temayi (`None`) miras olarak kullanir.
+pub fn resolve_theme(global: ThemeId, override_: Option<ThemeId>) -> ThemeId {
+    override_.unwrap_or(global)
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +907,101 @@ mod tests {
             assert_eq!(bg, p[IDX_DESKTOP_BG as usize]);
             assert_eq!(accent, p[IDX_ACCENT_BLUE as usize]);
         }
+    }
+
+    /// `assess_contrast` WCAG eşiklerini doğru derecede derecelendirmeli.
+    #[test]
+    fn assess_contrast_uses_wcag_thresholds() {
+        assert_eq!(assess_contrast(21.0, false), WcagLevel::AAA);
+        assert_eq!(assess_contrast(7.0, false), WcagLevel::AAA);
+        assert_eq!(assess_contrast(6.9, false), WcagLevel::AA);
+        assert_eq!(assess_contrast(4.5, false), WcagLevel::AA);
+        assert_eq!(assess_contrast(4.49, false), WcagLevel::A);
+        // Büyük metin: AAA eşiği AA eşiğinden yüksektir.
+        assert_eq!(assess_contrast(4.5, true), WcagLevel::AAA);
+        assert_eq!(assess_contrast(4.49, true), WcagLevel::AA);
+        assert_eq!(assess_contrast(3.0, true), WcagLevel::AA);
+        assert_eq!(assess_contrast(2.99, true), WcagLevel::A);
+    }
+
+    /// Yüksek kontrast temasının metin çiftleri WCAG AAA ölçüsünü geçmeli.
+    #[test]
+    fn high_contrast_meets_wcag_aaa_across_text_pairs() {
+        let id = ThemeId::HighContrast;
+        let (ratio, fg_idx, bg_idx) = min_text_contrast(id);
+        assert!(
+            ratio >= WCAG_AAA_NORMAL,
+            "HighContrast min metin kontrastı {ratio:.2} AAA için 7:1 gerekli (fg={fg_idx}, bg={bg_idx})"
+        );
+        let p = palette(id);
+        assert!(
+            assess_contrast(
+                contrast_ratio(p[IDX_TEXT_MAIN as usize], p[IDX_WINDOW_BG as usize]),
+                false
+            ) == WcagLevel::AAA
+        );
+        assert!(
+            assess_contrast(
+                contrast_ratio(p[IDX_TEXT_MUTED as usize], p[IDX_TASKBAR_BG as usize]),
+                false
+            ) == WcagLevel::AAA
+        );
+    }
+
+    /// Tüm temalar için metin kontrast ölçümü (WCAG) raporu üretilebilir.
+    #[test]
+    fn min_text_contrast_reports_lowest_pair_per_theme() {
+        for &id in ThemeId::ALL.iter() {
+            let (ratio, fg_idx, bg_idx) = min_text_contrast(id);
+            assert!(ratio > 0.0);
+            assert!(ratio.is_finite());
+            let p = palette(id);
+            let checked = contrast_ratio(p[fg_idx as usize], p[bg_idx as usize]);
+            assert!(
+                (ratio - checked).abs() < 1e-6,
+                "{id:?}: rapor oranı ölçülebilir oranla uyuşmuyor"
+            );
+        }
+    }
+
+    /// Otomatik gündus/gece temas uyum testleri: saat aralıkları.
+    #[test]
+    fn auto_theme_follows_day_night_hours() {
+        assert_eq!(auto_theme_for(0, 0), ThemeId::VelvetDark);
+        assert_eq!(auto_theme_for(6, 59), ThemeId::VelvetDark);
+        assert_eq!(auto_theme_for(7, 0), ThemeId::Daylight);
+        assert_eq!(auto_theme_for(12, 34), ThemeId::Daylight);
+        assert_eq!(auto_theme_for(18, 59), ThemeId::Daylight);
+        assert_eq!(auto_theme_for(19, 0), ThemeId::VelvetDark);
+        assert_eq!(auto_theme_for(23, 59), ThemeId::VelvetDark);
+    }
+
+    /// Otomatik mod pasifken global tema dondurur; aktifken senkronlar.
+    #[test]
+    fn auto_theme_sync_respects_enabled_flag() {
+        set_auto_theme(false);
+        assert!(!auto_theme_enabled());
+        assert_eq!(sync_auto_theme_at(12, 0), ThemeId::VelvetDark);
+        set_auto_theme(true);
+        assert!(auto_theme_enabled());
+        assert_eq!(sync_auto_theme_at(12, 0), ThemeId::Daylight);
+        assert_eq!(current(), ThemeId::Daylight);
+        set_auto_theme(false);
+        assert_eq!(current(), ThemeId::Daylight);
+    }
+
+    /// Uygulama bazli tema mirasi: override yoksa global, varsa override.
+    #[test]
+    fn resolve_theme_inherits_global_when_override_missing() {
+        assert_eq!(resolve_theme(ThemeId::Nord, None), ThemeId::Nord);
+        assert_eq!(
+            resolve_theme(ThemeId::Nord, Some(ThemeId::HighContrast)),
+            ThemeId::HighContrast
+        );
+        assert_eq!(
+            resolve_theme(ThemeId::HighContrast, Some(ThemeId::Nord)),
+            ThemeId::Nord
+        );
     }
 
     /// Palet indeks sabitleri sırayla 0..PALETTE_LEN'yi kapsamalı.

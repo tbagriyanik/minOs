@@ -7,7 +7,7 @@
 
 use crate::{
     app_errors::{AppError, AppErrorKind},
-    app_memory, clipboard, dirty_rect, screen_layout, textbuf, theme,
+    app_memory, clipboard, dirty_rect, font_render, screen_layout, textbuf, theme,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,6 +57,17 @@ fn error_and_shutdown_screens_expose_recovery_copy() {
         footer.contains("restart"),
         "EN kurtarma yolu eksik: {footer}"
     );
+    for english in [false, true] {
+        let recovery = screen_layout::boot_error_recovery(english);
+        assert!(
+            recovery.starts_with(if english { "Recovery:" } else { "Kurtarma:" }),
+            "önyükleme kurtarma etiketi eksik: {recovery}"
+        );
+        assert!(
+            recovery.len() > 24,
+            "kurtarma yönergesi çok kısa: {recovery}"
+        );
+    }
 
     assert_ne!(
         screen_layout::shutdown_title(false, false),
@@ -67,13 +78,22 @@ fn error_and_shutdown_screens_expose_recovery_copy() {
         screen_layout::shutdown_title(false, true)
     );
     for phase in 0..4 {
-        assert!(!screen_layout::shutdown_step_text(phase, false, false).is_empty());
+        let tr = screen_layout::shutdown_step_text(phase, false, false);
+        let en = screen_layout::shutdown_step_text(phase, false, true);
+        assert!(tr.contains("Adım"), "kapanış adımı numarası eksik: {tr}");
+        assert!(en.contains("Step"), "shutdown step number missing: {en}");
         assert!(!screen_layout::shutdown_step_text(phase, true, true).is_empty());
     }
-    assert_ne!(
-        screen_layout::shutdown_hint(false),
-        screen_layout::shutdown_hint(true)
-    );
+    for english in [false, true] {
+        let hint = screen_layout::shutdown_hint(english);
+        assert!(!hint.is_empty());
+        assert!(
+            hint.to_ascii_lowercase().contains("wait")
+                || hint.contains("bekleyiniz")
+                || hint.contains("Bekleyiniz"),
+            "kapanış ipucu bekleme uyarısı içermeli: {hint}"
+        );
+    }
 }
 
 #[test]
@@ -302,4 +322,88 @@ fn dirty_rect_tracker_unions_and_takes_regions() {
     assert_eq!(len, 2);
     assert!(!overflowed);
     assert!(tracker.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Erişilebilirlik ve yerelleştirme ek kontrolleri
+// ---------------------------------------------------------------------------
+
+#[test]
+fn welcome_screen_exposes_keyboard_navigation_hints() {
+    for english in [false, true] {
+        let hint = screen_layout::welcome_hint(english);
+        assert!(hint.contains("Tab"), "Tab kısayolu eksik: {hint}");
+        assert!(hint.contains("Enter"), "Enter kısayolu eksik: {hint}");
+        assert!(hint.contains("Esc"), "Esc kısayolu eksik: {hint}");
+    }
+}
+
+#[test]
+fn app_memory_reports_have_stable_names_for_builtin_apps() {
+    let expected = [
+        (0, "Dosya Yöneticisi"),
+        (1, "Sistem Ayarları"),
+        (2, "Not Defteri"),
+        (3, "Web Gezgini"),
+        (7, "Görev Yöneticisi"),
+        (10, "Komut İstemi"),
+        (16, "FPS 3D"),
+        (17, "Şehir Sürüşü"),
+    ];
+    for (id, name) in expected {
+        assert_eq!(app_memory::app_name(id), name, "app_id={id}");
+    }
+    assert_eq!(app_memory::app_name(255), "Bilinmeyen");
+}
+
+#[test]
+fn turkish_text_and_glyph_fallback_are_renderable() {
+    // Temel Türkçe karakterler ölçülebilmeli ve boş genişlik üretmemeli.
+    for sample in ["İstanbul", "şağı", "GÜÇLÜ", "çalışıyor"] {
+        let geist = font_render::text_width(font_render::Face::Geist, sample, 14.0);
+        let inria = font_render::text_width(font_render::Face::Inria, sample, 14.0);
+        assert!(geist > 0, "Geist ölçümü sıfır: {sample}");
+        assert!(inria > 0, "Inria ölçümü sıfır: {sample}");
+    }
+
+    // Noktalı/noktasız i ayrımı korunmalı (Türkçe yerelleştirme/okunabilirlik).
+    for face in [font_render::Face::Geist, font_render::Face::Inria] {
+        assert!(
+            font_render::glyph_tier(face, 'i').is_some(),
+            "i glifi eksik"
+        );
+        assert!(
+            font_render::glyph_tier(face, 'ı').is_some(),
+            "ı glifi eksik"
+        );
+        // Görsel/bitmap ayrımı `font_render` modül testlerinde doğrulanır;
+        // burada her iki karakterin atlas/fallback yolunda mevcut olması yeterlidir.
+    }
+
+    // Atlas dışı karakterler '?' fallback genişliğini kullanmalı (çökme/tofu yok).
+    let emoji = "\u{1F680}";
+    assert_eq!(
+        font_render::text_width(font_render::Face::Geist, emoji, 14.0),
+        font_render::text_width(font_render::Face::Geist, "?", 14.0),
+        "eksik glif fallback genişliği tutarsız"
+    );
+}
+
+#[test]
+fn accent_colors_keep_minimum_visibility_on_key_surfaces() {
+    for id in theme::ThemeId::ALL {
+        let p = theme::palette(id);
+        let checks = [
+            (theme::IDX_TITLEBAR, theme::IDX_TEXT_MAIN),
+            (theme::IDX_TASKBAR_BG, theme::IDX_TEXT_MAIN),
+            (theme::IDX_WINDOW_BG, theme::IDX_ACCENT_BLUE),
+        ];
+        for (bg_idx, fg_idx) in checks {
+            let ratio = theme::contrast_ratio(p[bg_idx as usize], p[fg_idx as usize]);
+            assert!(
+                ratio >= 1.8,
+                "{id:?}: düşük görünürlük (bg={bg_idx}, fg={fg_idx}, {ratio:.2})"
+            );
+        }
+    }
 }

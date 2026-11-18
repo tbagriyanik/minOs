@@ -19,6 +19,31 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 /// İzlenebilen azami uygulama kimliği (yerleşik uygulamalar 0..=17).
 pub const MAX_TRACKED_APPS: usize = 32;
 
+/// Stable display names for the built-in application memory report.
+pub fn app_name(app_id: usize) -> &'static str {
+    match app_id {
+        0 => "Dosya Yöneticisi",
+        1 => "Sistem Ayarları",
+        2 => "Not Defteri",
+        3 => "Web Gezgini",
+        4 => "Resim Gösterici",
+        5 => "Müzik Çalar",
+        6 => "Video Oynatıcı",
+        7 => "Görev Yöneticisi",
+        8 => "Hesap Makinesi",
+        9 => "Çizim Tahtası",
+        10 => "Komut İstemi",
+        11 => "Kurulum Sihirbazı",
+        12 => "3D Gösterici",
+        13 => "Paket Yöneticisi",
+        14 => "Kontrol Paneli",
+        15 => "Oyunlar (FPS)",
+        16 => "FPS 3D",
+        17 => "Şehir Sürüşü",
+        _ => "Bilinmeyen",
+    }
+}
+
 static APP_BYTES: [AtomicUsize; MAX_TRACKED_APPS] =
     [const { AtomicUsize::new(0) }; MAX_TRACKED_APPS];
 static PEAK_BYTES: [AtomicUsize; MAX_TRACKED_APPS] =

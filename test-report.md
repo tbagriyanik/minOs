@@ -2,7 +2,7 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-18 11:03:03 UTC |
+| Zaman | 2026-11-18 12:30:06 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |
@@ -22,7 +22,7 @@
 | Bellek sıkıstirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sıkıstirilamaz veri reddi |
 | Kernel Heap Buyutme ve Tembel Doldurma | ✅ GEÇTİ | Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi |
 | Bellek Kullanim Profili | ✅ GEÇTİ | PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari |
-| Uygulama Bazli Bellek Raporu | ❌ BAŞARISIZ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
+| Uygulama Bazli Bellek Raporu | ✅ GEÇTİ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
 | GUI Ekran Geometrisi / Duman Testi | ✅ GEÇTİ | Acilis/kapanis/hata ekran geometrisi ve yerellestirilmis ekran metinleri |
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |
 | Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir) | ✅ GEÇTİ | PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu |

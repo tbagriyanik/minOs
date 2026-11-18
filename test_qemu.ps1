@@ -368,6 +368,15 @@ while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds
         $reachedDesktop = $true
         # Ses orneklerinin diske basilmasi icin 1 saniye ek pay ver
         Start-Sleep -Milliseconds 1000
+        # Uygulama bazli bellek raporu (`[APP-MEM] app=... bytes=...`) masaustu
+        # dongusunun ilk turunda yayinlanir. TCG altinda ilk kare yavas
+        # oldugu icin sabit bekleme yerine isaret gorunene kadar bekle.
+        $appMemDeadline = [System.DateTime]::UtcNow.AddSeconds(25)
+        while ([System.DateTime]::UtcNow -lt $appMemDeadline) {
+            if ((Read-Serial) -match "\[APP-MEM\] app=\d+ bytes=\d+") { break }
+            if ($proc.HasExited) { break }
+            Start-Sleep -Milliseconds 250
+        }
         break
     }
 }

@@ -16,6 +16,12 @@ pub const USER_CODE_BASE: u64 = 0x0000_0000_0040_0000; // 4 MB (Standart kullan�
 pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000; // Kullanıcı yığını üst sınırı
 pub const USER_STACK_PAGES: usize = 4; // 16 KB kullanıcı yığını (4 x 4KB sayfa)
 
+/// Kullanıcı sinyal işleyicisinden dönüş trampolininin sabit sanal adresi.
+/// Kod sayfasının hemen altında, `USER_CODE_BASE - PAGE_SIZE` (0x3F_F000)
+/// adresinde yer alır. Sayfa süreç adres uzayına ilk sinyal teslimatında
+/// tembel olarak eşlenir; kod `pop rdi; mov eax, 37; int 0x80` dizisidir.
+pub const USER_SIGTRAMP_BASE: u64 = USER_CODE_BASE - PAGE_SIZE;
+
 /// Kullanıcı yığınının hemen altındaki koruma (guard) sayfasının sanal adresi.
 /// Kasıtlı olarak hiç eşlenmez: yığın taşması bu adrese yazma denediğinde
 /// donanım #PF (BP=0, U/S=1) üretir ve çekirdek süreci SIGSEGV ile sonlandırır.

@@ -140,6 +140,8 @@ pub struct Window {
     pub content_w: usize,
     /// Last reported content height (for vertical scrollbar).
     pub content_h: usize,
+    /// Uygulama/pencere bazlı tema override'u; `None` global temayı miras alır.
+    pub theme_override: Option<theme::ThemeId>,
 }
 
 impl Window {
@@ -204,6 +206,7 @@ impl Window {
             scroll: scrollbar::ScrollState::new(),
             content_w: width,
             content_h: height.saturating_sub(titlebar_h()),
+            theme_override: None,
         }
     }
 

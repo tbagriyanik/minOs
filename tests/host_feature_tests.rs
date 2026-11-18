@@ -272,6 +272,71 @@ fn contrast_ratio_is_symmetric_and_bounded() {
     assert!((forward - reverse).abs() < 0.001);
 }
 
+#[test]
+fn high_contrast_theme_meets_wcag_aaa_text_thresholds() {
+    let id = theme::ThemeId::HighContrast;
+    let (ratio, _fg_idx, _bg_idx) = theme::min_text_contrast(id);
+    assert!(
+        ratio >= theme::WCAG_AAA_NORMAL,
+        "HighContrast {:?}: metin kontrastı {ratio:.2} < WCAG AAA {:.2}",
+        id,
+        theme::WCAG_AAA_NORMAL
+    );
+
+    let p = theme::palette(id);
+    let primary_ratio = theme::contrast_ratio(
+        p[theme::IDX_WINDOW_BG as usize],
+        p[theme::IDX_TEXT_MAIN as usize],
+    );
+    assert_eq!(
+        theme::assess_contrast(primary_ratio, false),
+        theme::WcagLevel::AAA
+    );
+
+    let muted_ratio = theme::contrast_ratio(
+        p[theme::IDX_TASKBAR_BG as usize],
+        p[theme::IDX_TEXT_MUTED as usize],
+    );
+    assert!(muted_ratio >= theme::WCAG_AAA_NORMAL);
+}
+
+#[test]
+fn wcag_level_assessment_uses_documented_thresholds() {
+    // Normal metin: AA = 4.5:1, AAA = 7:1. Büyük metin: AA = 3:1, AAA = 4.5:1.
+    assert_eq!(theme::assess_contrast(4.5, false), theme::WcagLevel::AA);
+    assert_eq!(theme::assess_contrast(7.0, false), theme::WcagLevel::AAA);
+    // 4.49:1, normal metin için AA eşiği olan 4.5:1'in altındadır.
+    assert_eq!(theme::assess_contrast(4.49, false), theme::WcagLevel::A);
+    assert_eq!(theme::assess_contrast(6.99, false), theme::WcagLevel::AA);
+    assert_eq!(theme::assess_contrast(7.01, false), theme::WcagLevel::AAA);
+    assert_eq!(theme::assess_contrast(3.0, true), theme::WcagLevel::AA);
+    assert_eq!(theme::assess_contrast(4.5, true), theme::WcagLevel::AAA);
+}
+
+#[test]
+fn per_app_theme_override_inherits_global_theme() {
+    for id in theme::ThemeId::ALL {
+        assert_eq!(theme::resolve_theme(id, None), id);
+    }
+    assert_eq!(
+        theme::resolve_theme(theme::ThemeId::Nord, Some(theme::ThemeId::HighContrast)),
+        theme::ThemeId::HighContrast
+    );
+    assert_eq!(
+        theme::resolve_theme(theme::ThemeId::HighContrast, Some(theme::ThemeId::Nord)),
+        theme::ThemeId::Nord
+    );
+}
+
+#[test]
+fn auto_day_night_theme_follows_day_night_hours() {
+    assert_eq!(theme::auto_theme_for(6, 59), theme::ThemeId::VelvetDark);
+    assert_eq!(theme::auto_theme_for(7, 0), theme::ThemeId::Daylight);
+    assert_eq!(theme::auto_theme_for(12, 30), theme::ThemeId::Daylight);
+    assert_eq!(theme::auto_theme_for(18, 59), theme::ThemeId::Daylight);
+    assert_eq!(theme::auto_theme_for(19, 0), theme::ThemeId::VelvetDark);
+}
+
 // ---------------------------------------------------------------------------
 // RTC Tarih/Saat ve Saat Dilimi Farkı (Timezone Offset)
 // ---------------------------------------------------------------------------

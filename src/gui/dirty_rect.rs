@@ -4,6 +4,10 @@ use core::cmp::{max, min};
 
 pub const MAX_DIRTY_RECTS: usize = 64;
 
+/// Takip edilebilen maksimum pencere sayısı (uygulama + sanal masaüstü
+/// pencereleri; `gui::window::MAX_WINDOWS` ile ayni kapasitedir).
+pub const MAX_TRACKED_WINDOWS: usize = 32;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DirtyRect {
     pub x: usize,
@@ -50,6 +54,9 @@ pub struct GlobalDirtyTracker {
     /// MAX_DIRTY_RECTS'yi aştığında bile güncellenir; needs_full_redraw()
     /// bu birleşimi kullanarak tam ekran mı kontrol eder.
     bounding: DirtyRect,
+    /// Per pencere render listesi: pencere başına birleşik kirli dikdörtgen.
+    /// `DirtyRect::new(0, 0, 0, 0)` = o pencere için henüz kirli bölge yok.
+    window_rects: [DirtyRect; MAX_TRACKED_WINDOWS],
 }
 
 impl GlobalDirtyTracker {
@@ -59,10 +66,11 @@ impl GlobalDirtyTracker {
             len: 0,
             overflowed: false,
             bounding: DirtyRect::new(0, 0, 0, 0),
+            window_rects: [DirtyRect::new(0, 0, 0, 0); MAX_TRACKED_WINDOWS],
         }
     }
 
-    pub fn track(&mut self, _window_id: usize, rect: DirtyRect) {
+    pub fn track(&mut self, window_id: usize, rect: DirtyRect) {
         if rect.width == 0 || rect.height == 0 {
             return;
         }
@@ -80,12 +88,49 @@ impl GlobalDirtyTracker {
         } else {
             self.overflowed = true;
         }
+        self.mark_window(window_id, rect);
+    }
+
+    /// Bir pencereye kirli dikdörtgen ekler; per pencere render listesini
+    /// günceller (union ile).
+    pub fn mark_window(&mut self, window_id: usize, rect: DirtyRect) {
+        if window_id < MAX_TRACKED_WINDOWS && rect.width > 0 && rect.height > 0 {
+            let current = self.window_rects[window_id];
+            self.window_rects[window_id] = if current.width == 0 && current.height == 0 {
+                rect
+            } else {
+                current.union(rect)
+            };
+        }
+    }
+
+    /// Bir pencerenin kirli bölge render listesini sorgular; temizse `None`.
+    pub fn window_dirty(&self, window_id: usize) -> Option<DirtyRect> {
+        if window_id >= MAX_TRACKED_WINDOWS {
+            return None;
+        }
+        let rect = self.window_rects[window_id];
+        if rect.width == 0 || rect.height == 0 {
+            None
+        } else {
+            Some(rect)
+        }
+    }
+
+    /// Bir pencerenin kirli bölge render listesini temizler.
+    pub fn clear_window(&mut self, window_id: usize) {
+        if window_id < MAX_TRACKED_WINDOWS {
+            self.window_rects[window_id] = DirtyRect::new(0, 0, 0, 0);
+        }
     }
 
     pub fn clear(&mut self) {
         self.len = 0;
         self.overflowed = false;
         self.bounding = DirtyRect::new(0, 0, 0, 0);
+        for rect in self.window_rects.iter_mut() {
+            *rect = DirtyRect::new(0, 0, 0, 0);
+        }
     }
 
     pub fn as_slice(&self) -> &[DirtyRect] {
@@ -182,6 +227,44 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(rects[0], DirtyRect::new(1, 2, 3, 4));
         assert!(!overflowed);
+        assert!(tracker.is_empty());
+    }
+
+    #[test]
+    fn per_window_dirty_lists_track_union_per_window() {
+        let mut tracker = GlobalDirtyTracker::new();
+        // Pencere 3'a iki kisimli kirli bolge → birlesik rect.
+        tracker.mark_window(3, DirtyRect::new(10, 20, 30, 40));
+        tracker.mark_window(3, DirtyRect::new(50, 60, 30, 40));
+        // Union: x=[10,80) width=70, y=[20,100) height=80
+        assert_eq!(
+            tracker.window_dirty(3),
+            Some(DirtyRect::new(10, 20, 70, 80))
+        );
+        // Farkli pencere kirli listesi izole olmali.
+        assert_eq!(
+            tracker.window_dirty(4),
+            None,
+            "pencere 4 kirli listesine kayitli degil"
+        );
+        tracker.mark_window(4, DirtyRect::new(0, 0, 10, 10));
+        assert_eq!(tracker.window_dirty(4), Some(DirtyRect::new(0, 0, 10, 10)));
+        // Track uzerinden de per pencere listesi dolmalı (geriye uyum).
+        tracker.track(2, DirtyRect::new(5, 5, 8, 8));
+        assert_eq!(tracker.window_dirty(2), Some(DirtyRect::new(5, 5, 8, 8)));
+        assert_eq!(tracker.window_dirty(999), None, "sinir disi pencere id");
+    }
+
+    #[test]
+    fn clear_window_resets_only_that_windows_list() {
+        let mut tracker = GlobalDirtyTracker::new();
+        tracker.mark_window(1, DirtyRect::new(1, 2, 3, 4));
+        tracker.mark_window(2, DirtyRect::new(5, 6, 7, 8));
+        tracker.clear_window(1);
+        assert_eq!(tracker.window_dirty(1), None);
+        assert_eq!(tracker.window_dirty(2), Some(DirtyRect::new(5, 6, 7, 8)));
+        tracker.clear();
+        assert_eq!(tracker.window_dirty(2), None);
         assert!(tracker.is_empty());
     }
 }

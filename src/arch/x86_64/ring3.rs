@@ -113,6 +113,9 @@ const F_IRIP: usize = 15;
 
 const F_ICS: usize = 16;
 
+/// CPU çerçevesindeki RFLAGS alanı (RIP/CS'den sonra).
+const F_RFLAGS: usize = 17;
+
 const F_IRSP: usize = 18;
 
 const F_ISS: usize = 19;
@@ -243,37 +246,60 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
                     ) {
                         let sf: crate::mm::process::SigFrame =
                             unsafe { core::ptr::read(frame_bytes.as_ptr() as *const _) };
-                        // Aynı sinyalin tekrar teslimatını engelle.
-                        if let Some(p) = memory.proc_mgr.get_process_mut(pid) {
-                            p.pending_signals &= !(1u64 << (sf.sig - 1));
+                        // Kullanıcı tarafından hazırlanmış olabilecek çerçeveyi
+                        // doğrula: RIP/RSP kullanıcı yarısında ve CS/SS kullanıcı
+                        // seçicileri olmalı; aksi halde ring0'e sıçranabilirdi.
+                        if sf.is_valid() {
+                            // Aynı sinyalin tekrar teslimatını engelle ve
+                            // işleyici öncesi sinyal maskesini geri yükle.
+                            if let Some(p) = memory.proc_mgr.get_process_mut(pid) {
+                                p.pending_signals &= !(1u64 << (sf.sig - 1));
+                                p.signal_mask =
+                                    crate::mm::process::SigFrame::sanitized_mask(sf.old_mask);
+                            }
+                            let c = sf.context;
+                            let cs = if c.cs == 0 {
+                                gdt::SEL_UCODE as u64
+                            } else {
+                                c.cs
+                            };
+                            let ss = if c.ss == 0 {
+                                gdt::SEL_UDATA as u64
+                            } else {
+                                c.ss
+                            };
+                            let rflags = if c.rflags == 0 { 0x202 } else { c.rflags | 0x2 };
+                            // Yazmaç alanları: 0..14 = rax..r15; 15/16/17/18/19 =
+                            // RIP/CS/RFLAGS/RSP/SS. `ProcessContext` alan sırası
+                            // (rsp, r8..r15) ile çerçeve sırası farklıdır.
+                            unsafe {
+                                core::ptr::write_volatile(frame.add(0), c.rax);
+                                core::ptr::write_volatile(frame.add(1), c.rbx);
+                                core::ptr::write_volatile(frame.add(2), c.rcx);
+                                core::ptr::write_volatile(frame.add(3), c.rdx);
+                                core::ptr::write_volatile(frame.add(4), c.rsi);
+                                core::ptr::write_volatile(frame.add(5), c.rdi);
+                                core::ptr::write_volatile(frame.add(6), c.rbp);
+                                core::ptr::write_volatile(frame.add(7), c.r8);
+                                core::ptr::write_volatile(frame.add(8), c.r9);
+                                core::ptr::write_volatile(frame.add(9), c.r10);
+                                core::ptr::write_volatile(frame.add(10), c.r11);
+                                core::ptr::write_volatile(frame.add(11), c.r12);
+                                core::ptr::write_volatile(frame.add(12), c.r13);
+                                core::ptr::write_volatile(frame.add(13), c.r14);
+                                core::ptr::write_volatile(frame.add(14), c.r15);
+                                core::ptr::write_volatile(frame.add(F_IRIP), c.rip);
+                                core::ptr::write_volatile(frame.add(F_ICS), cs);
+                                core::ptr::write_volatile(frame.add(F_RFLAGS), rflags);
+                                core::ptr::write_volatile(frame.add(F_IRSP), c.rsp);
+                                core::ptr::write_volatile(frame.add(F_ISS), ss);
+                            }
+                            drop(guard);
+                            // `int80_entry` dönüşten sonra `mov [rsp], rax`
+                            // yazar; kullanıcının RAX'ını gerçekten geri
+                            // yüklemek için dönüş değeri kayıtlı RAX olmalı.
+                            return c.rax;
                         }
-                        let c = sf.context;
-                        // Tüm yazmaçları ve iretq çerçevesini geri yükle.
-                        unsafe {
-                            core::ptr::write_volatile(frame.add(0), c.rax);
-                            core::ptr::write_volatile(frame.add(1), c.rbx);
-                            core::ptr::write_volatile(frame.add(2), c.rcx);
-                            core::ptr::write_volatile(frame.add(3), c.rdx);
-                            core::ptr::write_volatile(frame.add(4), c.rsi);
-                            core::ptr::write_volatile(frame.add(5), c.rdi);
-                            core::ptr::write_volatile(frame.add(6), c.rbp);
-                            core::ptr::write_volatile(frame.add(7), c.rsp);
-                            core::ptr::write_volatile(frame.add(8), c.r8);
-                            core::ptr::write_volatile(frame.add(9), c.r9);
-                            core::ptr::write_volatile(frame.add(10), c.r10);
-                            core::ptr::write_volatile(frame.add(11), c.r11);
-                            core::ptr::write_volatile(frame.add(12), c.r12);
-                            core::ptr::write_volatile(frame.add(13), c.r13);
-                            core::ptr::write_volatile(frame.add(14), c.r14);
-                            core::ptr::write_volatile(frame.add(15), c.r15);
-                            core::ptr::write_volatile(frame.add(F_IRIP), c.rip);
-                            core::ptr::write_volatile(frame.add(F_ICS), c.cs);
-                            core::ptr::write_volatile(frame.add(F_IRIP + 2), c.rflags);
-                            core::ptr::write_volatile(frame.add(F_IRSP), c.rsp);
-                            core::ptr::write_volatile(frame.add(F_ISS), c.ss);
-                        }
-                        drop(guard);
-                        return 0;
                     }
                 }
             }
@@ -2403,7 +2429,10 @@ pub fn schedule_user_processes() {
 
     // --- Kullanıcı sinyal işleyicisi teslimatı ---
     // Bekleyen, kayıtlı kullanıcı işleyicisi olan bir sinyal varsa
-    // SigFrame'i kullanıcı yığına yazar ve bağlamı işleyiciye yönlendirir.
+    // SigFrame'i kullanıcı yığına yazar, dönüş trampolinini hazırlar ve
+    // bağlamı işleyiciye yönlendirir. İşleyici `ret` ile döndüğünde
+    // trampolin `pop rdi; mov eax,SYS_SIGRETURN; int 0x80` dizisini
+    // çalıştırarak kayıtlı bağlamı geri yükler.
     let signal_delivered = 'signal: {
         let Some(mut guard) = crate::mm::try_lock_memory() else {
             break 'signal false;
@@ -2412,14 +2441,27 @@ pub fn schedule_user_processes() {
         let Some((sig, handler)) = memory.proc_mgr.pending_user_signal(pid) else {
             break 'signal false;
         };
-        let address_space = memory.proc_mgr.get_process(pid).map(|p| p.address_space); // AddressSpace (u64) is Copy
-        let Some(address_space) = address_space else {
+        let Some(trampoline) = memory
+            .proc_mgr
+            .ensure_signal_trampoline(pid, &mut memory.pmm)
+        else {
             break 'signal false;
         };
+        let (address_space, old_mask) = match memory.proc_mgr.get_process(pid) {
+            Some(p) => (p.address_space, p.signal_mask),
+            None => break 'signal false,
+        };
         let frame_size = core::mem::size_of::<crate::mm::process::SigFrame>();
-        let new_rsp = (ctx.rsp - frame_size as u64) & !0xF;
+        let frame_base = (ctx.rsp.saturating_sub(frame_size as u64)) & !0xF;
+        // Handler girişi: [rsp] = dönüş adresi (trampolin), [rsp+8] =
+        // sigframe işaretçisi (trampolin bunu RDI'ye pop eder).
+        let handler_rsp = frame_base.saturating_sub(16);
+        if handler_rsp < crate::mm::loader::USER_STACK_GUARD {
+            break 'signal false;
+        }
         let frame = crate::mm::process::SigFrame {
             sig,
+            old_mask,
             old_rsp: ctx.rsp,
             context: ctx,
         };
@@ -2429,28 +2471,34 @@ pub fn schedule_user_processes() {
                 frame_size,
             )
         };
-        if crate::mm::uaccess::copy_to_user(&address_space, new_rsp, frame_bytes).is_ok() {
-            // Sinyali teslim edildi olarak işaretle (beklemeden kaldır).
-            if let Some(p) = memory.proc_mgr.get_process_mut(pid) {
-                p.pending_signals &= !(1u64 << (sig - 1));
-            }
-            // Bağlamı kullanıcı işleyicisine yönlendir.
-            ctx.rip = handler;
-            ctx.rsp = new_rsp;
-            ctx.rdi = sig; // İlk argüman: sinyal numarası
-            if ctx.cs == 0 {
-                ctx.cs = gdt::SEL_UCODE as u64;
-            }
-            if ctx.ss == 0 {
-                ctx.ss = gdt::SEL_UDATA as u64;
-            }
-            if ctx.rflags == 0 {
-                ctx.rflags = 0x202;
-            }
-            break 'signal true;
-        } else {
+        let ret_words = [trampoline, frame_base];
+        let ret_bytes = unsafe { core::slice::from_raw_parts(ret_words.as_ptr() as *const u8, 16) };
+        if crate::mm::uaccess::copy_to_user(&address_space, frame_base, frame_bytes).is_err()
+            || crate::mm::uaccess::copy_to_user(&address_space, handler_rsp, ret_bytes).is_err()
+        {
             break 'signal false;
         }
+        // Sinyali teslim edildi olarak işaretle ve işleyici sırasında aynı
+        // sinyali engelle (POSIX: handler çalışırken sinyal maskelenir).
+        if let Some(p) = memory.proc_mgr.get_process_mut(pid) {
+            p.pending_signals &= !(1u64 << (sig - 1));
+            p.signal_mask |= 1u64 << (sig - 1);
+        }
+        ctx.rip = handler;
+        ctx.rsp = handler_rsp;
+        ctx.rdi = sig; // İlk argüman: sinyal numarası
+        if ctx.cs == 0 {
+            ctx.cs = gdt::SEL_UCODE as u64;
+        }
+        if ctx.ss == 0 {
+            ctx.ss = gdt::SEL_UDATA as u64;
+        }
+        ctx.rflags = if ctx.rflags == 0 {
+            0x202
+        } else {
+            ctx.rflags | 0x202
+        };
+        break 'signal true;
     };
 
     unsafe {

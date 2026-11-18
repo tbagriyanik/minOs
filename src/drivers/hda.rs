@@ -324,6 +324,8 @@ unsafe fn send_verb(verb: u32) -> u64 {
 
     let mut rirb_spins = 0u32;
 
+    let mut got_response = false;
+
     loop {
         let rwp = mmio_read16(mmio, RIRB_WP) & 0xFF;
 
@@ -336,6 +338,8 @@ unsafe fn send_verb(verb: u32) -> u64 {
 
             response = (*pool).rirb[idx];
 
+            got_response = true;
+
             break;
         }
 
@@ -347,6 +351,20 @@ unsafe fn send_verb(verb: u32) -> u64 {
 
         core::hint::spin_loop();
     }
+
+    serial_print("[HDA] verb 0x");
+
+    crate::serial::print_hex(verb as u64);
+
+    serial_print(" rsp=");
+
+    if got_response {
+        crate::serial::print_hex(response);
+    } else {
+        serial_print("YOK");
+    }
+
+    serial_print("\n");
 
     response
 }
@@ -816,6 +834,28 @@ pub fn init(pmm_dma_phys: Option<u64>) {
 
         HDA_OUT_SD_IDX = sd_idx;
 
+        serial_print("[HDA] GCAP=0x");
+
+        crate::serial::print_hex(gcap_val as u64);
+
+        serial_print(" iss=");
+
+        crate::serial::print_dec(iss as u64);
+
+        serial_print(" bss=");
+
+        crate::serial::print_dec(bss as u64);
+
+        serial_print(" sd=0x");
+
+        crate::serial::print_hex(sd as u64);
+
+        serial_print(" havuz=0x");
+
+        crate::serial::print_hex(pool_phys);
+
+        serial_print("\n");
+
         // Stream Reset Protokolü (SRST: 1 -> bekle -> 0 -> bekle)
 
         let ctl = mmio_read32(mmio_base, sd + SD_CTL);
@@ -878,6 +918,12 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         let tag_only = (OUT_STREAM_NUM as u32) << 20;
 
         mmio_write32(mmio_base, sd + SD_CTL, tag_only);
+
+        serial_print("[HDA] SD_CTL(etiket sonrasi)=0x");
+
+        crate::serial::print_hex(mmio_read32(mmio_base, sd + SD_CTL) as u64);
+
+        serial_print("\n");
 
         serial_print("[HDA] Intel HDA başlatıldı. 48kHz 16-bit Stereo DMA akışı hazır.\n");
 
@@ -1015,6 +1061,24 @@ pub fn play_test_tone() -> bool {
         let sd = HDA_SD_BASE;
 
         let mmio = HDA_MMIO_BASE;
+
+        serial_print("[HDA-TEST] ctl=0x");
+
+        crate::serial::print_hex(mmio_read32(mmio, sd + SD_CTL) as u64);
+
+        serial_print(" sts=0x");
+
+        crate::serial::print_hex(mmio_read8(mmio, sd + SD_STS) as u64);
+
+        serial_print(" lpib=");
+
+        crate::serial::print_dec(stream_lpib() as u64);
+
+        serial_print(" posbuf=");
+
+        crate::serial::print_dec(current_dma_pos() as u64);
+
+        serial_print("\n");
 
         let lpib1 = current_dma_pos();
 

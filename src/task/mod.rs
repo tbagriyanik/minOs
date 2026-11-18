@@ -149,7 +149,10 @@ impl SimpleExecutor {
     {
         let task = Task::new(name, priority, f);
         let id = task.id;
-        RUN_QUEUE_DEPTH[task.cpu].fetch_add(1, Ordering::Relaxed);
+        // Use clamped CPU index to match release_run_slot indexing and
+        // avoid out-of-bounds when task.cpu >= RUN_QUEUE_DEPTH.len().
+        let cpu_idx = task.cpu.min(RUN_QUEUE_DEPTH.len() - 1);
+        RUN_QUEUE_DEPTH[cpu_idx].fetch_add(1, Ordering::Relaxed);
         self.tasks.push(task);
         id
     }
@@ -323,6 +326,13 @@ pub fn total_run_queue_depth() -> usize {
         .sum()
 }
 static IN_SCHEDULER: AtomicBool = AtomicBool::new(false);
+/// Test-only: ölçüm penceresi boyunca yeni görev dağıtımını durdurur.
+///
+/// `IN_SCHEDULER` tek seferde tek CPU'nun dağıtım yapmasını sağlar; fakat o
+/// bayrak "şu anda bir dağıtım sürüyor" anlamına geldiği için, bir başka CPU
+/// dağıtım sürerken alınan bir ölçüm dondurulamaz. Ayrı bir duraklatma
+/// bayrağı ölçüm penceresini her CPU için kesin olarak kapatır.
+static SCHEDULER_PAUSED: AtomicBool = AtomicBool::new(false);
 static PREEMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SCHEDULER_TICKS: AtomicU64 = AtomicU64::new(0);
 static RR_CURSOR: AtomicUsize = AtomicUsize::new(0);
@@ -499,6 +509,10 @@ pub fn poll_tasks() -> usize {
 }
 
 fn poll_tasks_inner() -> usize {
+    // Test-only: ölçüm penceresinde hiçbir CPU yeni görev dağıtmaz.
+    if SCHEDULER_PAUSED.load(Ordering::Acquire) {
+        return lock_executor().task_count();
+    }
     // Prevent two CPUs from mutating/executing the same task simultaneously.
     if IN_SCHEDULER.swap(true, Ordering::Acquire) {
         return lock_executor().task_count();
@@ -622,28 +636,38 @@ fn recover_scheduler_state() {
     *RUNNING_INFO.lock() = None;
 }
 
-/// Test-only: `poll_tasks_inner` refuses to dispatch while `IN_SCHEDULER` is
-/// set. Holding that flag for the duration of a measurement window keeps APs
-/// from popping ready tasks out from under the assertions, so kuyruk derinligi
-/// checks stay deterministic. The guard does not interrupt an in-flight
-/// dispatch; it only rejects new entries, so it cannot stall a running task.
+/// Test-only: ölçüm penceresi boyunca yeni görev dağıtımını durdurur.
+///
+/// `poll_tasks_inner` bu bayrağı gördüğünde hiçbir CPU görev seçmez; böylece
+/// kuyruk derinliği (`RUN_QUEUE_DEPTH`) ve görev sayısı ölçümleri AP'lerin
+/// görevleri kuyruktan çekmesi nedeniyle bozulmaz. Bekleyen tek bir dağıtım
+/// varsa tamamlanması beklenir: görev kuyruğa geri konduğunda derinlik
+/// değişimi tamamlanır ve ölçüm tabanı kararlı hale gelir.
 pub struct SchedulerPauseGuard {
     held: bool,
 }
 
 impl SchedulerPauseGuard {
-    /// Zamanlayiciyi dondurur. Zaten dondurulmus ya da calisiyor durumda
-    /// (IN_SCHEDULER dolu) ise etkisizdir.
+    /// Zamanlayıcıyı dondurur ve süren dağıtımın bitmesini bekler.
     pub fn new() -> Self {
-        let held = !IN_SCHEDULER.swap(true, Ordering::Acquire);
-        Self { held }
+        SCHEDULER_PAUSED.store(true, Ordering::Release);
+        // Devam eden dağıtımın bitmesini bekle: görev kuyruğa geri konup
+        // kuyruk derinliği eski değerine dönünce ölçüm tabanı sabitlenir.
+        // Bekleme sınırlıdır; bir görev geri çağrısı beklenenden uzun sürerse
+        // ölçüm yine de yapılır (yalnızca kararlılığı azalır).
+        let mut spins = 0u64;
+        while IN_SCHEDULER.load(Ordering::Acquire) && spins < 10_000_000 {
+            spins += 1;
+            core::hint::spin_loop();
+        }
+        Self { held: true }
     }
 }
 
 impl Drop for SchedulerPauseGuard {
     fn drop(&mut self) {
         if self.held {
-            IN_SCHEDULER.store(false, Ordering::Release);
+            SCHEDULER_PAUSED.store(false, Ordering::Release);
         }
     }
 }
@@ -658,36 +682,43 @@ impl Default for SchedulerPauseGuard {
 /// opportunities it waits, up to Realtime. This reduces starvation without
 /// claiming deadlines or wall-clock guarantees.
 fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
-    // `best_priority` MUST be computed over tasks eligible for this CPU only.
-    // Computing it globally (all CPUs) and then selecting a local task matching
-    // that priority makes a CPU go idle when its ready tasks are lower priority
-    // than a ready task parked on another CPU — exactly the starvation that
-    // leaves browser network/render/JS-timer tasks undispatched and pages hung.
-    let best_priority = tasks
+    // Öncelik, yalnızca bu CPU'nun *hazır* görevleri üzerinden hesaplanır.
+    // Tüm CPU'lar üzerinden hesaplamak, düşük öncelikli yerel görevlerin
+    // başka CPU'da yüksek öncelikli bir görev varken açta kalmasına yol
+    // açıyordu (tarayıcı ağ/render/JS-timer görevlerinin aç kaldığı durum).
+    let priority = |task: &Task| -> u32 {
+        (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
+    };
+    let runnable = |task: &Task| -> bool { task.ready && !task.cancelled && !task.completed };
+
+    let local_best = tasks
         .iter()
-        .filter(|task| task.ready && !task.cancelled && !task.completed && task.cpu == cpu)
-        .map(|task| {
-            (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
-        })
-        .max()?;
+        .filter(|task| runnable(task) && task.cpu == cpu)
+        .map(priority)
+        .max();
+
+    // Yerel kuyruk boşsa iş çalma (work stealing) devreye girer: hazır iş
+    // varken hiçbir CPU boşta kalmaz. Görev sahibi CPU'suna geri döner
+    // (`task.cpu` değişmez), dolayısıyla affinity bir *tercih* olarak korunur.
+    let (best_priority, local_only) = match local_best {
+        Some(p) => (p, true),
+        None => {
+            let foreign_best = tasks
+                .iter()
+                .filter(|task| runnable(task))
+                .map(priority)
+                .max()?;
+            (foreign_best, false)
+        }
+    };
+
     let start = RR_CURSOR.fetch_add(1, Ordering::Relaxed);
-    let local = (0..tasks.len())
+    (0..tasks.len())
         .map(|n| (start + n) % tasks.len())
         .find(|&i| {
             let task = &tasks[i];
-            task.ready
-                && !task.cancelled
-                && !task.completed
-                && task.cpu == cpu
-                && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
-                    == best_priority
-        });
-    // CPU affinity'nin kesin uygulanması: bir görev yalnızca affinity'si
-    // eşleşen CPU üzerinde çalışabilir. `task.cpu` spawn sırasında
-    // `least_loaded_cpu` ile atanır ve `set_affinity` ile güncellenebilir.
-    // Hiçbir yerel uygun görev yoksa bu CPU için iş yoktur (boşta kalır);
-    // başka bir CPU'nın görevine sıçramak affinity ilkesini bozardı.
-    local
+            runnable(task) && (task.cpu == cpu) == local_only && priority(task) == best_priority
+        })
 }
 
 /// Cok cekirdekli scheduler davranisini dogrulayan birlesik test:
@@ -748,13 +779,45 @@ mod tests {
     }
 
     #[test]
-    fn select_ready_returns_none_when_no_local_ready_task() {
+    fn select_ready_steals_pending_task_when_local_queue_is_empty() {
         let mut t0 = make_task(TaskPriority::Normal, 0, 0);
         let tasks = vec![t0];
-        // CPU 1 has no local task.
+        // CPU 1 has no local task: is çalma (work stealing) devreye girer ve
+        // hazır görev boşta kalmaz.
+        let idx = select_ready(&tasks, 1).expect("should steal the pending task");
+        assert_eq!(tasks[idx].cpu, 0);
+    }
+
+    #[test]
+    fn select_ready_prefers_local_task_over_stealing() {
+        let mut t0 = make_task(TaskPriority::Low, 0, 0);
+        let mut t1 = make_task(TaskPriority::Realtime, 1, 0);
+        let tasks = vec![t0, t1];
+        // CPU 0'un yerel (düşük öncelikli) görevi varken başka CPU'nun
+        // yüksek öncelikli görevi çalınmaz.
+        let idx = select_ready(&tasks, 0).expect("should find the local task");
+        assert_eq!(tasks[idx].cpu, 0);
+        assert_eq!(tasks[idx].priority, TaskPriority::Low);
+    }
+
+    #[test]
+    fn select_ready_returns_none_when_no_task_is_runnable() {
+        let mut t0 = make_task(TaskPriority::Normal, 0, 0);
+        t0.ready = false;
+        let tasks = vec![t0];
+        // Hiçbir koşulabilir görev yok.
         assert!(select_ready(&tasks, 1).is_none());
     }
 }
+
+/// Stres testinde "en az bir kez koştu" sayacı tutan görev sayısı.
+const SCHED_TEST_RUN_TASKS: usize = 8;
+
+/// Her görevin kendine ait çalışma sayacı. Sayaç görev kaydının dışında
+/// tutulduğu için, görev o anda başka bir CPU'da çalışıyor olsa bile
+/// "koştu" bilgisi kaybolmaz.
+static SCHED_TEST_RUNS: [AtomicUsize; SCHED_TEST_RUN_TASKS] =
+    [const { AtomicUsize::new(0) }; SCHED_TEST_RUN_TASKS];
 
 /// Cok cekirdekli scheduler davranisini dogrulayan birlesik test:
 /// - Gorevler tum online CPU'lara dagitilmali (least_loaded_cpu).
@@ -770,29 +833,32 @@ mod tests {
 pub fn test_scheduler_multicore_race() -> bool {
     let online = crate::arch::x86_64::smp::cpu_count().max(1);
     let tracked = online.min(RUN_QUEUE_DEPTH.len());
-    let initial = EXECUTOR.lock().task_count();
-    let initial_depth = total_run_queue_depth();
-    let baseline: alloc::vec::Vec<usize> = (0..tracked).map(run_queue_depth).collect();
 
     const TASKS_PER_ROUND: usize = 32;
     const ROUNDS: usize = 3;
+
     let mut spawned_ok = true;
     let mut spread_ok = true;
     let mut notify_ok = true;
     let mut cancel_ok = true;
     let mut drained_ok = true;
     let mut depth_ok = true;
+    let mut ran_ok = true;
 
-    // AP'lerin yeni gorev secmesi kuyruk derinligi olcumlerini bozmasin:
-    // mumkunse dogrulama pencereleri boyunca zamanlayiciyi dondur. Zamanlayici
-    // zaten calisiyorsa bekcgi etkisiz kalir; olcumler buna ragmen
-    // deterministiktir cunku test gorevleri `Blocked` doner.
+    // Zamanlayıcıyı gerçekten dondur: ölçüm penceresinde hiçbir CPU yeni
+    // görev dağıtamaz. Böylece kuyruk derinliği ve görev sayısı ölçümleri
+    // AP'lerin görevleri kuyruktan çekmesi nedeniyle bozulmaz.
     let pause = SchedulerPauseGuard::new();
 
+    // Taban değerler dondurulmuş kuyruktan okunur.
+    let initial = EXECUTOR.lock().task_count();
+    let initial_depth = total_run_queue_depth();
+    let baseline: alloc::vec::Vec<usize> = (0..tracked).map(run_queue_depth).collect();
+
     for _round in 0..ROUNDS {
-        // Farkli onemdagore gorevler olustur; least_loaded_cpu RR imleciyle
-        // dagilimi tum online CPU'lara yayar. Gorevler `Blocked` doner: boylece
-        // kuyruk derinligi deterministik kalir.
+        // Farklı öncelikte görevler oluştur; least_loaded_cpu RR imleciyle
+        // dağılımı tüm online CPU'lara yayar. Görevler `Blocked` döner: böylece
+        // kuyruk derinliği deterministik kalır.
         let mut ids = alloc::vec::Vec::new();
         for i in 0..TASKS_PER_ROUND {
             let prio = match i % 4 {
@@ -810,39 +876,41 @@ pub fn test_scheduler_multicore_race() -> bool {
             spawned_ok = false;
         }
 
-        // Bos kuyruga notify: panik yapmamali ve bekleyen gorev
-        // olmadigi icin 0 donmeli.
+        // Boş kuyruğa notify: panik yapmamalı ve bekleyen görev
+        // olmadığı için 0 dönmeli.
         if notify(TaskEvent(999)) != 0 {
             notify_ok = false;
         }
 
-        // Kuyruk derinligi tam olarak eklenen gorev kadar artmis olmali.
+        // Kuyruk derinliği tam olarak eklenen görev kadar artmış olmalı.
         if total_run_queue_depth() != initial_depth + TASKS_PER_ROUND {
             depth_ok = false;
         }
 
-        // Dagilim: taban derinlikler esitse (boot sirasindaki normal durum)
-        // her online CPU'ya en az bir gorev dusmus olmali. Tabandaki asimetri
-        // dagilimi oldugu gibi yonlendirecegi icin bu durumda yalnizca
-        // "en az bir CPU kullanildi" denetlenir.
+        // Dağılım: görevlerin en az bir CPU'ya dağıldığı kontrolü.
+        // Tek CPU'da her zaman 1'inin kullanıldığına dair beklenti,
+        // çok CPU'lu sistemlerde ise görevlerin spreading kontrolü.
+        // `uniform` kontrolü yeterince katı olmadığı için, her zaman en az
+        // 1 CPU'nin görev kullandığını ve çok CPU'lu sistemlerde tracked kadarın
+        // en azının kullanıldığını kontrol ederiz.
         let mut used = 0usize;
         for (cpu, base) in baseline.iter().enumerate().take(tracked) {
             if run_queue_depth(cpu) > *base {
                 used += 1;
             }
         }
-        let uniform = baseline.iter().all(|depth| *depth == baseline[0]);
-        let expected_used = if uniform {
-            tracked.min(TASKS_PER_ROUND)
-        } else {
+        // Tek CPU'da expected=1, çok CPU'lu'da tracked CPUs'yi hedefle.
+        let expected_used = if online <= 1 || tracked <= 1 {
             1
+        } else {
+            tracked.min(TASKS_PER_ROUND)
         };
         if used < expected_used {
             spread_ok = false;
         }
 
-        // Gorevleri iptal et: spin kilidi ve take_task es zamanli cagrisinda
-        // kayip olmamali, her iptal edilen gorev CPU slotunu geri vermeli.
+        // Görevleri iptal et: spin kilidi ve take_task eş zamanlı çağrısında
+        // kayıp olmamalı, her iptal edilen görev CPU slotunu geri vermeli.
         let mut cancelled = 0usize;
         for id in ids {
             if cancel(id) {
@@ -860,12 +928,17 @@ pub fn test_scheduler_multicore_race() -> bool {
         }
     }
 
-    // --- Gercek calisma yolu: gorevler bir kez kosup yeniden hazir olsun ---
-    // `Yielded` donen gorevler kuyrukta kalir; run_count'u dogrulayarak
-    // zamanlayicinin isi gercekten sectigini kanitlariz.
+    // --- Gerçek çalışma yolu: görevler bir kez koşup yeniden hazır olsun ---
+    // `Yielded` dönen görevler kuyrukta kalır. Her görev kendi çalışma
+    // sayacını doldurur; sayaç görev kaydı dışında tutulduğu için görevin
+    // o anda başka bir CPU'da çalışıyor olması ölçümü bozmaz.
+    for counter in SCHED_TEST_RUNS.iter() {
+        counter.store(0, Ordering::Relaxed);
+    }
     let mut yielded_ids = alloc::vec::Vec::new();
-    for _ in 0..8usize {
-        yielded_ids.push(spawn("yield-task", TaskPriority::Normal, || {
+    for counter in SCHED_TEST_RUNS.iter().take(SCHED_TEST_RUN_TASKS) {
+        yielded_ids.push(spawn("yield-task", TaskPriority::Normal, move || {
+            counter.fetch_add(1, Ordering::Relaxed);
             TaskStatus::Yielded
         }));
     }
@@ -873,51 +946,104 @@ pub fn test_scheduler_multicore_race() -> bool {
         depth_ok = false;
     }
 
-    // Zamanlayiciyi birak ve BSP olarak isleri calistir.
+    // Zamanlayıcıyı bırak ve tüm görevlerin en az bir kez koştuğunu bekle.
+    // Zamanlayıcı duraklatıldıyken hiçbir CPU dağıtım yapamaz; bırakıldığında
+    // iş çalma sayesinde bekleyen görevler hangi CPU'da olursa olsun koşar.
+    // Sayaçlar görev kaydından bağımsız tutulduğu için "en az bir kez koştu"
+    // bilgisi, görev o anda kuyrukta olmasa bile kaybolmaz.
     drop(pause);
     let budget_before = EXECUTOR.lock().step_budget();
-    EXECUTOR.lock().set_step_budget(yielded_ids.len() + 2);
-    for _ in 0..(yielded_ids.len() + 2) {
+    EXECUTOR.lock().set_step_budget(8);
+    let deadline = crate::monotonic_ms().saturating_add(5_000);
+    while crate::monotonic_ms() < deadline {
         poll_tasks();
+        if SCHED_TEST_RUNS
+            .iter()
+            .take(SCHED_TEST_RUN_TASKS)
+            .all(|counter| counter.load(Ordering::Relaxed) > 0)
+        {
+            break;
+        }
     }
     EXECUTOR.lock().set_step_budget(budget_before.max(1));
 
-    let ran = yielded_ids
+    // Çalışma doğrulaması sayaçlardan okunur (görev nesnesi iptal/yeniden
+    // kuyruklanma sırasında taşınmış olsa bile sayaç kalıcıdır).
+    let ran_count = SCHED_TEST_RUNS
         .iter()
-        .filter(|id| {
-            EXECUTOR
-                .lock()
-                .tasks
-                .iter()
-                .any(|task| task.id == **id && task.run_count > 0)
-        })
+        .take(SCHED_TEST_RUN_TASKS)
+        .filter(|counter| counter.load(Ordering::Relaxed) > 0)
         .count();
-    if ran != yielded_ids.len() {
-        drained_ok = false;
+    if ran_count != SCHED_TEST_RUN_TASKS {
+        ran_ok = false;
     }
 
-    // Kalan isleri temizle; derinlik yeniden tabana inmeli.
+    // Kalan işleri temizle; derinlik yeniden tabana inmeli. İptal edilen bir
+    // görev o anda başka bir CPU'da çalışıyorsa kayıttan düşmesi, o görevin
+    // geri dönmesiyle gerçekleşir. Bu nedenle iptal sonrası kısa bir süre
+    // dağıtım yaparak/kararlı durumu bekleyerek ölçüm alınır.
     let mut cancelled_after_run = 0usize;
-    for id in yielded_ids {
-        if cancel(id) {
+    for id in &yielded_ids {
+        if cancel(*id) {
             cancelled_after_run += 1;
         }
     }
-    if cancelled_after_run != ran {
+    if cancelled_after_run != SCHED_TEST_RUN_TASKS {
+        // Zaten tamamlanmış/çıkarılmış görevler de kabul edilebilir; kayıt
+        // ve derinlik denetimleri nihai durumu doğrular.
         cancel_ok = false;
     }
-    if EXECUTOR.lock().task_count() != initial {
-        drained_ok = false;
-    }
-    if total_run_queue_depth() != initial_depth {
-        depth_ok = false;
+
+    // Ölçümü kararlı kılmak için zamanlayıcıyı yeniden dondur ve gerekirse
+    // süren dağıtımın tamamlanması için kısa bir pencere tanı. `cancel()`
+    // çalışan bir görevi yalnızca işaretler; görev geri dönüp yeniden
+    // kuyruğa alınmadığında kayıt/derinlik düşüşü tamamlanır.
+    let settle_deadline = crate::monotonic_ms().saturating_add(2_000);
+    loop {
+        let settle = SchedulerPauseGuard::new();
+        let count_ok = EXECUTOR.lock().task_count() == initial;
+        let depth_now_ok = total_run_queue_depth() == initial_depth;
+        drop(settle);
+        if count_ok && depth_now_ok {
+            break;
+        }
+        if crate::monotonic_ms() >= settle_deadline {
+            drained_ok = drained_ok && count_ok;
+            depth_ok = depth_ok && depth_now_ok;
+            break;
+        }
+        // Dondurulmamış kısa pencere: işaretlenmiş görevlerin tamamlanmasına
+        // izin ver, ardından tekrar dene.
+        poll_tasks();
     }
 
-    let ok = spawned_ok && spread_ok && notify_ok && cancel_ok && drained_ok && depth_ok;
+    let ok = spawned_ok && spread_ok && notify_ok && cancel_ok && drained_ok && depth_ok && ran_ok;
+
     if ok {
         crate::serial_print("[SCHED-TEST] Cok cekirdekli scheduler yarismasi testi: BASARILI\n");
     } else {
         crate::serial_print("[SCHED-TEST] Cok cekirdekli scheduler yarismasi testi: BASARISIZ\n");
     }
+
+    // Hangi denetimin düştüğünü raporla: test çıktısı tek satırda
+    // "BASARISIZ" deyip nedenini söylemezse teşhis zorlaşır.
+    crate::serial_print("[SCHED-TEST] ayrinti: spawn=");
+    crate::serial::print_dec(spawned_ok as u64);
+    crate::serial_print(" dagilim=");
+    crate::serial::print_dec(spread_ok as u64);
+    crate::serial_print(" notify=");
+    crate::serial::print_dec(notify_ok as u64);
+    crate::serial_print(" iptal=");
+    crate::serial::print_dec(cancel_ok as u64);
+    crate::serial_print(" calisma=");
+    crate::serial::print_dec(ran_ok as u64);
+    crate::serial_print(" bosaltma=");
+    crate::serial::print_dec(drained_ok as u64);
+    crate::serial_print(" derinlik=");
+    crate::serial::print_dec(depth_ok as u64);
+    crate::serial_print(" cpu=");
+    crate::serial::print_dec(online as u64);
+    crate::serial_print("\n");
+
     ok
 }

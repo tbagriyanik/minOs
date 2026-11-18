@@ -385,7 +385,17 @@ pub fn apply_user_settings(
     mouse.speed = settings.mouse_speed;
     mouse.reverse_scroll = settings.reverse_scroll;
     keyboard.layout = settings.keyboard_layout;
-    gui::theme::set_theme(settings.theme);
+    // Otomatik gundus/gece temasini uygula (ayar/etkin); pasifse manuel tema.
+    crate::gui::theme::set_auto_theme(settings.auto_theme);
+    if settings.auto_theme {
+        let now = drivers::rtc::DateTime::read_for_region(settings.region_offset());
+        let effective = crate::gui::theme::sync_auto_theme_at(now.hour, now.minute);
+        if effective != crate::gui::theme::current() {
+            crate::gui::theme::set_theme(effective);
+        }
+    } else {
+        crate::gui::theme::set_theme(settings.theme);
+    }
 
     // Apply resolution from boot command line if set
     if let Some(_cmd_res) = crate::boot::limine::cmdline_resolution() {

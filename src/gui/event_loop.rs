@@ -135,10 +135,14 @@ fn publish_runtime_app_memory(
 
     apps::memory::for_each(|app_id, bytes| {
         let mut line = gui::TextBuf::new();
+        // `app=` ve `bytes=` alan sırası/düzeni `test_qemu.ps1` tarafından
+        // ayrıştırıldığı için korunur; uygulama adı sonda ek bilgi olarak verilir.
         line.push_str("[APP-MEM] app=");
         line.push_usize(app_id);
         line.push_str(" bytes=");
         line.push_usize(bytes);
+        line.push_str(" name=");
+        line.push_str(apps::memory::app_name(app_id));
         serial_print(line.as_str());
         serial_print("\n");
     });
@@ -694,6 +698,32 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
     serial_print("[BOOT] Desktop loop started.\n");
+
+    // Uygulama bazlı bellek raporu döngünün ilk turunda da yayınlanır; ancak
+    // TCG altında ilk kare yavaş olabildiği için masaüstüne geçişte bir kez
+    // hemen yayınlanır. Böylece `[APP-MEM]` işareti sistemin gerçekten
+    // çalıştığını doğrulayan testler tarafından geç yakalanır.
+    publish_runtime_app_memory(
+        &filemanager_app,
+        &desktop_files,
+        &settings_app,
+        &notepad_app,
+        &browser_app,
+        &imageviewer_app,
+        &musicplayer_app,
+        &videoplayer_app,
+        &taskmgr_app,
+        &calculator_app,
+        &paint_apps,
+        &terminal_app,
+        &installer_app,
+        &viewer3d_app,
+        &pkgmgr_app,
+        &fps_game_app,
+        &fps_3d_app,
+        &city_drive_app,
+    );
+
     // Açılış süresi özeti: Limine'den devralmadan masaüstüne kadar geçen süre.
     boot_timer.mark("masaustu");
     crate::boot::timing::report_total();
@@ -1011,6 +1041,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             last_clock_update_ms = clock_now_ms;
 
             now = drivers::rtc::DateTime::read_for_region(settings_app.region_offset());
+
+            // Otomatik gundus/gece temasini senkronla: aktifse saati bazli tema
+            // uygulanir; tema degisikligi varsa yeniden cizim (force_render) gerekir.
+            let auto_theme_id = gui::theme::sync_auto_theme_at(now.hour, now.minute);
+            if auto_theme_id != gui::theme::current() {
+                gui::theme::set_theme(auto_theme_id);
+                force_render = true;
+            }
 
             // Saat güncellemesi tam ekran yerine yalnızca görev çubuğu
             // saat bölgesini kirli işaretler; force_render devre dışı.
@@ -7216,6 +7254,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     wm.scroll.y = new_off;
                     let (cx, cy, cw, ch) = wm.content_rect();
                     drag_dirty_rect = Some((cx, cy, cw, ch));
+                    // Drag bölgesini per pencere render listesine işle: kare
+                    // çizim skip kararı bu listeden beslenir.
+                    compositor
+                        .dirty_tracker
+                        .mark_window(idx, crate::gui::dirty_rect::DirtyRect::new(cx, cy, cw, ch));
                 }
                 if compositor.windows[idx].map(|w| w.app_id as usize) == Some(3) {
                     browser_app.sync_external_scroll(new_off);
@@ -7322,6 +7365,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     }
 
                     drag_dirty_rect = Some(dirty);
+
+                    // Aero Snap onizleme/tasarruf kirli bolgesini per pencere
+                    // render listesine isle.
+                    compositor.dirty_tracker.mark_window(
+                        idx,
+                        crate::gui::dirty_rect::DirtyRect::new(dirty.0, dirty.1, dirty.2, dirty.3),
+                    );
 
                     drag_prev_box = Some(new_box);
                 }
@@ -7438,6 +7488,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     }
 
                     drag_dirty_rect = Some(dirty);
+
+                    // Pencere yeniden boyutlandirma (Aero Snap/resizing) kirli
+                    // bolgesini per pencere render listesine isle.
+                    compositor.dirty_tracker.mark_window(
+                        idx,
+                        crate::gui::dirty_rect::DirtyRect::new(dirty.0, dirty.1, dirty.2, dirty.3),
+                    );
 
                     drag_prev_box = Some(new_box);
                 }
@@ -8330,12 +8387,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             .flatten()
             .any(|w| w.app_id == 17 && w.is_open && !w.is_minimized);
 
-        let frame_interval_ms =
-            if is_interacting || viewer3d_animating || fps3d_running || city_running {
-                16
-            } else {
-                33
-            };
+        let frame_interval_ms = crate::gui::frame::frame_interval_ms(
+            is_interacting || viewer3d_animating || fps3d_running || city_running,
+            media_animating,
+            crate::gui::frame::vsync_enabled(),
+        );
 
         let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= frame_interval_ms;
 

@@ -218,7 +218,7 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
     let code = screen_layout::boot_error_code();
     MinGuiCompositor::draw_string(fb, box_x + 24, box_y + 18, code, Color::ACCENT_RED);
 
-    let lines: [(&str, u32); 8] = [
+    let lines: [(&str, u32); 10] = [
         (
             "Diskte geçerli bir minOs kurulumu bulunamadı.",
             Color::TEXT_MAIN,
@@ -245,6 +245,14 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
             "Boot 'minOs Live Environment' and complete the setup wizard.",
             Color::ACCENT_YELLOW,
         ),
+        (
+            screen_layout::boot_error_recovery(false),
+            Color::ACCENT_GREEN,
+        ),
+        (
+            screen_layout::boot_error_recovery(true),
+            Color::ACCENT_GREEN,
+        ),
     ];
 
     let mut y = box_y + 42;
@@ -252,7 +260,7 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
         if !text.is_empty() {
             MinGuiCompositor::draw_string(fb, box_x + 24, y, text, *color);
         }
-        y += 26;
+        y += 24;
     }
 
     let footer = screen_layout::boot_error_footer();

@@ -8,6 +8,28 @@ use crate::desktop::helpers::{desktop_item_rect, desktop_item_visible, window_co
 use crate::drivers;
 use crate::gui;
 
+/// VSync tabanli kare pazarlama aralığı (~60 Hz / kare).
+pub const FRAME_VSYNC_INTERVAL_MS: u64 = 16;
+/// Boşta / uyku kare pazarlama aralığı (~30 FPS / kare).
+pub const FRAME_IDLE_INTERVAL_MS: u64 = 33;
+
+/// VSync (donanim paneli) takip modu etkin mi?
+pub fn vsync_enabled() -> bool {
+    crate::drivers::gpu::caps().vga_present
+}
+
+/// Aktif kare pazarlama aralığını hesaplar.
+///
+/// VSync takip modu, etkileşimli/yayın animasyonu veya VSync aktifse
+/// kare başına 16 ms (≈60 Hz) hedefi; aksi halde boşta ~30 FPS (33 ms).
+pub fn frame_interval_ms(is_interacting: bool, animating: bool, vsync: bool) -> u64 {
+    if vsync || is_interacting || animating {
+        FRAME_VSYNC_INTERVAL_MS
+    } else {
+        FRAME_IDLE_INTERVAL_MS
+    }
+}
+
 /// Uygulama çizimi için kare bütçesi (ms). Normal uygulamalar için
 /// 24 ms sınırlaması yeterlidir; FPS 3D raycasting oyunu için (ID=16)
 /// alt satırda özel 80 ms bütçe kullanılır — bkz. render_full_frame.
@@ -181,16 +203,20 @@ pub fn render_full_frame(
                 continue;
             }
 
-            // Kirli bolgeyle kesismeyen pencereyi hic cizme (golge payi dahil).
+            // Per pencere render listesi: takip edilen kirli bolge varsa
+            // yalnizca o bolgeye kayitli pencereler cizilir; kayitli olmayan
+            // pencereler (kirli listesinde hicbir kare gecilmemis) atlanir.
 
             if let Some((dx, dy, dw, dh)) = dirty_rect {
-                let wx0 = win.x.saturating_sub(8);
+                let Some((wx, wy, ww, wh)) = compositor.window_dirty_rect(idx) else {
+                    // Bu pencere bu frame'de icin takip listesinde karsila degil.
+                    continue;
+                };
 
-                let wy0 = win.y.saturating_sub(8);
-
-                let wx1 = win.x.saturating_add(win.width).saturating_add(8);
-
-                let wy1 = win.y.saturating_add(win.height).saturating_add(8);
+                let wx0 = wx;
+                let wy0 = wy;
+                let wx1 = wx.saturating_add(ww).saturating_add(8);
+                let wy1 = wy.saturating_add(wh).saturating_add(8);
 
                 let overlaps = dx < wx1
                     && wx0 < dx.saturating_add(dw)
@@ -818,4 +844,10 @@ pub fn render_full_frame(
     }
 
     fb.clear_frame_clip();
+
+    // Frame pacing: donanim VSync bayragini bekle (vsync_wait); VSync takip
+    // modunda kare vblank uyumunda ~60 Hz kare pazarlanir. Desteklenmeyen
+    // olayda mevcut donanim yolu devre disi kalir, kisa spin ust siniri de.
+
+    crate::drivers::gpu::vsync_wait();
 }

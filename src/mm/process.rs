@@ -2611,12 +2611,84 @@ impl ProcessManager {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SigFrame {
-    pub sig: u64,     // Sinyal numarası (işleyiciye ilk argüman olarak da verilir)
-    pub old_rsp: u64, // Sinyal tesliminden önceki kullanıcı RSP
+    pub sig: u64,      // Sinyal numarası (işleyiciye ilk argüman olarak da verilir)
+    pub old_mask: u64, // İşleyici öncesi sinyal maskesi (dönüşte geri yüklenir)
+    pub old_rsp: u64,  // Sinyal tesliminden önceki kullanıcı RSP
     pub context: ProcessContext, // Kaydedilen tam kullanıcı bağlamı
 }
 
+/// Kullanıcı sinyal işleyicisinden dönüş trampolini makine kodu:
+/// `pop rdi; mov eax, 37; int 0x80`.
+///
+/// İşleyici normal bir `ret` ile döndüğünde bu adrese atlar; trampolin
+/// yığındaki SigFrame işaretçisini RDI'ye alır ve `SYS_SIGRETURN` çağırır.
+pub const SIGRETURN_TRAMPOLINE: [u8; 8] = [0x5F, 0xB8, 37, 0, 0, 0, 0xCD, 0x80];
+
+impl SigFrame {
+    /// Kullanıcı tarafından hazırlanmış olabilecek çerçevenin güvenli olup
+    /// olmadığını doğrular. Ring 3'e dönüşte `iretq` çerçevesine yazılacağı
+    /// için RIP/RSP kullanıcı yarısında, CS/SS ise kullanıcı seçicileri
+    /// olmalıdır; aksi halde süreç çekirdek kipine sıçrayabilirdi.
+    pub fn is_valid(&self) -> bool {
+        let ucode = crate::arch::x86_64::gdt::SEL_UCODE as u64;
+        let udata = crate::arch::x86_64::gdt::SEL_UDATA as u64;
+        self.sig >= 1
+            && self.sig <= signals::MAX_SIGNAL
+            && self.context.rip < uaccess::USER_ADDRESS_END
+            && self.context.rsp < uaccess::USER_ADDRESS_END
+            && (self.context.cs == ucode || self.context.cs == 0)
+            && (self.context.ss == udata || self.context.ss == 0)
+    }
+
+    /// Sinyal maskesini `SIGKILL`/`SIGSTOP` bitleri her zaman açık kalacak
+    /// şekilde sınırlar (POSIX: bu iki sinyal engellenemez).
+    pub fn sanitized_mask(mask: u64) -> u64 {
+        mask & !(1u64 << (signals::SIGKILL - 1)) & !(1u64 << (signals::SIGSTOP - 1))
+    }
+}
+
 impl ProcessManager {
+    /// Kullanıcı sinyal dönüş trampolinini süreç adres uzayına (gerekirse)
+    /// eşler. Trampolin ilk sinyal teslimatında tembel olarak haritalanır;
+    /// böylece trampolin kullanmayan süreçler fazladan sayfa tüketmez.
+    /// Dönüş: trampolin sanal adresi, eşleme başarısızsa `None`.
+    pub fn ensure_signal_trampoline(
+        &mut self,
+        pid: usize,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> Option<u64> {
+        let addr = crate::mm::loader::USER_SIGTRAMP_BASE;
+        let process = self.get_process_mut(pid)?;
+        if process.address_space.translate(addr).is_some() {
+            return Some(addr);
+        }
+        let frame = pmm.allocate_frame()?;
+        unsafe {
+            let dst = crate::drivers::phys_to_virt(frame) as *mut u8;
+            // Kalan baytlar NOP (0x90) ile doldurulur; yürütme kodu ilk
+            // 8 baytla sınırlıdır.
+            core::ptr::write_bytes(dst, 0x90, PAGE_SIZE as usize);
+            for (i, byte) in SIGRETURN_TRAMPOLINE.iter().enumerate() {
+                core::ptr::write_volatile(dst.add(i), *byte);
+            }
+        }
+        if process
+            .address_space
+            .map_page(addr, frame, PageFlags::USER_CODE, pmm)
+            .is_err()
+        {
+            pmm.free_frame(frame);
+            return None;
+        }
+        if !process.resources.record_frame(frame) {
+            // Kaynak defteri dolu: eşlemeyi geri al ve çerçeveyi iade et.
+            let _ = process.address_space.unmap_page_reclaim(addr, pmm);
+            pmm.free_frame(frame);
+            return None;
+        }
+        Some(addr)
+    }
+
     /// `pid` sürecinde bekleyen, kayıtlı kullanıcı işleyicisi olan en düşük
     /// numaralı sinyali döndürür. Varsayılan eylem (0) ve SIG_IGN (1) ile
     /// işaretli sinyaller atlanır; SIGKILL/SIGSTOP için işleyici kaydedilemez.
@@ -2665,12 +2737,20 @@ impl ProcessManager {
             return u64::MAX;
         };
         let frame: SigFrame = unsafe { core::ptr::read(frame_bytes.as_ptr() as *const SigFrame) };
+        if !frame.is_valid() {
+            return u64::MAX;
+        }
 
-        // Sinyal işleyici dönüşü tamamlandı; aynı sinyalin tekrar teslimatı
-        // için beklemede kalmamalıdır (zaten teslim edildiğinde temizlendi,
-        // ancak burada emin olalım).
+        // Sinyal işleyici dönüşü tamamlandı: aynı sinyalin tekrar teslimatı
+        // için beklemede kalmamalı ve işleyici öncesi maske geri yüklenmeli.
         if let Some(p) = self.get_process_mut(pid) {
             p.pending_signals &= !(1u64 << (frame.sig - 1));
+            p.signal_mask = SigFrame::sanitized_mask(frame.old_mask);
+            // Genel syscall yolundan çağrıldığında süreç bağlamını da
+            // güncelle; `rust_int80` hızlı yolu iretq çerçevesini doğrudan
+            // yazdığı için bu atama orada kullanılmaz.
+            p.context = frame.context;
+            p.has_saved_user_context = true;
         }
 
         // 0 = başarı

@@ -147,48 +147,6 @@ fn app_index(name: &str) -> Option<usize> {
     }
 }
 
-fn app_name(index: usize) -> &'static str {
-    match (index, crate::gui::ui_english()) {
-        (0, false) => "Dosya Yöneticisi",
-        (1, false) => "Ayarlar",
-        (2, false) => "Not Defteri",
-        (3, false) => "Web Gezgini",
-        (4, false) => "Resim Gösterici",
-        (5, false) => "Müzik Çalar",
-        (6, false) => "Video Oynatıcı",
-        (7, false) => "Görev Yöneticisi",
-        (8, false) => "Hesap Makinesi",
-        (9, false) => "Çizim Tahtası",
-        (10, false) => "Komut İstemi",
-        (11, false) => "Kurulum Sihirbazı",
-        (12, false) => "3D Gösterici",
-        (13, false) => "Paket Yöneticisi",
-        (14, false) => "Kontrol Paneli",
-        (15, false) => "Oyunlar",
-        (16, false) => "FPS 3D Oyun",
-        (17, false) => "Şehir Sürüşü",
-        (0, true) => "File Manager",
-        (1, true) => "Settings",
-        (2, true) => "Notepad",
-        (3, true) => "Browser",
-        (4, true) => "Image Viewer",
-        (5, true) => "Music Player",
-        (6, true) => "Video Player",
-        (7, true) => "Task Manager",
-        (8, true) => "Calculator",
-        (9, true) => "Paint",
-        (10, true) => "Terminal",
-        (11, true) => "Installer",
-        (12, true) => "3D Viewer",
-        (13, true) => "Package Manager",
-        (14, true) => "Control Panel",
-        (15, true) => "Games",
-        (16, true) => "FPS 3D Game",
-        (17, true) => "City Drive",
-        _ => "Package Manager",
-    }
-}
-
 /// Farkli kabuk geleneklerinden gelen komut adini tek bir kanonik ada esler.
 ///
 /// CMD (Windows), Unix ve minOs adlari ayni komut isteminde birlikte
@@ -1064,7 +1022,7 @@ impl TerminalApp {
         self.open_request = Some(path);
         let mut msg = TextBuf::new();
         msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
-        msg.push_str(app_name(app_idx));
+        msg.push_str(crate::apps::memory::app_name(app_idx));
         msg.push_str("  ");
         msg.push_str(path_arg);
         self.push_line(msg.as_str(), Color::ACCENT_GREEN);
@@ -1363,7 +1321,7 @@ impl TerminalApp {
             if let Some(app_idx) = app_index(arg) {
                 let mut msg = TextBuf::new();
                 msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
-                msg.push_str(app_name(app_idx));
+                msg.push_str(crate::apps::memory::app_name(app_idx));
                 self.push_line(msg.as_str(), Color::ACCENT_GREEN);
                 return Some(app_idx);
             }
@@ -1383,7 +1341,7 @@ impl TerminalApp {
         if let Some(app_idx) = app_index(cmd) {
             let mut msg = TextBuf::new();
             msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
-            msg.push_str(app_name(app_idx));
+            msg.push_str(crate::apps::memory::app_name(app_idx));
             self.push_line(msg.as_str(), Color::ACCENT_GREEN);
             return Some(app_idx);
         }

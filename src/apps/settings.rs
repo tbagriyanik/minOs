@@ -428,6 +428,7 @@ pub struct SystemSettings {
     pub zoom: u8,
     pub night_light: bool,
     pub night_light_level: u8,
+    pub auto_theme: bool,
     pub wallpaper: u8,
     pub wall_color: u32,
 
@@ -497,6 +498,7 @@ impl SystemSettings {
             zoom: 100,
             night_light: false,
             night_light_level: 55,
+            auto_theme: false,
             wallpaper: 0,
             wall_color: 0,
             saved_window_states: [None; 11],
@@ -575,6 +577,7 @@ impl SystemSettings {
                         self.night_light_level = v.min(100);
                     }
                 }
+                "auto_theme" => self.auto_theme = val == "1",
                 "dhcp" => self.dhcp_enabled = val != "0",
                 "static_ip" => {
                     let mut parts = val.split('.');
@@ -1285,7 +1288,16 @@ impl SystemSettings {
         now: &mut DateTime,
     ) {
         crate::gui::set_font_zoom(self.zoom);
-        crate::gui::theme::set_theme(self.theme);
+        // Otomatik gundus/gece temasini uygula (ayar/etkin); pasifse manuel tema.
+        crate::gui::theme::set_auto_theme(self.auto_theme);
+        if self.auto_theme {
+            let effective = crate::gui::theme::sync_auto_theme_at(now.hour, now.minute);
+            if effective != crate::gui::theme::current() {
+                crate::gui::theme::set_theme(effective);
+            }
+        } else {
+            crate::gui::theme::set_theme(self.theme);
+        }
         crate::gui::wallpaper::apply(self.wallpaper, self.wall_color);
         keyboard.layout = self.keyboard_layout;
         crate::gui::set_ui_language_english(self.language.is_english());
@@ -1536,6 +1548,8 @@ impl SystemSettings {
         put(&mut cfg, &mut n, if self.night_light { b"1" } else { b"0" });
         put(&mut cfg, &mut n, b";night_level=");
         put_num(&mut cfg, &mut n, self.night_light_level);
+        put(&mut cfg, &mut n, b";auto_theme=");
+        put(&mut cfg, &mut n, if self.auto_theme { b"1" } else { b"0" });
         put(&mut cfg, &mut n, b";keyboard=");
         put(
             &mut cfg,

@@ -212,27 +212,36 @@ pub fn shutdown_title(restart: bool, english: bool) -> &'static str {
 /// Kapanışın geçerli adımı.
 pub fn shutdown_step_text(phase: usize, restart: bool, english: bool) -> &'static str {
     match (phase, restart, english) {
-        (0, false, false) => "Değişiklikler kaydediliyor...",
-        (0, false, true) => "Saving changes...",
-        (0, true, false) => "Değişiklikler kaydediliyor...",
-        (0, true, true) => "Saving changes...",
-        (1, _, false) => "Disk önbelleği boşaltılıyor...",
-        (1, _, true) => "Flushing disk cache...",
-        (2, _, false) => "Sürücüler kapatılıyor...",
-        (2, _, true) => "Stopping drivers...",
-        (_, false, false) => "Güç kesiliyor...",
-        (_, false, true) => "Powering off...",
-        (_, true, false) => "Yeniden başlatılıyor...",
-        (_, true, true) => "Restarting...",
+        (0, false, false) => "Adım 1/4: Değişiklikler kaydediliyor (VFS)...",
+        (0, false, true) => "Step 1/4: Saving changes (VFS)...",
+        (0, true, false) => "Adım 1/4: Değişiklikler kaydediliyor (VFS)...",
+        (0, true, true) => "Step 1/4: Saving changes (VFS)...",
+        (1, _, false) => "Adım 2/4: Disk önbelleği boşaltılıyor...",
+        (1, _, true) => "Step 2/4: Flushing disk cache...",
+        (2, _, false) => "Adım 3/4: Sürücüler kapatılıyor...",
+        (2, _, true) => "Step 3/4: Stopping drivers...",
+        (_, false, false) => "Adım 4/4: Güç kesiliyor. Güvenle kapatabilirsiniz.",
+        (_, false, true) => "Step 4/4: Powering off. It is now safe to turn off.",
+        (_, true, false) => "Adım 4/4: Yeniden başlatılıyor...",
+        (_, true, true) => "Step 4/4: Restarting...",
     }
 }
 
-/// Kapanış ekranındaki sabip ipucu.
+/// Kapanış ekranındaki sabit ipucu.
 pub fn shutdown_hint(english: bool) -> &'static str {
     if english {
-        "Please wait. Closing open files and devices."
+        "Please wait. Closing open files and devices. Do not power off until finished."
     } else {
-        "Lütfen bekleyiniz. Açık dosyalar ve aygıtlar kapatılıyor."
+        "Lütfen bekleyiniz. Açık dosyalar ve aygıtlar kapatılıyor. İşlem bitene kadar gücü kesmeyin."
+    }
+}
+
+/// Önyükleme hatası için kullanıcıya gösterilecek kısa kurtarma yönergesi.
+pub fn boot_error_recovery(english: bool) -> &'static str {
+    if english {
+        "Recovery: boot 'minOs Live Environment' and complete the setup wizard."
+    } else {
+        "Kurtarma: 'minOs Live Environment' ile açın ve kurulum sihirbazını tamamlayın."
     }
 }
 
@@ -300,7 +309,12 @@ pub fn self_test() -> bool {
     }
     boot_error_code() == "BOOT-001"
         && !boot_error_footer().is_empty()
+        && !boot_error_recovery(false).is_empty()
+        && !boot_error_recovery(true).is_empty()
+        && boot_error_recovery(false).starts_with("Kurtarma:")
+        && boot_error_recovery(true).starts_with("Recovery:")
         && !shutdown_hint(false).is_empty()
+        && !shutdown_hint(true).is_empty()
 }
 
 #[cfg(test)]

@@ -185,6 +185,111 @@ struct HstsEntry {
 
 static mut HSTS_CACHE: [Option<HstsEntry>; 16] = [const { None }; 16];
 
+// ---------------------------------------------------------------------------
+// Alt-Svc (RFC 7838): `Alt-Svc: h3=":443"` reklamını hatırla; bir sonraki
+// HTTPS isteğinde önce QUIC/HTTP/3 denenir, başarısızsa TCP'ye düşülür.
+// ---------------------------------------------------------------------------
+
+struct AltSvcEntry {
+    host: [u8; 64],
+    host_len: usize,
+    port: u16,
+}
+
+static mut ALT_SVC_H3: [Option<AltSvcEntry>; 16] = [const { None }; 16];
+
+/// HTTP yanıt başlıklarında (`resp_buf[..hlen]`) `Alt-Svc` alanını arar;
+/// `h3` alternatifi içeriyorsa host için kaydeder.
+pub fn alt_svc_note(headers: &[u8], host: &[u8]) {
+    // Basit tarama: "alt-svc:" satırını bul, "h3" içerip içermediğine bak.
+    let mut pos = 0usize;
+    while pos + 8 < headers.len() {
+        if headers[pos..].starts_with(b"alt-svc:")
+            || headers[pos..].starts_with(b"Alt-Svc:")
+            || headers[pos..].starts_with(b"ALT-SVC:")
+        {
+            // Satır sonuna kadar olan değeri al
+            let mut end = pos + 8;
+            while end < headers.len() && headers[end] != b'\r' && headers[end] != b'\n' {
+                end += 1;
+            }
+            let value = &headers[pos + 8..end];
+            let value_lower: alloc::vec::Vec<u8> =
+                value.iter().map(|b| b.to_ascii_lowercase()).collect();
+            if contains_subslice(&value_lower, b"h3") {
+                // Port: h3=":port" veya h3=port
+                let mut port = 443u16;
+                if let Some(eq) = value_lower.windows(2).position(|w| w == b"h3") {
+                    let rest = &value_lower[eq + 2..];
+                    // "=" sonrası sayıyı yakala
+                    if let Some(eqpos) = rest.iter().position(|&b| b == b'=') {
+                        let after = &rest[eqpos + 1..];
+                        let digits: alloc::vec::Vec<u8> = after
+                            .iter()
+                            .skip_while(|&&b| b == b'"' || b == b' ' || b == b':')
+                            .take_while(|b| b.is_ascii_digit())
+                            .copied()
+                            .collect();
+                        if !digits.is_empty() {
+                            if let Ok(p) =
+                                core::str::from_utf8(&digits).unwrap_or("").parse::<u16>()
+                            {
+                                port = p;
+                            }
+                        }
+                    }
+                }
+                let host_len = host.len().min(64);
+                unsafe {
+                    for entry in ALT_SVC_H3.iter_mut().flatten() {
+                        if entry.host_len == host_len
+                            && entry.host[..host_len] == host[..host_len]
+                            && entry.port == port
+                        {
+                            return;
+                        }
+                    }
+                    for entry in ALT_SVC_H3.iter_mut() {
+                        if entry.is_none() {
+                            let mut e = AltSvcEntry {
+                                host: [0; 64],
+                                host_len: 0,
+                                port,
+                            };
+                            e.host[..host_len].copy_from_slice(&host[..host_len]);
+                            e.host_len = host_len;
+                            *entry = Some(e);
+                            return;
+                        }
+                    }
+                }
+            }
+            pos = end;
+        } else {
+            pos += 1;
+        }
+    }
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Bu host için daha önce `Alt-Svc: h3` reklamı görüldü mü?
+fn alt_svc_has_h3(host: &[u8]) -> bool {
+    unsafe {
+        for entry in ALT_SVC_H3.iter().flatten() {
+            if entry.host_len == host.len() && entry.host[..host.len()] == host[..host.len()] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// `Strict-Transport-Security: max-age=<sn>` basligindan HSTS kaydi olusturur/gunceller.
 pub fn http_hsts_note(host: &[u8], max_age_secs: u64) {
     let now = crate::monotonic_ms();
@@ -1840,6 +1945,19 @@ fn fetch_once_with_method(
     let host_str = core::str::from_utf8(host).unwrap_or("");
     let use_pool = config.proxy.is_none(); // Proxy ile bağlantı havuzlanmaz
 
+    // Alt-Svc h3 reklamı varsa ve basit GET ise önce QUIC/HTTP/3 dene;
+    // başarısızlıkta normal TCP (h2/h1) yoluna düşülür.
+    if is_https
+        && use_pool
+        && matches!(method, HttpMethod::Get)
+        && body.is_none()
+        && alt_svc_has_h3(host)
+    {
+        if let Ok(result) = try_http3_as_http(host, port, path, ip, resp_buf) {
+            return Ok(result);
+        }
+    }
+
     let mut last_err: Option<i32> = None;
     let mut delay = config.retry_delay_ms;
 
@@ -1963,6 +2081,10 @@ fn fetch_once_with_method(
                 (status, hlen, total)
             };
 
+            // Alt-Svc: h3 reklamını kaydet (bir sonraki istekte QUIC denenir)
+            if is_https {
+                alt_svc_note(&resp_buf[..hlen.min(total)], host);
+            }
             Ok((status, hlen, total))
         })();
 
@@ -1988,6 +2110,55 @@ fn fetch_once_with_method(
     }
 
     Err(last_err.unwrap_or(E_HTTP))
+}
+
+/// Alt-Svc h3 yolunu dener: QUIC/HTTP/3 GET yapar ve yanıtı HTTP/1.1
+/// biçiminde `resp_buf`'a ([status+headers][body]) dönüştürür.
+fn try_http3_as_http(
+    host: &[u8],
+    port: u16,
+    path: &[u8],
+    _ip: Ipv4Address,
+    resp_buf: &mut [u8],
+) -> Result<(u16, usize, usize), i32> {
+    let host_str = core::str::from_utf8(host).map_err(|_| E_URL)?;
+    let path_str = core::str::from_utf8(path).map_err(|_| E_URL)?;
+    // URL'yi yeniden kur
+    let url = if port == 443 {
+        alloc::format!("https://{}{}", host_str, path_str)
+    } else {
+        alloc::format!("https://{}:{}{}", host_str, port, path_str)
+    };
+    // Önce gövdeyi geçici alana al (resp_buf'ı doğrudan kullanamayız —
+    // başlıkları öne eklememiz gerek)
+    let mut body = alloc::vec![0u8; resp_buf.len()];
+    let mut headers: alloc::vec::Vec<(String, String)> = alloc::vec::Vec::new();
+    let (status, body_len) = crate::drivers::h3::http3_get_full(&url, &mut body, &mut headers)?;
+
+    // HTTP/1.1 yanıt biçimi üret: status satırı + başlıklar + boş satır + gövde
+    let mut n = 0usize;
+    let status_line = alloc::format!("HTTP/1.1 {} OK\r\n", status);
+    if n + status_line.len() > resp_buf.len() {
+        return Err(E_HTTP);
+    }
+    resp_buf[n..n + status_line.len()].copy_from_slice(status_line.as_bytes());
+    n += status_line.len();
+    for (name, value) in &headers {
+        let line = alloc::format!("{}: {}\r\n", name, value);
+        if n + line.len() + body_len + 4 > resp_buf.len() {
+            break;
+        }
+        resp_buf[n..n + line.len()].copy_from_slice(line.as_bytes());
+        n += line.len();
+    }
+    resp_buf[n..n + 2].copy_from_slice(b"\r\n");
+    n += 2;
+    let hlen = n;
+    if hlen + body_len > resp_buf.len() {
+        return Err(E_HTTP);
+    }
+    resp_buf[n..n + body_len].copy_from_slice(&body[..body_len]);
+    Ok((status, hlen, hlen + body_len))
 }
 
 /// HTTP istek başlığı oluşturur: metod, gövde, Content-Type, Content-Length.

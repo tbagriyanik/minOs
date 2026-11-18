@@ -183,6 +183,19 @@ pub mod tls;
 #[path = "../src/drivers/cookie.rs"]
 pub mod cookie_jar;
 
+// QUIC v1 paket koruma katmanı: HKDF, header protection, AEAD,
+// varint ve frame kodlama birim testleri (RFC 9001 vektörleri).
+#[path = "../src/drivers/quic.rs"]
+pub mod quic;
+
+// HPACK/QPACK ortak Huffman tablosu (RFC 7541 Ek B).
+#[path = "../src/drivers/huffman.rs"]
+pub mod huffman;
+
+// QPACK (RFC 9204) statik tablo kodlayıcı/çözücü.
+#[path = "../src/drivers/qpack.rs"]
+pub mod qpack;
+
 #[path = "../src/time_budget.rs"]
 pub mod time_budget;
 
@@ -246,6 +259,8 @@ pub mod random {
 // oldugu icin ayni yolu host harness'inda da saglariz.
 pub mod drivers {
     pub use crate::crypto;
+    pub use crate::huffman;
+    pub use crate::qpack;
     pub use crate::tls;
     pub fn phys_to_virt(p: u64) -> u64 {
         p

@@ -573,6 +573,10 @@ pub struct TlsSession {
     /// TLS 1.3 el sıkışma trafik sırları ve türetilmiş sunucu anahtarı/IV'si.
     tls13_client_hs_secret: Option<Vec<u8>>,
     tls13_server_hs_secret: Option<Vec<u8>>,
+    /// QUIC için: application traffic secret_0 değerleri (master secret'tan,
+    /// sunucu Finished transcript'i ile türetilir).
+    tls13_client_ap_secret: Option<Vec<u8>>,
+    tls13_server_ap_secret: Option<Vec<u8>>,
     tls13_server_hs_key: Option<Vec<u8>>,
     tls13_server_hs_iv: Option<[u8; 12]>,
     /// TLS 1.2 sunucu el sıkışma kaydı sıra sayacı.
@@ -749,6 +753,8 @@ impl TlsSession {
             tls13_master_secret: None,
             tls13_client_hs_secret: None,
             tls13_server_hs_secret: None,
+            tls13_client_ap_secret: None,
+            tls13_server_ap_secret: None,
             tls13_server_hs_key: None,
             tls13_server_hs_iv: None,
             tls13_server_hs_seq: 0,
@@ -2444,11 +2450,98 @@ impl TlsSession {
         self.client_base_iv = Some(client_ap_iv.try_into().map_err(|_| ())?);
         self.server_base_iv = Some(server_ap_iv.try_into().map_err(|_| ())?);
 
+        // QUIC 1-RTT anahtarları bu trafik secret'larından türer.
+        self.tls13_client_ap_secret = Some(client_ap_secret);
+        self.tls13_server_ap_secret = Some(server_ap_secret);
+
         // Kayıt şifreleme/çözme için AEAD bağlamları trafik anahtarlarından kurulur.
         self.client_gcm = Some(Gcm::new(self.client_write_key.as_ref().unwrap()).map_err(|_| ())?);
         self.server_gcm = Some(Gcm::new(self.server_write_key.as_ref().unwrap()).map_err(|_| ())?);
 
         Ok(())
+    }
+
+    // ---- QUIC (RFC 9001/9002) kancaları ----
+    //
+    // QUIC'te TLS el sıkışması kayıt katmanı olmadan CRYPTO stream'i
+    // üzerinden akar; handshake mesajları `process_handshake_records`'un
+    // beklediği formatla (type + 3-bayt uzunluk + gövde) aynıdır.
+
+    /// QUIC CRYPTO stream'inden gelen handshake baytlarını işler.
+    /// `process_handshake_records` eksik mesajları kendi tamponunda
+    /// biriktirdiğinden keyfi parçalar halinde çağrılabilir.
+    pub fn feed_quic_handshake(&mut self, payload: &[u8]) -> Result<(), ()> {
+        if !self.tls13_mode {
+            return Err(());
+        }
+        self.process_handshake_records(payload, &mut Vec::new())
+    }
+
+    /// TLS 1.3 client Finished handshake mesajını (type=0x14 + len +
+    /// verify_data) üretir; QUIC CRYPTO stream'ine yazılır.
+    /// TCP yolundaki `build_tls13_client_finished` ile aynı verify_data'yı
+    /// hesaplar ama kayıt şifreleme/IV mantığını uygulamaz.
+    pub fn build_quic_client_finished(&mut self) -> Option<Vec<u8>> {
+        if !self.tls13_mode || self.state != TlsState::Established {
+            return None;
+        }
+        let alg = self.tls13_hash_alg;
+        let client_hs = self.tls13_client_hs_secret.as_ref()?;
+        let finished_key =
+            Self::hkdf_expand_label(alg, client_hs, b"finished", b"", alg.hash_len());
+        // Transcript-Hash = ClientHello..sunucu Finished; client Finished
+        // kendi verify_data'sına dahil edilmez.
+        let transcript = alg.hash(&self.tls13_transcript);
+        let verify_data = alg.hmac(&finished_key, &transcript);
+        let mut out = Vec::with_capacity(4 + verify_data.len());
+        out.push(HANDSHAKE_FINISHED);
+        let vlen = verify_data.len() as u32;
+        out.extend_from_slice(&[(vlen >> 16) as u8, (vlen >> 8) as u8, vlen as u8]);
+        out.extend_from_slice(&verify_data);
+        // Transcript'e eklenir — QUIC tarafı bu baytları CRYPTO stream'e
+        // yazacağından TLS transcript'i de aynı sırayı görmelidir.
+        self.tls13_transcript.extend_from_slice(&out).ok()?;
+        Some(out)
+    }
+
+    /// QUIC paket anahtarları için TLS 1.3 handshake trafik secret'ları.
+    /// Dönüş: (client_hs_traffic, server_hs_traffic).
+    pub fn quic_handshake_secrets(&self) -> Option<(&[u8], &[u8])> {
+        Some((
+            self.tls13_client_hs_secret.as_deref()?,
+            self.tls13_server_hs_secret.as_deref()?,
+        ))
+    }
+
+    /// QUIC 1-RTT paket anahtarları için TLS 1.3 application traffic
+    /// secret_0 değerleri. Dönüş: (client_ap_traffic, server_ap_traffic).
+    pub fn quic_application_secrets(&self) -> Option<(&[u8], &[u8])> {
+        Some((
+            self.tls13_client_ap_secret.as_deref()?,
+            self.tls13_server_ap_secret.as_deref()?,
+        ))
+    }
+
+    /// QUIC anahtar türetimi için TLS 1.3 hash algoritması uzunluğu.
+    pub fn tls13_hash_len(&self) -> usize {
+        self.tls13_hash_alg.hash_len()
+    }
+
+    /// QUIC paket anahtarı uzunluğunu belirleyen müzakere edilmiş
+    /// cipher suite (TLS 1.3 ise `Some`, aksi halde `None`).
+    pub fn tls13_cipher_suite(&self) -> Option<u16> {
+        if self.tls13_mode {
+            Some(self.cipher_suite)
+        } else {
+            None
+        }
+    }
+
+    /// TLS 1.3 application anahtarları türetildi mi? (sunucu Finished
+    /// doğrulandıktan sonra true olur — QUIC 1-RTT paket anahtarları için
+    /// gerekli.)
+    pub fn tls13_app_keys_ready(&self) -> bool {
+        self.tls13_client_ap_secret.is_some() && self.tls13_server_ap_secret.is_some()
     }
 
     fn tls13_nonce(base_iv: &[u8; 12], seq: u64) -> [u8; 12] {

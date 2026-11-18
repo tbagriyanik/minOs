@@ -297,6 +297,13 @@ pub fn init_subsystems(
     // spin-kilitli kuyruk erisiminin tutarliligi.
     let _ = task::test_scheduler_multicore_race();
 
+    // Zamanlayici affinity uygulamasini ve kullanıcı sinyel isleyici
+    // teslimat altyapisini dogrula.
+    let _ = mm::process::test_scheduler_affinity_and_signals(
+        &mut memory_mgr.proc_mgr,
+        &mut memory_mgr.pmm,
+    );
+
     // Paralel saglama toplami: AP'ler + BSP ayni tamponu parcali isler.
     {
         const SUM_FRAMES: usize = 64;

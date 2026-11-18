@@ -15,7 +15,7 @@ minOs release notes and future plans.
 - **🎮 FPS Game Menus:** Start and result menus were added, with options to restart or exit after the game ends.
 - **⌨️ Form Keyboard Shortcuts:** Tab navigation, Enter confirmation and Esc cancellation are supported on the Welcome screen, installer and File Manager controls.
 - **🔐 TLS/X.509 Certificate Chain Validation:** Leaf and intermediate validity, CA BasicConstraints/`pathLen`, and CA `keyCertSign` plus leaf KeyUsage/EKU extensions when present are checked; unknown critical extensions are rejected. TLS host tests now use the production validation path.
-- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour. Host suite: **322 passed / 0 failed**.
+- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour. Host suite: **360 passed / 0 failed**.
 - **🎵 Direct WAV Playback:** Double-clicking a WAV file in File Manager opens it directly in Music Player.
 - **🖼️ Tiled Desktop Wallpaper:** Image Viewer can now set the loaded image as a tiled desktop wallpaper.
 - **🎨 New Desktop Images:** Three new desktop images (`desktop1.png`–`desktop3.png`) added to Settings.

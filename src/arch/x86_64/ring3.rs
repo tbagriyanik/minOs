@@ -226,6 +226,61 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
     // 4. argüman R10'dan okunur (SysV uyumlu sistem çağrısı düzeni).
     let a4 = unsafe { core::ptr::read_volatile(frame.add(F_R10)) };
 
+    // SYS_SIGRETURN: kullanıcı yığındaki SigFrame'den kayıtlı kullanıcı
+    // bağlamını geri yükler ve iretq ile kesilmeden önceki noktaya devam eder.
+    if no == crate::mm::process::sys_nos::SYS_SIGRETURN {
+        let sigframe_ptr = a1; // RDI
+        if let Some(mut guard) = crate::mm::try_lock_memory() {
+            let memory = guard.get();
+            let pid = memory.proc_mgr.current_pid;
+            if pid != 0 {
+                if let Some(process) = memory.proc_mgr.get_process(pid) {
+                    let frame_size = core::mem::size_of::<crate::mm::process::SigFrame>();
+                    if let Ok(frame_bytes) = crate::mm::uaccess::copy_from_user(
+                        &process.address_space,
+                        sigframe_ptr,
+                        frame_size,
+                    ) {
+                        let sf: crate::mm::process::SigFrame =
+                            unsafe { core::ptr::read(frame_bytes.as_ptr() as *const _) };
+                        // Aynı sinyalin tekrar teslimatını engelle.
+                        if let Some(p) = memory.proc_mgr.get_process_mut(pid) {
+                            p.pending_signals &= !(1u64 << (sf.sig - 1));
+                        }
+                        let c = sf.context;
+                        // Tüm yazmaçları ve iretq çerçevesini geri yükle.
+                        unsafe {
+                            core::ptr::write_volatile(frame.add(0), c.rax);
+                            core::ptr::write_volatile(frame.add(1), c.rbx);
+                            core::ptr::write_volatile(frame.add(2), c.rcx);
+                            core::ptr::write_volatile(frame.add(3), c.rdx);
+                            core::ptr::write_volatile(frame.add(4), c.rsi);
+                            core::ptr::write_volatile(frame.add(5), c.rdi);
+                            core::ptr::write_volatile(frame.add(6), c.rbp);
+                            core::ptr::write_volatile(frame.add(7), c.rsp);
+                            core::ptr::write_volatile(frame.add(8), c.r8);
+                            core::ptr::write_volatile(frame.add(9), c.r9);
+                            core::ptr::write_volatile(frame.add(10), c.r10);
+                            core::ptr::write_volatile(frame.add(11), c.r11);
+                            core::ptr::write_volatile(frame.add(12), c.r12);
+                            core::ptr::write_volatile(frame.add(13), c.r13);
+                            core::ptr::write_volatile(frame.add(14), c.r14);
+                            core::ptr::write_volatile(frame.add(15), c.r15);
+                            core::ptr::write_volatile(frame.add(F_IRIP), c.rip);
+                            core::ptr::write_volatile(frame.add(F_ICS), c.cs);
+                            core::ptr::write_volatile(frame.add(F_IRIP + 2), c.rflags);
+                            core::ptr::write_volatile(frame.add(F_IRSP), c.rsp);
+                            core::ptr::write_volatile(frame.add(F_ISS), c.ss);
+                        }
+                        drop(guard);
+                        return 0;
+                    }
+                }
+            }
+        }
+        return u64::MAX;
+    }
+
     let process_result = if let Some(mut guard) = crate::mm::try_lock_memory() {
         let memory = guard.get();
         let pid = memory.proc_mgr.current_pid;
@@ -2292,7 +2347,7 @@ pub fn schedule_user_processes() {
     };
 
     // Süreci Running'e al, özel çekirdek yığınını hazırla ve CR3'ü yükle.
-    let (rip, rsp, ktop, has_ctx, ctx) = {
+    let (rip, rsp, ktop, has_ctx, mut ctx) = {
         let Some(mut guard) = crate::mm::try_lock_memory() else {
             return;
         };
@@ -2346,8 +2401,60 @@ pub fn schedule_user_processes() {
         report_process_state();
     }
 
+    // --- Kullanıcı sinyal işleyicisi teslimatı ---
+    // Bekleyen, kayıtlı kullanıcı işleyicisi olan bir sinyal varsa
+    // SigFrame'i kullanıcı yığına yazar ve bağlamı işleyiciye yönlendirir.
+    let signal_delivered = 'signal: {
+        let Some(mut guard) = crate::mm::try_lock_memory() else {
+            break 'signal false;
+        };
+        let memory = guard.get();
+        let Some((sig, handler)) = memory.proc_mgr.pending_user_signal(pid) else {
+            break 'signal false;
+        };
+        let address_space = memory.proc_mgr.get_process(pid).map(|p| p.address_space); // AddressSpace (u64) is Copy
+        let Some(address_space) = address_space else {
+            break 'signal false;
+        };
+        let frame_size = core::mem::size_of::<crate::mm::process::SigFrame>();
+        let new_rsp = (ctx.rsp - frame_size as u64) & !0xF;
+        let frame = crate::mm::process::SigFrame {
+            sig,
+            old_rsp: ctx.rsp,
+            context: ctx,
+        };
+        let frame_bytes = unsafe {
+            core::slice::from_raw_parts(
+                &frame as *const crate::mm::process::SigFrame as *const u8,
+                frame_size,
+            )
+        };
+        if crate::mm::uaccess::copy_to_user(&address_space, new_rsp, frame_bytes).is_ok() {
+            // Sinyali teslim edildi olarak işaretle (beklemeden kaldır).
+            if let Some(p) = memory.proc_mgr.get_process_mut(pid) {
+                p.pending_signals &= !(1u64 << (sig - 1));
+            }
+            // Bağlamı kullanıcı işleyicisine yönlendir.
+            ctx.rip = handler;
+            ctx.rsp = new_rsp;
+            ctx.rdi = sig; // İlk argüman: sinyal numarası
+            if ctx.cs == 0 {
+                ctx.cs = gdt::SEL_UCODE as u64;
+            }
+            if ctx.ss == 0 {
+                ctx.ss = gdt::SEL_UDATA as u64;
+            }
+            if ctx.rflags == 0 {
+                ctx.rflags = 0x202;
+            }
+            break 'signal true;
+        } else {
+            break 'signal false;
+        }
+    };
+
     unsafe {
-        if has_ctx {
+        if signal_delivered || has_ctx {
             enter_user_context_raw(&ctx);
         } else {
             enter_usermode_raw(rip, rsp);

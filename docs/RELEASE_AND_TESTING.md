@@ -50,7 +50,7 @@ devre dışı bırakır.
 ./test_host.ps1
 ```
 
-Beklenen sonuç: **322 passed / 0 failed**.
+Beklenen sonuç: **360 passed / 0 failed**.
 
 ### 2) QEMU Entegrasyon Testi — `test_qemu.ps1`
 

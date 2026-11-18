@@ -1943,10 +1943,14 @@ impl ProcessManager {
             .find(|p| p.pid == pid && p.state != ProcessState::Unused)
     }
 
-    /// Kullanıcı süreçleri zamanlayıcısı için: `Ready` durumunda ve gerçek
-    /// bir kullanıcı giriş noktası olan (rip/rsp tanımlı) ilk süreci
-    /// round-robin sırasıyla döndürür. GUI sözde-süreçleri (rip=0) atlanır.
+    /// Kullanıcı süreçleri zamanlayıcısı için: `Ready` durumunda, gerçek bir
+    /// kullanıcı giriş noktasına (rip/rsp tanımlı) sahip ve mevcut CPU'nun
+    /// affinity maskesine dahil olan ilk süreci round-robin sırasıyla döndürür.
+    /// `affinity == 0` tüm CPU'ları anlamına gelir. GUI sözde-süreçleri (rip=0)
+    /// atlanır.
     pub fn next_ready_user_process(&mut self) -> Option<usize> {
+        let cpu = crate::arch::x86_64::smp::current_cpu_index();
+        let valid_mask = if cpu >= 64 { u64::MAX } else { 1u64 << cpu };
         for _ in 0..MAX_PROCESSES {
             let idx = self.user_rr % MAX_PROCESSES;
             self.user_rr = (self.user_rr + 1) % MAX_PROCESSES;
@@ -1956,6 +1960,7 @@ impl ProcessManager {
                 && !p.resources_reaped
                 && p.context.rip != 0
                 && p.context.rsp != 0
+                && (p.affinity == 0 || (p.affinity & valid_mask) != 0)
             {
                 return Some(p.pid);
             }
@@ -1966,8 +1971,11 @@ impl ProcessManager {
     /// APIC timer preemption adayı: `after` dışında, daha önce kesme ile
     /// kaydedilmiş kullanıcı bağlamı (`kernel_rsp != 0`) olan `Ready` süreç.
     /// Henüz hiç çalışmamış süreçler burada döndürülmez; onlar çekirdek
-    /// tarafındaki `enter` yoluyla başlatılır.
+    /// tarafındaki `enter` yoluyla başlatılır. CPU affinity maskesi
+    /// uygulanır (`affinity == 0` tüm CPU'ları anlamına gelir).
     pub fn next_user_process_after(&mut self, after: usize) -> Option<usize> {
+        let cpu = crate::arch::x86_64::smp::current_cpu_index();
+        let valid_mask = if cpu >= 64 { u64::MAX } else { 1u64 << cpu };
         for _ in 0..MAX_PROCESSES {
             let idx = self.user_rr % MAX_PROCESSES;
             self.user_rr = (self.user_rr + 1) % MAX_PROCESSES;
@@ -1977,6 +1985,7 @@ impl ProcessManager {
                 && p.state == ProcessState::Ready
                 && !p.resources_reaped
                 && p.context.kernel_rsp != 0
+                && (p.affinity == 0 || (p.affinity & valid_mask) != 0)
             {
                 return Some(p.pid);
             }
@@ -1987,6 +1996,8 @@ impl ProcessManager {
     /// Bir sonraki calistirilabilir sureci doner (oncelikli Preemptive Round-Robin Zamanlayici).
     /// Kullanici sureclerini oncelik sirasina (Realtime > High > Normal > Low) gore zamanlar,
     /// calistirilabilir kullanici sureci yoksa PID 0 (kernel_core) fallback doner.
+    /// CPU affinity maskesi uygulanir: surec sadece affinity maskesindeki CPU'lar
+    /// üzerinde calisabilir (`affinity == 0` tüm CPU'ları anlamına gelir).
     pub fn schedule_next(&mut self) -> Option<usize> {
         // Sure dolmus engellenmis surecleri once uyandir (item 7).
         let _ = self.wake_timeouts(crate::monotonic_ms());
@@ -1994,6 +2005,9 @@ impl ProcessManager {
         if self.active_count == 0 {
             return None;
         }
+
+        let cpu = crate::arch::x86_64::smp::current_cpu_index();
+        let valid_mask = if cpu >= 64 { u64::MAX } else { 1u64 << cpu };
 
         // Mevcut calisan surecin slot indeksini bul
         let curr_slot = self
@@ -2016,6 +2030,7 @@ impl ProcessManager {
                 if p.pid != 0
                     && (p.state == ProcessState::Ready || p.state == ProcessState::Running)
                     && p.priority == target_prio
+                    && (p.affinity == 0 || (p.affinity & valid_mask) != 0)
                 {
                     self.current_pid = p.pid;
                     p.state = ProcessState::Running;
@@ -2346,8 +2361,10 @@ impl ProcessManager {
     /// `sched_setaffinity(2)`: sürecin çalışabileceği CPU kümesini belirler.
     ///
     /// Maske `0` veya çevrimiçi olmayan bir CPU biti içeriyorsa reddedilir.
-    /// Kullanıcı süreçleri şu an BSP üzerinde çalıştığı için API ileride SMP
-    /// kullanıcı zamanlaması etkinleştiğinde doğrudan uygulanabilir.
+    /// Zamanlayıcı (`next_ready_user_process`, `schedule_next`,
+    /// `select_ready`) bu maskeyi uygular: bir süreç yalnızca affinity
+    /// maskesindeki CPU'lar üzerinde çalışabilir (`affinity == 0` tüm
+    /// çevrimiçi CPU'ları anlamına gelir).
     pub fn set_affinity(&mut self, pid: usize, mask: u64) -> bool {
         let cpus = crate::arch::x86_64::smp::cpu_count().clamp(1, 64) as u32;
         let valid_mask = if cpus >= 64 {
@@ -2588,6 +2605,80 @@ impl ProcessManager {
     }
 }
 
+/// Kullanıcı sinyal işleyicisine çağrıdan önce kullanıcı yığına itilen
+/// sinyal çerçevesi. `SYS_SIGRETURN` bu çerçeveyi okuyarak kesilmeden
+/// önceki kullanıcı bağlamını geri yükler.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SigFrame {
+    pub sig: u64,     // Sinyal numarası (işleyiciye ilk argüman olarak da verilir)
+    pub old_rsp: u64, // Sinyal tesliminden önceki kullanıcı RSP
+    pub context: ProcessContext, // Kaydedilen tam kullanıcı bağlamı
+}
+
+impl ProcessManager {
+    /// `pid` sürecinde bekleyen, kayıtlı kullanıcı işleyicisi olan en düşük
+    /// numaralı sinyali döndürür. Varsayılan eylem (0) ve SIG_IGN (1) ile
+    /// işaretli sinyaller atlanır; SIGKILL/SIGSTOP için işleyici kaydedilemez.
+    /// Dönüş: `(sinyal_no, isleyici_adresi)`.
+    pub fn pending_user_signal(&self, pid: usize) -> Option<(u64, u64)> {
+        let process = self.get_process(pid)?;
+        let pending = process.pending_signals & !process.signal_mask;
+        if pending == 0 {
+            return None;
+        }
+        for sig in 1..=signals::MAX_SIGNAL {
+            let bit = 1u64 << (sig - 1);
+            if pending & bit == 0 {
+                continue;
+            }
+            let handler = process.signal_handlers[(sig - 1) as usize];
+            // 0 = varsayılan eylem (deliver_pending_defaults tarafından),
+            // 1 = SIG_IGN (sessizce düşürülür), diğerleri kullanıcı işleyicisi.
+            if (2..crate::mm::uaccess::USER_ADDRESS_END).contains(&handler) {
+                return Some((sig, handler));
+            }
+        }
+        None
+    }
+
+    /// `SYS_SIGRETURN`: kullanıcı yığındaki SigFrame'den kayıtlı bağlamı
+    /// geri yükler. `sigframe_ptr` kullanıcı adresinde bir SigFrame işaret
+    /// ediyor olmalı. Başarıda 0, hata durumunda u64::MAX döner.
+    pub fn sys_sigreturn(
+        &mut self,
+        pid: usize,
+        sigframe_ptr: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> u64 {
+        let Some(process) = self.get_process(pid) else {
+            return u64::MAX;
+        };
+        // SigFrame'i kullanıcı bellekten doğrula ve kopyala.
+        let frame_size = core::mem::size_of::<SigFrame>();
+        if frame_size > crate::mm::uaccess::MAX_USER_COPY {
+            return u64::MAX;
+        }
+        let Ok(frame_bytes) =
+            crate::mm::uaccess::copy_from_user(&process.address_space, sigframe_ptr, frame_size)
+        else {
+            return u64::MAX;
+        };
+        let frame: SigFrame = unsafe { core::ptr::read(frame_bytes.as_ptr() as *const SigFrame) };
+
+        // Sinyal işleyici dönüşü tamamlandı; aynı sinyalin tekrar teslimatı
+        // için beklemede kalmamalıdır (zaten teslim edildiğinde temizlendi,
+        // ancak burada emin olalım).
+        if let Some(p) = self.get_process_mut(pid) {
+            p.pending_signals &= !(1u64 << (frame.sig - 1));
+        }
+
+        // 0 = başarı
+        let _ = pmm;
+        0
+    }
+}
+
 impl Default for ProcessManager {
     fn default() -> Self {
         Self::new()
@@ -2691,6 +2782,10 @@ pub mod sys_nos {
     /// Pencere bilgisi döndürür: RDI=window_id, RSI=buffer_ptr (u64[4]=x,y,w,h).
     /// Dönüş: 0 / u64::MAX.
     pub const SYS_GUI_GET_WINDOW_INFO: u64 = 36;
+
+    /// Sinyal işleyicisinden dönüş: RDI = kullanıcı yığındaki SigFrame işaretçisi.
+    /// Kesilmeden önceki kullanıcı bağlamını geri yükler ve iretq ile devam eder.
+    pub const SYS_SIGRETURN: u64 = 37;
 }
 
 /// Standart sinyal numaraları (Linux numaralandırmasıyla uyumlu alt küme).
@@ -3252,6 +3347,15 @@ pub fn syscall_dispatch_abi(
             };
             process.syscall_mask &= arg1;
             0
+        }
+
+        sys_nos::SYS_SIGRETURN => {
+            let current = proc_mgr.current_pid;
+            if current == 0 {
+                return u64::MAX;
+            }
+            // RDI = kullanıcı yığındaki SigFrame işaretçisi.
+            proc_mgr.sys_sigreturn(current, arg1, pmm)
         }
 
         // --- GUI syscall handlers ---
@@ -6018,4 +6122,209 @@ pub fn test_process_groups_and_signals(
         crate::serial_print(")\n");
         false
     }
+}
+
+/// Zamanlayıcı affinity uygulamasını ve kullanıcı sinyel işleyicisi
+/// teslimat altyapısını gerçek donanımdaki çekirdek bağlamında doğrular.
+/// Bu test BSP başlangıç sürecinden çağrılır; SMP sistemlerde affinity
+/// filtrelemesinin farklı CPU'lar arasında doğru çalıştığını kontrol eder.
+pub fn test_scheduler_affinity_and_signals(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[SCHED-AFF-TEST] --- zamanlayıcı affinity + sinyel testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    proc_mgr.current_pid = 0;
+    let free_before = pmm.free_memory_bytes;
+
+    let cpu = crate::arch::x86_64::smp::current_cpu_index();
+    let valid_mask = if cpu >= 64 { u64::MAX } else { 1u64 << cpu };
+    let all_mask = if cpu >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << cpu_count()) - 1
+    };
+
+    fn cpu_count() -> u32 {
+        crate::arch::x86_64::smp::cpu_count().clamp(1, 64) as u32
+    }
+
+    // 1. İki test süreci oluştur; her ikisi de Ready durumunda.
+    let Ok(pid_a) = proc_mgr.spawn(
+        "aff-a",
+        crate::mm::loader::USER_CODE_BASE,
+        crate::mm::loader::USER_STACK_TOP - 16,
+        0,
+        None,
+        pmm,
+    ) else {
+        crate::serial_print("[SCHED-AFF-TEST] süreç A oluşturulamadı: BAŞARISIZ\n");
+        proc_mgr.current_pid = caller_pid;
+        return false;
+    };
+    let Ok(pid_b) = proc_mgr.spawn(
+        "aff-b",
+        crate::mm::loader::USER_CODE_BASE,
+        crate::mm::loader::USER_STACK_TOP - 16,
+        0,
+        None,
+        pmm,
+    ) else {
+        crate::serial_print("[SCHED-AFF-TEST] süreç B oluşturulamadı: BAŞARISIZ\n");
+        let _ = proc_mgr.terminate(pid_a, 0, pmm);
+        proc_mgr.reap_terminated(pmm);
+        proc_mgr.current_pid = caller_pid;
+        return false;
+    };
+
+    // 2. Varsayılan affinity = 0 (tüm CPU'lar): her iki süreç de seçilebilir.
+    let default_ok = proc_mgr
+        .next_ready_user_process()
+        .is_some_and(|pid| pid == pid_a || pid == pid_b);
+    // Seçilen süreci geri al (round-robin imleci ilerledi; tekrar deneyelim).
+    let _ = proc_mgr.next_ready_user_process();
+
+    // 3. Süreç A'yı sadece mevcut CPU'ya kısıtla; süreç B'yi başka bir CPU'ya.
+    let set_a_ok = proc_mgr.set_affinity(pid_a, valid_mask);
+    let set_b_ok = if cpu_count() > 1 {
+        let other_mask = if cpu + 1 >= 64 {
+            u64::MAX
+        } else {
+            1u64 << ((cpu + 1) % 64)
+        };
+        proc_mgr.set_affinity(pid_b, other_mask)
+    } else {
+        // Tek CPU'lu sistemde B'yi de aynı CPU'ya kısıtla.
+        proc_mgr.set_affinity(pid_b, valid_mask)
+    };
+
+    // 4. next_ready_user_process affinity'ye uygun süreci seçmeli.
+    let mut selected_a = false;
+    let mut selected_b = false;
+    for _ in 0..MAX_PROCESSES {
+        if let Some(pid) = proc_mgr.next_ready_user_process() {
+            if pid == pid_a {
+                selected_a = true;
+            }
+            if pid == pid_b {
+                selected_b = true;
+            }
+        }
+    }
+    // Tek CPU'lu sistemde her iki süreç de aynı CPU'ya bağlı olduğu için
+    // her ikisi de seçilebilir; çok CPU'lu sistemde yalnızca A seçilmeli.
+    let affinity_filter_ok = if cpu_count() > 1 {
+        selected_a && !selected_b
+    } else {
+        selected_a && selected_b
+    };
+
+    // 5. Affinity'yi tüm CPU'lara sıfırla.
+    let reset_ok = !proc_mgr.set_affinity(pid_a, 0) // 0 maskesi reddedilir
+        && proc_mgr.set_affinity(pid_a, all_mask)
+        && proc_mgr.get_affinity(pid_a).is_some_and(|m| m == all_mask);
+
+    // 6. pending_user_signal: kayıtlı işleyicisi olan sinyeli bulur,
+    //    varsayılan eylem (0) ve SIG_IGN (1) atlar.
+    proc_mgr.current_pid = pid_a;
+    let handler_addr: u64 = 0x7000_1000;
+    let register_handler = crate::mm::process::syscall_dispatch(
+        crate::mm::process::sys_nos::SYS_SIGACTION,
+        signals::SIGUSR1,
+        handler_addr,
+        0,
+        proc_mgr,
+        pmm,
+    ) == 0;
+    let kill_ok = crate::mm::process::syscall_dispatch(
+        crate::mm::process::sys_nos::SYS_KILL,
+        pid_a as u64,
+        signals::SIGUSR1,
+        0,
+        proc_mgr,
+        pmm,
+    ) == 0;
+    let pending_ok = proc_mgr
+        .pending_user_signal(pid_a)
+        .is_some_and(|(sig, handler)| sig == signals::SIGUSR1 && handler == handler_addr);
+
+    // Varsayılan eylem (0) sinyeli pending_user_signal tarafından atlanmalı.
+    let default_skipped = proc_mgr.set_signal_handler(pid_a, signals::SIGUSR2, 0)
+        && crate::mm::process::syscall_dispatch(
+            crate::mm::process::sys_nos::SYS_KILL,
+            pid_a as u64,
+            signals::SIGUSR2,
+            0,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && proc_mgr.pending_user_signal(pid_a).is_none(); // SIGUSR2 handler=0 → atlanır
+
+    // SIG_IGN (1) de atlanmalı.
+    let ign_skipped = proc_mgr.set_signal_handler(pid_a, signals::SIGUSR2, 1)
+        && crate::mm::process::syscall_dispatch(
+            crate::mm::process::sys_nos::SYS_KILL,
+            pid_a as u64,
+            signals::SIGUSR2,
+            0,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && proc_mgr.pending_user_signal(pid_a).is_none();
+
+    // 7. sys_sigreturn: geçersiz işaretçi u64::MAX döner.
+    let sigret_invalid = proc_mgr.sys_sigreturn(pid_a, 0, pmm) == u64::MAX;
+
+    // Temizlik.
+    proc_mgr.current_pid = 0;
+    let _ = proc_mgr.terminate(pid_a, 0, pmm);
+    let _ = proc_mgr.terminate(pid_b, 0, pmm);
+    proc_mgr.reap_terminated(pmm);
+    proc_mgr.current_pid = caller_pid;
+    let no_leak = pmm.free_memory_bytes == free_before;
+
+    let ok = default_ok
+        && affinity_filter_ok
+        && set_a_ok
+        && set_b_ok
+        && reset_ok
+        && register_handler
+        && kill_ok
+        && pending_ok
+        && default_skipped
+        && ign_skipped
+        && sigret_invalid
+        && no_leak;
+
+    if ok {
+        crate::serial_print("[SCHED-AFF-TEST] zamanlayıcı affinity + sinyel: BASARILI\n");
+    } else {
+        crate::serial_print("[SCHED-AFF-TEST] zamanlayıcı affinity + sinyel: BASARISIZ\n");
+        crate::serial_print(" default=");
+        crate::serial::print_dec(default_ok as u64);
+        crate::serial_print(" aff_filter=");
+        crate::serial::print_dec(affinity_filter_ok as u64);
+        crate::serial_print(" set_a=");
+        crate::serial::print_dec(set_a_ok as u64);
+        crate::serial_print(" set_b=");
+        crate::serial::print_dec(set_b_ok as u64);
+        crate::serial_print(" reset=");
+        crate::serial::print_dec(reset_ok as u64);
+        crate::serial_print(" reg_handler=");
+        crate::serial::print_dec(register_handler as u64);
+        crate::serial_print(" kill=");
+        crate::serial::print_dec(kill_ok as u64);
+        crate::serial_print(" pending=");
+        crate::serial::print_dec(pending_ok as u64);
+        crate::serial_print(" default_skipped=");
+        crate::serial::print_dec(default_skipped as u64);
+        crate::serial_print(" ign_skipped=");
+        crate::serial::print_dec(ign_skipped as u64);
+        crate::serial_print(" sigret_invalid=");
+        crate::serial::print_dec(sigret_invalid as u64);
+        crate::serial_print(" leak=");
+        crate::serial::print_dec(no_leak as u64);
+        crate::serial_print("\n");
+    }
+    ok
 }

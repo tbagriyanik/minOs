@@ -658,9 +658,14 @@ impl Default for SchedulerPauseGuard {
 /// opportunities it waits, up to Realtime. This reduces starvation without
 /// claiming deadlines or wall-clock guarantees.
 fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
+    // `best_priority` MUST be computed over tasks eligible for this CPU only.
+    // Computing it globally (all CPUs) and then selecting a local task matching
+    // that priority makes a CPU go idle when its ready tasks are lower priority
+    // than a ready task parked on another CPU — exactly the starvation that
+    // leaves browser network/render/JS-timer tasks undispatched and pages hung.
     let best_priority = tasks
         .iter()
-        .filter(|task| task.ready && !task.cancelled && !task.completed)
+        .filter(|task| task.ready && !task.cancelled && !task.completed && task.cpu == cpu)
         .map(|task| {
             (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
         })
@@ -677,19 +682,78 @@ fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
                 && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
                     == best_priority
         });
-    local.or_else(|| {
-        (0..tasks.len())
-            .map(|n| (start + n) % tasks.len())
-            .find(|&i| {
-                let task = &tasks[i];
-                task.ready
-                    && !task.cancelled
-                    && !task.completed
-                    && (task.priority as u32 + (task.ready_age / 8))
-                        .min(TaskPriority::Realtime as u32)
-                        == best_priority
-            })
-    })
+    // CPU affinity'nin kesin uygulanması: bir görev yalnızca affinity'si
+    // eşleşen CPU üzerinde çalışabilir. `task.cpu` spawn sırasında
+    // `least_loaded_cpu` ile atanır ve `set_affinity` ile güncellenebilir.
+    // Hiçbir yerel uygun görev yoksa bu CPU için iş yoktur (boşta kalır);
+    // başka bir CPU'nın görevine sıçramak affinity ilkesini bozardı.
+    local
+}
+
+/// Cok cekirdekli scheduler davranisini dogrulayan birlesik test:
+/// - Gorevler tum online CPU'lara dagitilmali (least_loaded_cpu).
+/// - Ayni anda yapilan wake/notify islemleri gorevi kaybetmemeli.
+/// - Kuyruk derinligi (RUN_QUEUE_DEPTH) spawn/iptal dongulerinde geri
+///   gelmeli; iptal edilen gorevlerin CPU slotlari sizmamali.
+/// - poll_tasks birden fazla kez calistirilip kuyruk bosaltildiginda derinlik
+///   tekrar tabana inmeli.
+///
+/// Bu test BSP baslangic surecinden cagrilir. Cok cekirdekli (SMP) makinede
+/// tum online CPU'larin gercekten kullanildigi dogrulanir; tek cekirdekli
+/// profilde dagilim beklentisi 1'e iner.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: build a Task with given priority/cpu/ready_age.
+    fn make_task(priority: TaskPriority, cpu: usize, ready_age: u32) -> Task {
+        let mut t = Task::new("t", priority, || TaskStatus::Yielded);
+        t.cpu = cpu;
+        t.ready_age = ready_age;
+        t.ready = true;
+        t
+    }
+
+    #[test]
+    fn select_ready_picks_local_cpu_task_even_if_lower_priority_exists_elsewhere() {
+        // CPU 0 has a Realtime task; CPU 1 has only a Normal ready task.
+        // select_ready for CPU 1 must NOT return None just because a higher
+        // priority task lives on another CPU.
+        let mut t0 = make_task(TaskPriority::Realtime, 0, 0);
+        let mut t1 = make_task(TaskPriority::Normal, 1, 0);
+        let tasks = vec![t0, t1];
+
+        // Selecting for CPU 0 picks the Realtime task.
+        let idx0 = select_ready(&tasks, 0).expect("CPU 0 should find its task");
+        assert_eq!(tasks[idx0].cpu, 0);
+        assert_eq!(tasks[idx0].priority, TaskPriority::Realtime);
+
+        // Selecting for CPU 1 picks the Normal task (not None).
+        let idx1 = select_ready(&tasks, 1).expect("CPU 1 should find its local task");
+        assert_eq!(tasks[idx1].cpu, 1);
+        assert_eq!(tasks[idx1].priority, TaskPriority::Normal);
+    }
+
+    #[test]
+    fn select_ready_round_robin_among_same_priority_local_tasks() {
+        let mut t0 = make_task(TaskPriority::Normal, 0, 0);
+        let mut t1 = make_task(TaskPriority::Normal, 0, 0);
+        let tasks = vec![t0, t1];
+
+        let i0 = select_ready(&tasks, 0).expect("should find a task");
+        let i1 = select_ready(&tasks, 0).expect("should find the other task");
+        assert_ne!(i0, i1);
+        assert_eq!(tasks[i0].cpu, 0);
+        assert_eq!(tasks[i1].cpu, 0);
+    }
+
+    #[test]
+    fn select_ready_returns_none_when_no_local_ready_task() {
+        let mut t0 = make_task(TaskPriority::Normal, 0, 0);
+        let tasks = vec![t0];
+        // CPU 1 has no local task.
+        assert!(select_ready(&tasks, 1).is_none());
+    }
 }
 
 /// Cok cekirdekli scheduler davranisini dogrulayan birlesik test:

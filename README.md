@@ -16,7 +16,8 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - Donmuş uygulamaların izlenmesi ana döngüden bağımsız çalışır; FPS 3D uygulaması gerçek kare hızı ölçümleri üretir.
 - FPS Oyunu başlangıç ve sonuç menülerini içerir; temel form kontrollerinde Tab ile gezinme, Enter ile onaylama ve Esc ile vazgeçme desteği bulunur (Hoş Geldin ekranı dahil).
 - Render bütçesi aşılırsa tamamlanmamış kare ekranda bırakılmaz.
-- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 322 test içerir.
+- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 360 test içerir.
+- Tarayıcı CSS3 `display` (flex/grid/block/inline/inline-block) ve `overflow` kuralları artık doğru uygulanıyor; çoklu CPU scheduler'ında bir işlemcinin kendi hazır görevini atlayıp boşta kalma hatası düzeltildi.
 - `TimeBudget` ve `OperationGuard` için deterministik host testleri eklendi.
 - Dosya Yöneticisi'nden WAV dosyalarını doğrudan oynatma ve görüntüyü döşeli masaüstü arka planı yapma eklendi.
 - Ayarlar'a üç yeni masaüstü görseli eklendi.

@@ -16,7 +16,8 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Frozen-app monitoring now runs independently of the main loop, and the FPS 3D app reports real frame-rate measurements.
 - The FPS game has start and result menus; basic form controls support Tab navigation, Enter confirmation and Esc cancellation, including the Welcome screen.
 - Incomplete frames are no longer displayed when the render budget expires.
-- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 322 tests.
+- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 360 tests.
+- Browser CSS3 `display` (flex/grid/block/inline/inline-block) and `overflow` rules are now applied correctly; a multi-CPU scheduler bug where a CPU skipped its own ready task and idled has been fixed.
 - Deterministic host tests were added for `TimeBudget` and `OperationGuard`.
 - File Manager can open WAV files directly in Music Player, and Image Viewer can set an image as a tiled desktop wallpaper.
 - Settings includes three additional desktop images.

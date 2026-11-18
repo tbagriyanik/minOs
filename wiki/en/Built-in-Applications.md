@@ -23,10 +23,13 @@ DevTools tabs:
 
 | Feature | Detail |
 | :--- | :--- |
-| **Layout** | Basic `flexbox` / `grid`, `transform` (translate/scale/rotate), `transition` / `animation` |
+| **Layout** | `display: flex/grid/block/inline/inline-block`, `flexbox` / `grid`, `transform` (translate/scale/rotate), `transition` / `animation` |
+| **`overflow`** | `overflow: visible/hidden/scroll` now honored by the renderer |
 | **`@font-face`** | `font-family` and `src: url(...)` rules are parsed and carried via `ElementStyle.font_family`. **Limit:** remote TTF/WOFF data is not downloaded or rasterized into an atlas; text is drawn with the embedded atlases |
 | **`@keyframes`** | Linear interpolation of `opacity`, `color` and `background-color` via `blend_styles`; animations do not restart on every repaint |
 | **Images** | PNG, GIF, WebP, SVG and baseline **and progressive (SOF2) JPEG**; `data:` URIs, VFS-local and remote images |
+
+> **v2.5.0 browser fixes:** CSS3 `display` (flex/grid/block/inline/inline-block) and `overflow` rules were previously shadowed by earlier match arms and never applied — modern pages using flex/grid now render correctly. A multi-CPU scheduler bug where a CPU skipped its own ready task and idled (leaving browser network/render/JS-timer work undispatched) was also fixed; `select_ready` now computes priority over local-CPU tasks only.
 
 ---
 

@@ -989,11 +989,6 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 style.font_family = Some(String::from(name));
             }
         }
-        "display" => {
-            if val.eq_ignore_ascii_case("none") {
-                style.display_none = true;
-            }
-        }
         "margin-left" | "padding-left" | "text-indent" => {
             // Varsayılan: viewport ve parent bilgis yok, direkt px/em/rem parse et
             if let Some(px) = parse_px_value(val, None, None, None, None) {
@@ -1052,9 +1047,6 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
         }
         "cursor" => {
             // Cursor stilleri sadece tanıtım amacı; burada doğrudan etkisi yok
-        }
-        "overflow" => {
-            //overflow stilleri basitçe göz ardı ediliyor veya varsayılan ayarlanıyor
         }
         "white-space" => {
             // white-space stilleri
@@ -2578,5 +2570,55 @@ mod tests {
         let body = match_css_style(&parsed.rules, "body", None, None, None, 600, 768);
         assert_eq!(body.bg_color, Some(0xffffff));
         assert_eq!(body.color, Some(0x000000));
+    }
+
+    #[test]
+    fn display_property_activates_flex_grid_and_block() {
+        let parsed = parse_css(
+            ".flex { display: flex; }\n\
+             .grid { display: grid; }\n\
+             .block { display: block; }\n\
+             .inline { display: inline; }\n\
+             .hidden { display: none; }\n\
+             .ib { display: inline-block; }",
+        );
+        let flex = match_css_style(&parsed.rules, "div", Some("flex"), None, None, 600, 768);
+        assert_eq!(flex.display, Some(1));
+        assert!(!flex.display_none);
+
+        let grid = match_css_style(&parsed.rules, "div", Some("grid"), None, None, 600, 768);
+        assert_eq!(grid.display, Some(2));
+        assert!(!grid.display_none);
+
+        let block = match_css_style(&parsed.rules, "div", Some("block"), None, None, 600, 768);
+        assert_eq!(block.display, Some(3));
+        assert!(!block.display_none);
+
+        let inline = match_css_style(&parsed.rules, "span", Some("inline"), None, None, 600, 768);
+        assert_eq!(inline.display, Some(4));
+        assert!(!inline.display_none);
+
+        let hidden = match_css_style(&parsed.rules, "div", Some("hidden"), None, None, 600, 768);
+        assert!(hidden.display_none);
+        assert_eq!(hidden.display, None);
+
+        let ib = match_css_style(&parsed.rules, "span", Some("ib"), None, None, 600, 768);
+        assert_eq!(ib.display, Some(5));
+        assert!(!ib.display_none);
+    }
+
+    #[test]
+    fn overflow_property_sets_overflow_mode() {
+        let parsed = parse_css(
+            ".vis { overflow: visible; }\n\
+             .hid { overflow: hidden; }\n\
+             .sc { overflow: scroll; }",
+        );
+        let vis = match_css_style(&parsed.rules, "div", Some("vis"), None, None, 600, 768);
+        assert_eq!(vis.overflow, 0);
+        let hid = match_css_style(&parsed.rules, "div", Some("hid"), None, None, 600, 768);
+        assert_eq!(hid.overflow, 1);
+        let sc = match_css_style(&parsed.rules, "div", Some("sc"), None, None, 600, 768);
+        assert_eq!(sc.overflow, 2);
     }
 }

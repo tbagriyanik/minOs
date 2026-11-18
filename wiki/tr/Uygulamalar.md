@@ -22,10 +22,13 @@ DevTools sekmeleri:
 
 | Özellik | Detay |
 | :--- | :--- |
-| **Düzen** | `flexbox` / `grid` temel özellikleri, `transform` (translate/scale/rotate), `transition` / `animation` |
+| **Düzen** | `display: flex/grid/block/inline/inline-block`, `flexbox` / `grid` temel özellikleri, `transform` (translate/scale/rotate), `transition` / `animation` |
+| **`overflow`** | `overflow: visible/hidden/scroll` artık render edici tarafından sayılıyor |
 | **`@font-face`** | `font-family` ve `src: url(...)` kuralları ayrıştırılır ve `ElementStyle.font_family` üzerinden taşınır. **Sınır:** uzak TTF/WOFF verisi indirilip raster atlassa çevrilmez; metin gömülü atlaslarla çizilir |
 | **`@keyframes`** | `blend_styles` ile `opacity`, `color` ve `background-color` lineer interpolasyonu; animasyon yeniden çizimde bastan başlamaz |
 | **Görseller** | PNG, GIF, WebP, SVG ve baseline **ve progresif (SOF2) JPEG**; `data:` URI, VFS içi ve uzak görseller |
+
+> **v2.5.0 tarayıcı düzeltmeleri:** CSS3 `display` (flex/grid/block/inline/inline-block) ve `overflow` kuralları önceki eşleşme kolları tarafından gölgelenmişti ve asla uygulanmıyordu — flex/grid kullanan modern sayfalar artık doğru render ediliyor. Ayrıca çoklu CPU scheduler'ında bir işlemcinin kendi hazır görevini atlayıp boşta kalma hatası (tarayıcı ağ/render/JS-zamanlayıcı işlerinin dağıtılamamasına neden olan) düzeltildi; `select_ready` artık önceliği yalnızca yerel CPU'daki görevler üzerinden hesaplıyor.
 
 ---
 

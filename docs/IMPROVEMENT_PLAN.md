@@ -174,7 +174,7 @@ mode.
 ### 6.1 Unit Tests
 - **Done (host suite)**: `tests/host_tests.rs` + `test_host.ps1` run ~300
   host-side unit tests covering allocator, VFS/fs (ext4/exfat), crypto,
-  TLS, JS engine, widgets/themes readability, drivers' pure logic (322 tests).
+  TLS, JS engine, widgets/themes readability, drivers' pure logic (360 tests).
 - Remaining: in-kernel test coverage beyond boot self-tests, fuzzing.
 
 ### 6.2 Integration Tests
@@ -213,7 +213,7 @@ mode.
 
 ### 8.2 CI Pipeline
 - rustfmt/clippy checks — `cargo fmt` + `cargo clippy` run clean locally
-- Unit tests on host target — `test_host.ps1` (322 tests passing)
+- Unit tests on host target — `test_host.ps1` (360 tests passing)
 - QEMU integration tests — `test_qemu.ps1`, `boot_check.ps1`
 - Binary size tracking
 

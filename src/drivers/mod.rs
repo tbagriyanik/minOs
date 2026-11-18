@@ -45,6 +45,7 @@ pub mod quic_conn;
 pub mod rtc;
 pub mod sdmmc;
 pub mod socket;
+pub mod streambuf;
 pub mod timer;
 pub mod tls;
 pub mod usb;

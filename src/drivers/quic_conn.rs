@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use crate::drivers::netstack::Ipv4Address;
 use crate::drivers::quic::{self, QuicKeys};
 use crate::drivers::socket;
+use crate::drivers::streambuf::{CryptoRx, StreamRx};
 use crate::drivers::tls::{self, TlsSession, TlsState};
 
 const CID_LEN: usize = 8;
@@ -31,62 +32,6 @@ pub enum ConnState {
     Ready,
     /// Bağlantı başarısız oldu.
     Failed,
-}
-
-/// Bir gelen STREAM'in yeniden birleştirme durumu.
-struct StreamRx {
-    id: u64,
-    /// (offset, veri) parçaları — çakışmasız, sıralanmamış.
-    chunks: Vec<(u64, Vec<u8>)>,
-    fin: bool,
-}
-
-impl StreamRx {
-    /// `(offset, data)` parçasını ekler; mevcut parçalarla çakışan
-    /// kısımları atlar (yeniden iletilen aynı aralıklar için güvenli).
-    fn insert(&mut self, offset: u64, data: &[u8], fin: bool) {
-        self.fin |= fin;
-        if data.is_empty() {
-            return;
-        }
-        let end = offset.saturating_add(data.len() as u64);
-        // Mevcut aralıklarla kesişmeyen boşlukları bul
-        let mut covered: Vec<(u64, u64)> = self
-            .chunks
-            .iter()
-            .map(|(o, d)| (*o, *o + d.len() as u64))
-            .collect();
-        covered.sort_by_key(|(o, _)| *o);
-        let mut cur = offset;
-        for (cs, ce) in covered {
-            if ce <= cur {
-                continue;
-            }
-            if cs >= end {
-                break;
-            }
-            if cs > cur {
-                // [cur, min(cs,end)) boşluk
-                let gap_end = cs.min(end);
-                let s = (cur - offset) as usize;
-                let e = (gap_end - offset) as usize;
-                if e > s {
-                    self.chunks.push((cur, data[s..e].to_vec()));
-                }
-            }
-            cur = cur.max(ce);
-            if cur >= end {
-                break;
-            }
-        }
-        if cur < end {
-            let s = (cur - offset) as usize;
-            let e = (end - offset) as usize;
-            if e > s {
-                self.chunks.push((cur, data[s..e].to_vec()));
-            }
-        }
-    }
 }
 
 /// Bir packet-number uzayının gönderim/alım durumu.
@@ -107,119 +52,6 @@ impl PnSpace {
             largest_rx: 0,
             ack_pending: None,
         }
-    }
-}
-
-/// CRYPTO stream yeniden birleştirme: sıralı (offset, veri) parçaları.
-struct CryptoRx {
-    chunks: Vec<(u64, Vec<u8>)>,
-    /// TLS'e zaten beslenen bayt sayısı (akış başından itibaren).
-    fed: u64,
-}
-
-impl CryptoRx {
-    fn new() -> Self {
-        Self {
-            chunks: Vec::new(),
-            fed: 0,
-        }
-    }
-
-    fn insert(&mut self, offset: u64, data: &[u8]) {
-        if data.is_empty() {
-            return;
-        }
-        let end = offset + data.len() as u64;
-        let mut out: Vec<(u64, Vec<u8>)> = Vec::new();
-        let mut new_off = offset;
-        let mut new_data: &[u8] = data;
-        for (o, d) in self.chunks.drain(..) {
-            let oe = o + d.len() as u64;
-            if oe <= new_off || end <= o {
-                // Yeni parça eskiyi tamamen kapsıyorsa eskisini düşür
-                if oe <= offset && end >= oe {
-                    continue;
-                }
-                out.push((o, d));
-                continue;
-            }
-            // Çakışma: örtüşmeyen kısımları koru
-            if o < new_off {
-                let keep = (new_off - o) as usize;
-                out.push((o, d[..keep].to_vec()));
-            }
-            if oe > end {
-                let skip = (end - o) as usize;
-                out.push((end, d[skip..].to_vec()));
-            }
-            // Yeni parçanın kalan kısmı
-            if new_off < o {
-                // yeni parça eski parçamdan önce başlıyor: örtüşen kısmı kırp
-                let covered = (oe.min(end) - new_off) as usize;
-                new_data = &new_data[covered..];
-                new_off += covered as u64;
-                if new_data.is_empty() {
-                    break;
-                }
-            }
-        }
-        let end2 = new_off + new_data.len() as u64;
-        if !new_data.is_empty() {
-            out.push((new_off, new_data.to_vec()));
-        }
-        out.retain(|(_, d)| !d.is_empty());
-        let _ = end2;
-        out.sort_by_key(|(o, _)| *o);
-        self.chunks = out;
-    }
-
-    /// `fed` sonrasındaki sürekli kapsamın sonunu döndürür.
-    fn contiguous_end(&self) -> u64 {
-        let mut have = self.fed;
-        loop {
-            let mut advanced = false;
-            for (o, d) in &self.chunks {
-                let oe = *o + d.len() as u64;
-                if *o <= have && oe > have {
-                    have = oe;
-                    advanced = true;
-                }
-            }
-            if !advanced {
-                return have;
-            }
-        }
-    }
-
-    /// `from..to` aralığını `out`'a kopyalar.
-    fn copy_range(&self, from: u64, to: u64, out: &mut Vec<u8>) {
-        for (o, d) in &self.chunks {
-            let oe = *o + d.len() as u64;
-            if oe <= from || *o >= to {
-                continue;
-            }
-            let s = (from.max(*o) - *o) as usize;
-            let e = (to.min(oe) - *o) as usize;
-            out.extend_from_slice(&d[s..e]);
-        }
-    }
-
-    /// `upto`'ya kadar olan veriyi tüketilmiş say.
-    fn advance(&mut self, upto: u64) {
-        self.fed = upto;
-        let fed = self.fed;
-        for (o, d) in self.chunks.iter_mut() {
-            if *o < fed {
-                let skip = (fed - *o) as usize;
-                if skip >= d.len() {
-                    d.clear();
-                } else {
-                    d.drain(..skip);
-                }
-                *o = fed;
-            }
-        }
-        self.chunks.retain(|(_, d)| !d.is_empty());
     }
 }
 
@@ -507,13 +339,7 @@ impl QuicConn {
     pub fn read_stream(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
         let idx = self.streams.iter().position(|s| s.id == stream_id)?;
         let s = &mut self.streams[idx];
-        s.chunks.sort_by_key(|(o, _)| *o);
-        let mut out = Vec::new();
-        for (_, d) in s.chunks.iter() {
-            out.extend_from_slice(d);
-        }
-        let fin = s.fin;
-        self.streams[idx].chunks.clear();
+        let (out, fin) = s.take_contiguous();
         if fin {
             self.streams.remove(idx);
         }
@@ -1090,11 +916,7 @@ impl QuicConn {
         if let Some(s) = self.streams.iter_mut().find(|s| s.id == stream_id) {
             s.insert(offset, data, fin);
         } else {
-            let mut s = StreamRx {
-                id: stream_id,
-                chunks: Vec::new(),
-                fin: false,
-            };
+            let mut s = StreamRx::new(stream_id);
             s.insert(offset, data, fin);
             self.streams.push(s);
         }

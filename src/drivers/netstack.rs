@@ -1647,6 +1647,9 @@ pub fn run_network_self_test() -> bool {
 /// bir HTTPS hedefi de denenir: `http_get` TLS el sıkışmasını,
 /// `http2_get` ALPN `h2` görüşmesini doğrular (ör.
 /// `livetest=http://10.0.2.2:8000/ livetest_tls=https://ornek.test/`).
+/// `livetest_h3=<https-url>` eklenirse QUIC/HTTP/3 GET de denenir
+/// (yerel test sunucusu için `livetest_insecure` ile birlikte
+/// sertifika doğrulaması atlanabilir).
 ///
 /// `#[cfg(not(test))]`: host test harness'ında `boot::limine` ve
 /// `drivers::http`/`http2` yalnızca stub olarak bulunur; canlı ağ
@@ -1660,17 +1663,25 @@ pub fn run_live_server_tests() -> bool {
     // Token'lar `livetest=<url>` / `livetest_tls=<url>` biçimindedir;
     // `cmdline_has_token` tam eşitlik aradığı için önek denetimi yapılır.
     let has_livetest = cmdline.split_whitespace().any(|tok| {
-        tok == "livetest" || tok.starts_with("livetest=") || tok.starts_with("livetest_tls=")
+        tok == "livetest"
+            || tok.starts_with("livetest=")
+            || tok.starts_with("livetest_tls=")
+            || tok.starts_with("livetest_h3=")
     });
     if !has_livetest {
         return false;
     }
     let mut url = "http://10.0.2.2:8000/";
     let mut tls_url: Option<&str> = None;
+    let mut h3_url: Option<&str> = None;
     for tok in cmdline.split_whitespace() {
         if let Some(rest) = tok.strip_prefix("livetest_tls=") {
             if !rest.is_empty() {
                 tls_url = Some(rest);
+            }
+        } else if let Some(rest) = tok.strip_prefix("livetest_h3=") {
+            if !rest.is_empty() {
+                h3_url = Some(rest);
             }
         } else if let Some(rest) = tok.strip_prefix("livetest=") {
             if !rest.is_empty() {
@@ -1769,6 +1780,31 @@ pub fn run_live_server_tests() -> bool {
         }
     } else {
         crate::serial_print("[LIVE-TEST] 2-3. TLS/HTTP2: hedef yok, atlandi.\n");
+    }
+
+    // 4. HTTP/3: `livetest_h3=` verildiyse dogrudan QUIC/HTTP/3 GET.
+    if let Some(h) = h3_url {
+        crate::serial_print("[LIVE-TEST] 4. HTTP/3 GET (QUIC)... ");
+        match crate::drivers::h3::http3_get(h, &mut resp) {
+            Ok((status, blen)) => {
+                crate::serial_print("durum=");
+                crate::serial::print_dec(status as u64);
+                crate::serial_print(" bayt=");
+                crate::serial::print_dec(blen as u64);
+                crate::serial_print("\n");
+                if !(200..400).contains(&status) {
+                    all_ok = false;
+                }
+            }
+            Err(code) => {
+                crate::serial_print("HATA kod=");
+                crate::serial::print_dec(code as u64);
+                crate::serial_print("\n");
+                all_ok = false;
+            }
+        }
+    } else {
+        crate::serial_print("[LIVE-TEST] 4. HTTP/3: hedef yok, atlandi.\n");
     }
 
     crate::serial_print(if all_ok {

@@ -507,7 +507,13 @@ impl H3Client {
         };
         for (n, v) in headers {
             if n == ":status" {
-                resp.status = v.parse().unwrap_or(0);
+                let new_status: u16 = v.parse().unwrap_or(0);
+                // Interim 1xx yanıtı final yanıtla değiştirildiğinde
+                // önceki (1xx) başlıkları at — RFC 9114 §4.1.
+                if (100..200).contains(&resp.status) && !(100..200).contains(&new_status) {
+                    resp.headers.clear();
+                }
+                resp.status = new_status;
             } else {
                 resp.headers.push((n, v));
             }

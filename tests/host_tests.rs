@@ -196,6 +196,11 @@ pub mod huffman;
 #[path = "../src/drivers/qpack.rs"]
 pub mod qpack;
 
+// QUIC akış/CRYPTO yeniden birleştirme tamponları (offset'li,
+// tekrar-birleştirmeli, sürekli-kapsam çıkarımı).
+#[path = "../src/drivers/streambuf.rs"]
+pub mod streambuf;
+
 #[path = "../src/time_budget.rs"]
 pub mod time_budget;
 

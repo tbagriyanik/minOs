@@ -527,6 +527,10 @@ pub struct JsRuntime {
     pub websockets: BTreeMap<u32, WebSocketConn>,
     /// Bir sonraki WebSocket kimliği.
     pub next_ws_id: u32,
+    /// XMLHttpRequest durumları: kimlik -> istek durumu.
+    pub xhrs: BTreeMap<u32, XhrState>,
+    /// Bir sonraki XHR kimliği.
+    pub next_xhr_id: u32,
     /// Kayıtlı modüller: modül adı -> dışa aktarılan ad alanı (namespace).
     pub modules: BTreeMap<String, JsValue>,
     /// `register_module` sırasında toplanan ESM dışa aktarımları.
@@ -581,6 +585,8 @@ impl Clone for JsRuntime {
             session_storage: self.session_storage.clone(),
             websockets,
             next_ws_id: self.next_ws_id,
+            xhrs: self.xhrs.clone(),
+            next_xhr_id: self.next_xhr_id,
             modules: self.modules.clone(),
             current_exports: self.current_exports.clone(),
             page_url: self.page_url.clone(),
@@ -635,6 +641,27 @@ impl WebSocketConn {
     }
 }
 
+/// XMLHttpRequest durumu. `send()` senkron çalışır (fetch ile aynı model);
+/// hazır Event handler'lar `onreadystatechange`/`onload`/`onerror`/`onabort`
+/// özellikleri olarak JS nesnesinde tutulur.
+#[derive(Clone, Debug, Default)]
+pub struct XhrState {
+    pub method: String,
+    pub url: String,
+    /// istek gövdesi (send argümanı)
+    pub body: Option<String>,
+    /// setRequestHeader ile eklenen başlıklar
+    pub headers: Vec<(String, String)>,
+    /// 0=UNSENT 1=OPENED 2=HEADERS_RECEIVED 3=LOADING 4=DONE
+    pub ready_state: u8,
+    pub status: u16,
+    pub status_text: String,
+    /// Ham yanıt başlık bloğu (getAllResponseHeaders için)
+    pub response_headers: String,
+    pub response_body: Vec<u8>,
+    pub sent: bool,
+}
+
 impl JsRuntime {
     pub fn new() -> Self {
         Self {
@@ -657,6 +684,8 @@ impl JsRuntime {
             session_storage: BTreeMap::new(),
             websockets: BTreeMap::new(),
             next_ws_id: 1,
+            xhrs: BTreeMap::new(),
+            next_xhr_id: 1,
             modules: BTreeMap::new(),
             current_exports: None,
             page_url: String::new(),
@@ -2237,9 +2266,355 @@ impl JsRuntime {
                     });
                     Some(JsValue::Undefined)
                 }
+                "pushState" | "replaceState" => {
+                    // history.pushState(state, title, url) — sayfa yenilenmeden
+                    // adres çubuğunu ve geçmişi günceller.
+                    let parts = split_top_level_comma(args);
+                    if let Some(url_expr) = parts.get(2) {
+                        let url = self.eval_val(url_expr).to_str();
+                        let url = url.trim().trim_matches(|c| c == '\'' || c == '"');
+                        if !url.is_empty() {
+                            let prefix = if method == "pushState" {
+                                "__minos_pushstate__:"
+                            } else {
+                                "__minos_replacestate__:"
+                            };
+                            self.pending_navigation = Some(format!("{}{}", prefix, url));
+                        }
+                    }
+                    Some(JsValue::Undefined)
+                }
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// XHR örneğinin değer olarak saklandığı `values` anahtarını bulur:
+    /// değişken ya doğrudan nesneyi ya da `__xhr_obj_N` referansını taşır.
+    fn xhr_store_key(&self, obj_name: &str) -> Option<String> {
+        match self.values.get(obj_name) {
+            Some(JsValue::String(s)) if self.values.contains_key(s) => Some(s.clone()),
+            Some(JsValue::Object(_)) => Some(String::from(obj_name)),
+            _ => None,
+        }
+    }
+
+    /// XHR durumunu JS nesnesinin özelliklerine yansıtır (readyState, status,
+    /// responseText, response, responseURL...).
+    fn xhr_sync_object(&mut self, obj_name: &str, id: u32) {
+        let Some(key) = self.xhr_store_key(obj_name) else {
+            return;
+        };
+        let Some(st) = self.xhrs.get(&id).cloned() else {
+            return;
+        };
+        let body_text = String::from_utf8_lossy(&st.response_body).into_owned();
+        if let Some(JsValue::Object(map)) = self.values.get_mut(&key) {
+            map.insert(
+                String::from("readyState"),
+                JsValue::Number(st.ready_state as i64),
+            );
+            map.insert(String::from("status"), JsValue::Number(st.status as i64));
+            map.insert(
+                String::from("statusText"),
+                JsValue::String(st.status_text.clone()),
+            );
+            map.insert(
+                String::from("responseText"),
+                JsValue::String(body_text.clone()),
+            );
+            map.insert(String::from("response"), JsValue::String(body_text));
+            map.insert(String::from("responseURL"), JsValue::String(st.url.clone()));
+        }
+    }
+
+    /// XHR olay özelliğindeki (`onload`, `onreadystatechange`...) fonksiyonu
+    /// çağırır. Değer fonksiyon adı/closure adı taşıyan bir dizedir.
+    fn xhr_fire(&mut self, obj_name: &str, prop: &str) {
+        let handler = self
+            .xhr_store_key(obj_name)
+            .and_then(|key| match self.values.get(&key) {
+                Some(JsValue::Object(map)) => map.get(prop).cloned(),
+                _ => None,
+            });
+        let Some(JsValue::String(fname)) = handler else {
+            return;
+        };
+        if let Some(real) = self.resolve_function_name(&fname) {
+            let mut out = Vec::new();
+            self.call_function(&real, &[], &mut out);
+        }
+    }
+
+    /// Göreli XHR URL'sini sayfa kökenine göre mutlaklaştırır.
+    fn resolve_xhr_url(&self, url: &str) -> String {
+        if url.contains("://") {
+            return String::from(url);
+        }
+        let base = &self.page_url;
+        let scheme_end = base.find("://").map(|i| i + 3).unwrap_or(0);
+        let host_end = base[scheme_end..]
+            .find('/')
+            .map(|i| scheme_end + i)
+            .unwrap_or(base.len());
+        let origin = &base[..host_end];
+        if url.starts_with('/') {
+            format!("{}{}", origin, url)
+        } else {
+            format!("{}/{}", origin.trim_end_matches('/'), url)
+        }
+    }
+
+    /// `xhr.open(method, url[, async])` — isteği hazırlar, readyState=1.
+    fn xhr_open(&mut self, id: u32, args: &str, obj_name: &str) {
+        let parts = split_top_level_comma(args);
+        let method = parts
+            .first()
+            .map(|s| self.eval_val(s).to_str())
+            .unwrap_or_else(|| String::from("GET"));
+        let method = method
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"')
+            .to_ascii_uppercase();
+        let url = parts
+            .get(1)
+            .map(|s| self.eval_val(s).to_str())
+            .unwrap_or_default();
+        let url = url
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"')
+            .to_string();
+        if let Some(st) = self.xhrs.get_mut(&id) {
+            st.method = if method.is_empty() {
+                String::from("GET")
+            } else {
+                method
+            };
+            st.url = url;
+            st.ready_state = 1;
+            st.sent = false;
+            st.status = 0;
+            st.response_body.clear();
+            st.response_headers.clear();
+        }
+        self.xhr_sync_object(obj_name, id);
+        self.xhr_fire(obj_name, "onreadystatechange");
+    }
+
+    fn xhr_do_send(&mut self, id: u32, obj_name: &str) {
+        {
+            let Some(st) = self.xhrs.get(&id) else {
+                return;
+            };
+            if st.sent || st.url.is_empty() {
+                return;
+            }
+        }
+        let (method_s, url_raw, headers, body) = {
+            let Some(st) = self.xhrs.get(&id) else {
+                return;
+            };
+            (
+                st.method.clone(),
+                st.url.clone(),
+                st.headers.clone(),
+                st.body.clone(),
+            )
+        };
+        let url = self.resolve_xhr_url(&url_raw);
+        // readyState: HEADERS_RECEIVED → LOADING
+        if let Some(st) = self.xhrs.get_mut(&id) {
+            st.ready_state = 2;
+            st.sent = true;
+        }
+        self.xhr_sync_object(obj_name, id);
+        self.xhr_fire(obj_name, "onreadystatechange");
+        if let Some(st) = self.xhrs.get_mut(&id) {
+            st.ready_state = 3;
+        }
+        self.xhr_sync_object(obj_name, id);
+        self.xhr_fire(obj_name, "onreadystatechange");
+
+        let mut status: u16 = 0;
+        let mut status_text = String::new();
+        let mut resp_headers = String::new();
+        let mut resp_body: Vec<u8> = Vec::new();
+
+        #[cfg(not(any(test, host_fs_tests)))]
+        {
+            if crate::drivers::e1000::is_ready() {
+                let method = match method_s.to_ascii_uppercase().as_str() {
+                    "POST" => http::HttpMethod::Post,
+                    "PUT" => http::HttpMethod::Put,
+                    "PATCH" => http::HttpMethod::Patch,
+                    "DELETE" => http::HttpMethod::Delete,
+                    "HEAD" => http::HttpMethod::Head,
+                    "OPTIONS" => http::HttpMethod::Options,
+                    _ => http::HttpMethod::Get,
+                };
+                let mut extra = String::new();
+                for (k, v) in &headers {
+                    extra.push_str(k);
+                    extra.push_str(": ");
+                    extra.push_str(v);
+                    extra.push_str("\r\n");
+                }
+                // Sayfa ile aynı çerez oturumu.
+                let (is_https, host, path) = Self::parse_fetch_url_parts(&url);
+                let cookie =
+                    crate::drivers::cookie::get_cookie_header(&host, &path, is_https, true);
+                if !cookie.is_empty() && !extra.to_ascii_lowercase().contains("cookie:") {
+                    extra.push_str("Cookie: ");
+                    extra.push_str(&cookie);
+                    extra.push_str("\r\n");
+                }
+                let mut resp_buf = vec![0u8; 65536];
+                let extra_opt = if extra.is_empty() {
+                    None
+                } else {
+                    Some(extra.as_str())
+                };
+                let body_bytes = body.as_deref().map(|b| b.as_bytes());
+                if let Ok((st_code, hlen, total)) = http::http_request(
+                    method,
+                    &url,
+                    &mut resp_buf,
+                    body_bytes,
+                    None,
+                    extra_opt,
+                    None,
+                ) {
+                    status = st_code;
+                    status_text = match st_code {
+                        200 => "OK",
+                        201 => "Created",
+                        204 => "No Content",
+                        301 => "Moved Permanently",
+                        302 => "Found",
+                        304 => "Not Modified",
+                        400 => "Bad Request",
+                        401 => "Unauthorized",
+                        403 => "Forbidden",
+                        404 => "Not Found",
+                        500 => "Internal Server Error",
+                        _ => "Unknown",
+                    }
+                    .to_string();
+                    let hlen = hlen.min(total).min(resp_buf.len());
+                    resp_headers = String::from_utf8_lossy(&resp_buf[..hlen]).into_owned();
+                    let bstart = hlen;
+                    let bend = total.min(resp_buf.len());
+                    if bend > bstart {
+                        resp_body = resp_buf[bstart..bend].to_vec();
+                    }
+                }
+            }
+        }
+        #[cfg(any(test, host_fs_tests))]
+        {
+            let _ = (method_s, url, headers, body);
+        }
+
+        if let Some(st) = self.xhrs.get_mut(&id) {
+            st.ready_state = 4;
+            st.status = status;
+            st.status_text = status_text;
+            st.response_headers = resp_headers;
+            st.response_body = resp_body;
+        }
+        self.xhr_sync_object(obj_name, id);
+        self.xhr_fire(obj_name, "onreadystatechange");
+        if status > 0 {
+            self.xhr_fire(obj_name, "onload");
+        } else {
+            self.xhr_fire(obj_name, "onerror");
+        }
+    }
+
+    /// `xhr.getResponseHeader(name)` — yanıt başlığını ada göre döndürür.
+    fn xhr_get_response_header(&mut self, id: u32, args: &str) -> JsValue {
+        let name = split_top_level_comma(args)
+            .first()
+            .map(|s| self.eval_val(s).to_str())
+            .unwrap_or_default();
+        let name = name.trim().trim_matches(|c| c == '\'' || c == '"');
+        let Some(st) = self.xhrs.get(&id) else {
+            return JsValue::Null;
+        };
+        for line in st.response_headers.lines() {
+            if let Some((k, v)) = line.split_once(':') {
+                if k.trim().eq_ignore_ascii_case(name) {
+                    return JsValue::String(v.trim().to_string());
+                }
+            }
+        }
+        JsValue::Null
+    }
+
+    /// XMLHttpRequest örnek metotlarının ortak giriş noktası.
+    fn xhr_method(&mut self, id: u32, method: &str, args: &str, obj_name: &str) -> JsValue {
+        match method {
+            "open" => {
+                self.xhr_open(id, args, obj_name);
+                JsValue::Undefined
+            }
+            "setRequestHeader" => {
+                let parts = split_top_level_comma(args);
+                if parts.len() >= 2 {
+                    let k = self.eval_val(parts[0]).to_str();
+                    let v = self.eval_val(parts[1]).to_str();
+                    let k = k.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+                    let v = v.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+                    if let Some(st) = self.xhrs.get_mut(&id) {
+                        st.headers.push((k, v));
+                    }
+                }
+                JsValue::Undefined
+            }
+            "send" => {
+                // Gövde argümanını sakla (dize veya FormData benzeri nesne).
+                let parts = split_top_level_comma(args);
+                if let Some(b) = parts.first() {
+                    let body = self.eval_val(b);
+                    let text = match body {
+                        JsValue::String(s) => Some(s),
+                        other => {
+                            let t = other.to_str();
+                            if t.is_empty() {
+                                None
+                            } else {
+                                Some(t)
+                            }
+                        }
+                    };
+                    if let Some(st) = self.xhrs.get_mut(&id) {
+                        st.body = text;
+                    }
+                }
+                self.xhr_do_send(id, obj_name);
+                JsValue::Undefined
+            }
+            "abort" => {
+                if let Some(st) = self.xhrs.get_mut(&id) {
+                    st.ready_state = 0;
+                    st.sent = false;
+                }
+                self.xhr_sync_object(obj_name, id);
+                self.xhr_fire(obj_name, "onabort");
+                JsValue::Undefined
+            }
+            "getResponseHeader" => self.xhr_get_response_header(id, args),
+            "getAllResponseHeaders" => {
+                let s = self
+                    .xhrs
+                    .get(&id)
+                    .map(|st| st.response_headers.clone())
+                    .unwrap_or_default();
+                JsValue::String(s)
+            }
+            "overrideMimeType" | "addEventListener" | "removeEventListener" => JsValue::Undefined,
+            _ => JsValue::Undefined,
         }
     }
 
@@ -3438,6 +3813,30 @@ impl JsRuntime {
         }
 
         // `new ClassName(args)` — sınıf örneği oluşturur.
+        // `new XMLHttpRequest()` — XHR örneği oluşturur (send senkron HTTP).
+        if e.starts_with("new XMLHttpRequest") {
+            let xhr_id = self.next_xhr_id;
+            self.next_xhr_id += 1;
+            self.xhrs.insert(xhr_id, XhrState::default());
+            let mut obj = BTreeMap::new();
+            obj.insert(String::from("__xhr_id__"), JsValue::Number(xhr_id as i64));
+            obj.insert(String::from("readyState"), JsValue::Number(0));
+            obj.insert(String::from("status"), JsValue::Number(0));
+            obj.insert(String::from("statusText"), JsValue::String(String::new()));
+            obj.insert(String::from("responseText"), JsValue::String(String::new()));
+            obj.insert(String::from("response"), JsValue::String(String::new()));
+            obj.insert(String::from("responseURL"), JsValue::String(String::new()));
+            obj.insert(
+                String::from("responseType"),
+                JsValue::String(String::from("text")),
+            );
+            obj.insert(String::from("timeout"), JsValue::Number(0));
+            obj.insert(String::from("withCredentials"), JsValue::Bool(false));
+            let var = format!("__xhr_obj_{}", xhr_id);
+            self.values.insert(var.clone(), JsValue::Object(obj));
+            return JsValue::String(var);
+        }
+
         if let Some(rest) = e.strip_prefix("new ") {
             let rest = rest.trim();
             if let Some(open) = rest.find('(') {
@@ -3555,6 +3954,23 @@ impl JsRuntime {
 
                 // Örnek metot çağrısı: obj.method(args)
                 let base_val = self.eval_val(obj_name);
+                // XMLHttpRequest örneği: open/send/getResponseHeader vb.
+                // metotlar yerel HTTP yığınıyla yürütülür.
+                {
+                    let resolved = match &base_val {
+                        JsValue::String(r) => self
+                            .values
+                            .get(r)
+                            .cloned()
+                            .unwrap_or_else(|| base_val.clone()),
+                        _ => base_val.clone(),
+                    };
+                    if let JsValue::Object(map) = &resolved {
+                        if let Some(JsValue::Number(id)) = map.get("__xhr_id__") {
+                            return self.xhr_method(*id as u32, mname, arg_str, obj_name);
+                        }
+                    }
+                }
                 // Prototip zinciri / getter / Proxy üzerinden metodu çöz.
                 let mut recv = base_val.clone();
                 let member = self.get_member_mut(&mut recv, mname);
@@ -4927,6 +5343,23 @@ impl JsRuntime {
                     } else {
                         out.extend_from_slice(b"0");
                     }
+                } else if name == "requestAnimationFrame" {
+                    // requestAnimationFrame(cb) — kare başına ~16 ms'de çalışan
+                    // tekrar eden zamanlayıcı olarak modellenir.
+                    let parts: Vec<&str> = split_top_level_comma(args);
+                    if let Some(cb) = parts.first() {
+                        let id = self.register_timer_callback(cb, 16, true);
+                        out.extend_from_slice(id.to_string().as_bytes());
+                    } else {
+                        out.extend_from_slice(b"0");
+                    }
+                } else if name == "cancelAnimationFrame" {
+                    let parts: Vec<&str> = split_top_level_comma(args);
+                    if let Some(id_str) = parts.first() {
+                        let id = self.eval_val(id_str).to_i64().max(0) as u32;
+                        self.remove_timer(id);
+                    }
+                    out.extend_from_slice(b"undefined");
                 } else if name == "clearTimeout" || name == "clearInterval" {
                     // clearTimeout(id) / clearInterval(id) — zamanlayıcıyı iptal et.
                     let parts: Vec<&str> = split_top_level_comma(args);
@@ -6110,7 +6543,7 @@ fn method_object(mfunc: &JsFunction) -> JsValue {
     ]))
 }
 
-const CALLS: [&str; 28] = [
+const CALLS: [&str; 30] = [
     "console.log",
     "console.info",
     "console.warn",
@@ -6135,6 +6568,8 @@ const CALLS: [&str; 28] = [
     "setInterval",
     "clearTimeout",
     "clearInterval",
+    "requestAnimationFrame",
+    "cancelAnimationFrame",
     "fetch",
     "localStorage",
     "sessionStorage",

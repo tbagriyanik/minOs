@@ -467,8 +467,8 @@ fn send_chunk(fd: i32, data: &[u8]) -> Result<usize, i32> {
         if s.state == SockState::CloseWait || s.state == SockState::Closed {
             return Err(E_NOTCONN);
         }
-        // Parçanın tamamı onaylandı mı?
-        if end.wrapping_sub(s.snd_una) > 0x8000_0000 {
+        // Parçanın tamamı onaylandı mı? (snd_una == end dahil)
+        if end == s.snd_una || end.wrapping_sub(s.snd_una) > 0x8000_0000 {
             s.snd_nxt = end;
             s.unacked_len = 0;
             s.retry.kind = 0;
@@ -1093,12 +1093,18 @@ pub(crate) fn on_tcp_segment(src_ip: Ipv4Address, payload: &[u8]) -> bool {
                 // henüz onaylanmamış [snd_una, snd_nxt] aralığındaysa ilerlet.
                 if flags & 0x10 != 0 {
                     let forward = ack.wrapping_sub(s.snd_una);
-                    let outstanding = s.snd_nxt.wrapping_sub(s.snd_una);
+                    // Uçuştaki aralık [snd_una, snd_nxt + unacked_len):
+                    // snd_nxt onaylanana dek ilerlemez, bekleyen parça
+                    // unacked üzerinden hesaba katılır.
+                    let outstanding = s
+                        .snd_nxt
+                        .wrapping_sub(s.snd_una)
+                        .wrapping_add(s.unacked_len as u32);
                     if outstanding < 0x8000_0000 && forward <= outstanding {
                         s.snd_una = ack;
                         if s.retry.kind == 2 && s.unacked_len > 0 {
                             let end = s.unacked_seq.wrapping_add(s.unacked_len as u32);
-                            if end.wrapping_sub(ack) > 0x8000_0000 {
+                            if end == ack || end.wrapping_sub(ack) > 0x8000_0000 {
                                 s.unacked_len = 0;
                                 s.retry.kind = 0;
                             }

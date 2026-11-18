@@ -28,6 +28,49 @@ fn trig_sin(x: f32) -> f32 {
 
 /// no_std ortamı için kosinüs.
 #[inline]
+fn fsqrt(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let mut r = if x >= 1.0 { x * 0.5 } else { 0.5 };
+    for _ in 0..32 {
+        r = 0.5 * (r + x / r);
+    }
+    r
+}
+
+/// Gradyan duraklarından `t` (0..=1) için renk örnekler.
+fn sample_stops(stops: &[(f32, u32)], t: f32) -> u32 {
+    if stops.is_empty() {
+        return 0;
+    }
+    let t = t.clamp(0.0, 1.0);
+    // İlk durum ilk renge, son durum son renge kenetlenir.
+    if t <= stops[0].0 {
+        return stops[0].1;
+    }
+    if t >= stops[stops.len() - 1].0 {
+        return stops[stops.len() - 1].1;
+    }
+    for w in stops.windows(2) {
+        let (o0, c0) = w[0];
+        let (o1, c1) = w[1];
+        if t >= o0 && t <= o1 {
+            let span = o1 - o0;
+            let f = if span > 0.0001 { (t - o0) / span } else { 0.0 };
+            let r = lerp_u8(((c0 >> 16) & 0xFF) as u8, ((c1 >> 16) & 0xFF) as u8, f);
+            let g = lerp_u8(((c0 >> 8) & 0xFF) as u8, ((c1 >> 8) & 0xFF) as u8, f);
+            let b = lerp_u8((c0 & 0xFF) as u8, (c1 & 0xFF) as u8, f);
+            return ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+        }
+    }
+    stops[stops.len() - 1].1
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    (a as f32 + (b as f32 - a as f32) * t) as u8
+}
+
 fn trig_cos(x: f32) -> f32 {
     crate::apps::viewer3d::cos(x)
 }
@@ -115,6 +158,17 @@ impl ImageData {
 pub enum PathCmd {
     MoveTo(Point),
     LineTo(Point),
+    /// İkinci derece Bézier: kontrol noktası + uç nokta.
+    QuadTo {
+        cp: Point,
+        p: Point,
+    },
+    /// Üçüncü derece Bézier: iki kontrol noktası + uç nokta.
+    CubicTo {
+        c1: Point,
+        c2: Point,
+        p: Point,
+    },
     Arc {
         center: Point,
         radius: f32,
@@ -123,6 +177,33 @@ pub enum PathCmd {
         anticlockwise: bool,
     },
     ClosePath,
+}
+
+/// Gradyan tanımı: doğrusal veya radyal, renk durakları (offset 0..=1, u32 RGB).
+#[derive(Clone, Debug)]
+pub struct CanvasGradient {
+    pub kind: GradientKind,
+    /// (offset, rgb) çiftleri — ekleme sırasıyla, örnekleme sırasında sıralanır.
+    pub stops: Vec<(f32, u32)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum GradientKind {
+    Linear { x0: f32, y0: f32, x1: f32, y1: f32 },
+    Radial { cx: f32, cy: f32, r: f32 },
+}
+
+/// save()/restore() için kaydedilen durum.
+#[derive(Clone, Debug)]
+pub struct SavedState {
+    transform: (f32, f32, f32, f32, f32, f32),
+    clip: Option<(usize, usize, usize, usize)>,
+    global_alpha: f32,
+    line_width: f32,
+    fill_style: u32,
+    fill_gradient: Option<usize>,
+    stroke_style: u32,
+    font_size: f32,
 }
 
 /// The 2D rendering context state.
@@ -149,6 +230,12 @@ pub struct Canvas2dContext {
     pub clip: Option<(usize, usize, usize, usize)>,
     /// Global alpha (0.0..=1.0).
     pub global_alpha: f32,
+    /// Bu context'e ait gradyan nesneleri (createLinearGradient vb.).
+    pub gradients: Vec<CanvasGradient>,
+    /// fillStyle olarak seçili gradyan (varsa fill_style yerine kullanılır).
+    pub fill_gradient: Option<usize>,
+    /// save()/restore() yığını.
+    pub state_stack: Vec<SavedState>,
 }
 
 impl Canvas2dContext {
@@ -165,12 +252,55 @@ impl Canvas2dContext {
             path: Vec::new(),
             clip: None,
             global_alpha: 1.0,
+            gradients: Vec::new(),
+            fill_gradient: None,
+            state_stack: Vec::new(),
         }
     }
 
-    /// Set the fill style color (u32 RGB).
+    /// Set the fill style color (u32 RGB). Renk ataması gradyan seçimini kaldırır.
     pub fn set_fill_style(&mut self, color: u32) {
         self.fill_style = color;
+        self.fill_gradient = None;
+    }
+
+    /// fillStyle olarak gradyan seçer.
+    pub fn set_fill_gradient(&mut self, idx: usize) {
+        if idx < self.gradients.len() {
+            self.fill_gradient = Some(idx);
+        }
+    }
+
+    /// (x, y) noktasındaki dolguluk rengini döndürür — gradyansa bağlıysa
+    /// eksen izdüşümü/oran üzerinden örnekler.
+    fn paint_at(&self, x: f32, y: f32) -> Rgba {
+        if let Some(gi) = self.fill_gradient {
+            if let Some(g) = self.gradients.get(gi) {
+                let t = match g.kind {
+                    GradientKind::Linear { x0, y0, x1, y1 } => {
+                        let dx = x1 - x0;
+                        let dy = y1 - y0;
+                        let len2 = dx * dx + dy * dy;
+                        if len2 > 0.0001 {
+                            ((x - x0) * dx + (y - y0) * dy) / len2
+                        } else {
+                            0.0
+                        }
+                    }
+                    GradientKind::Radial { cx, cy, r } => {
+                        if r > 0.0001 {
+                            let ddx = x - cx;
+                            let ddy = y - cy;
+                            fsqrt(ddx * ddx + ddy * ddy) / r
+                        } else {
+                            0.0
+                        }
+                    }
+                };
+                return Rgba::from_u32(sample_stops(&g.stops, t));
+            }
+        }
+        Rgba::from_u32(self.fill_style)
     }
 
     /// Set the stroke style color (u32 RGB).
@@ -283,17 +413,105 @@ impl Canvas2dContext {
         self.path.push(PathCmd::ClosePath);
     }
 
+    /// `rect(x, y, w, h)` — dikdörtgeni mevcut path'e ekler.
+    pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.path.push(PathCmd::MoveTo(Point { x, y }));
+        self.path.push(PathCmd::LineTo(Point { x: x + w, y }));
+        self.path
+            .push(PathCmd::LineTo(Point { x: x + w, y: y + h }));
+        self.path.push(PathCmd::LineTo(Point { x, y: y + h }));
+        self.path.push(PathCmd::ClosePath);
+    }
+
+    /// `quadraticCurveTo(cpx, cpy, x, y)` — ikinci derece Bézier.
+    pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+        self.path.push(PathCmd::QuadTo {
+            cp: Point { x: cpx, y: cpy },
+            p: Point { x, y },
+        });
+    }
+
+    /// `bezierCurveTo(c1x, c1y, c2x, c2y, x, y)` — üçüncü derece Bézier.
+    pub fn bezier_curve_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+        self.path.push(PathCmd::CubicTo {
+            c1: Point { x: c1x, y: c1y },
+            c2: Point { x: c2x, y: c2y },
+            p: Point { x, y },
+        });
+    }
+
+    // ── Gradyanlar ─────────────────────────────────────────────────
+
+    /// `createLinearGradient(x0, y0, x1, y1)` — gradyan dizine ekler,
+    /// dizin döner (JS tarafı `canvasgrad<c>_<i>` referansı üretir).
+    pub fn create_linear_gradient(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) -> usize {
+        self.gradients.push(CanvasGradient {
+            kind: GradientKind::Linear { x0, y0, x1, y1 },
+            stops: Vec::new(),
+        });
+        self.gradients.len() - 1
+    }
+
+    /// `createRadialGradient(cx, cy, r)` — radyal gradyan ekler.
+    pub fn create_radial_gradient(&mut self, cx: f32, cy: f32, r: f32) -> usize {
+        self.gradients.push(CanvasGradient {
+            kind: GradientKind::Radial { cx, cy, r },
+            stops: Vec::new(),
+        });
+        self.gradients.len() - 1
+    }
+
+    /// `gradient.addColorStop(offset, color)` — durağı ekler.
+    pub fn gradient_add_color_stop(&mut self, gi: usize, offset: f32, color: u32) {
+        if let Some(g) = self.gradients.get_mut(gi) {
+            g.stops.push((offset.clamp(0.0, 1.0), color));
+            // Örnekleme için ofset sırasına göre sırala (küçük liste).
+            g.stops
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+        }
+    }
+
+    // ── save / restore ──────────────────────────────────────────────
+
+    /// `ctx.save()` — transform, clip ve stil durumunu yığar.
+    pub fn save(&mut self) {
+        self.state_stack.push(SavedState {
+            transform: self.transform,
+            clip: self.clip,
+            global_alpha: self.global_alpha,
+            line_width: self.line_width,
+            fill_style: self.fill_style,
+            fill_gradient: self.fill_gradient,
+            stroke_style: self.stroke_style,
+            font_size: self.font_size,
+        });
+    }
+
+    /// `ctx.restore()` — son kaydedilen durumu geri yükler.
+    pub fn restore(&mut self) {
+        if let Some(s) = self.state_stack.pop() {
+            self.transform = s.transform;
+            self.clip = s.clip;
+            self.global_alpha = s.global_alpha;
+            self.line_width = s.line_width;
+            self.fill_style = s.fill_style;
+            self.fill_gradient = s.fill_gradient;
+            self.stroke_style = s.stroke_style;
+            self.font_size = s.font_size;
+        }
+    }
+
     // ── Rectangle operations ─────────────────────────────────────────
 
-    /// Fill a rectangle with the current fill style.
+    /// Fill a rectangle with the current fill style (color or gradient).
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let color = Rgba::from_u32(self.fill_style);
         let x0 = x as usize;
         let y0 = y as usize;
         let x1 = (x + w) as usize;
         let y1 = (y + h) as usize;
         for yy in y0..y1 {
             for xx in x0..x1 {
+                let color = self.paint_at(xx as f32, yy as f32);
                 self.put_pixel_blend(xx, yy, color);
             }
         }
@@ -349,12 +567,14 @@ impl Canvas2dContext {
         // Path borrow'u bitmeden çizim yapılacağı için komutlar kopyalanır.
         let commands = self.path.clone();
 
-        // Iterate over path commands, drawing lines between MoveTo/LineTo points.
         let mut current: Option<Point> = None;
+        let mut subpath_start: Option<Point> = None;
         for cmd in &commands {
             match cmd {
                 PathCmd::MoveTo(p) => {
-                    current = Some(self.transform_point(*p));
+                    let tp = self.transform_point(*p);
+                    current = Some(tp);
+                    subpath_start = Some(tp);
                 }
                 PathCmd::LineTo(p) => {
                     let end = self.transform_point(*p);
@@ -363,15 +583,118 @@ impl Canvas2dContext {
                     }
                     current = Some(end);
                 }
-                PathCmd::Arc { .. } => {
-                    // Arc rendering: approximate with line segments.
-                    // Simplified: draw a circle approximation.
+                PathCmd::QuadTo { cp, p } => {
+                    let end = self.transform_point(*p);
+                    if let Some(start) = current {
+                        let cpt = self.transform_point(*cp);
+                        self.stroke_quad(start, cpt, end, color, lw);
+                    }
+                    current = Some(end);
+                }
+                PathCmd::CubicTo { c1, c2, p } => {
+                    let end = self.transform_point(*p);
+                    if let Some(start) = current {
+                        let c1t = self.transform_point(*c1);
+                        let c2t = self.transform_point(*c2);
+                        self.stroke_cubic(start, c1t, c2t, end, color, lw);
+                    }
+                    current = Some(end);
+                }
+                PathCmd::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                    anticlockwise,
+                } => {
+                    let c = self.transform_point(*center);
+                    // Merkez transform ile ölçeklenmiş olabilir; basit yaklaşım:
+                    // yarıçapı ortalama ölçek faktörüyle çarp.
+                    let (a, _b, _cc, d, _e, _f) = self.transform;
+                    let scale = fsqrt(a * a + d * d) * 0.5 + 0.5;
+                    let r = radius * scale;
+                    let s = *start_angle;
+                    let mut e = *end_angle;
+                    const TAU: f32 = core::f32::consts::TAU;
+                    if *anticlockwise {
+                        while e > s {
+                            e -= TAU;
+                        }
+                    } else {
+                        while e < s {
+                            e += TAU;
+                        }
+                    }
+                    let sweep = e - s;
+                    let segs = (((sweep.abs() / TAU) * 48.0) as usize + 1).max(4);
+                    let mut prev = Point {
+                        x: c.x + r * trig_cos(s),
+                        y: c.y + r * trig_sin(s),
+                    };
+                    // Yay başlangıcına mevcut noktadan bağla (canvas spec).
+                    if let Some(cur) = current {
+                        if (cur.x - prev.x).abs() > 0.01 || (cur.y - prev.y).abs() > 0.01 {
+                            self.draw_line(cur, prev, color, lw);
+                        }
+                    }
+                    for i in 1..=segs {
+                        let ang = s + sweep * (i as f32) / (segs as f32);
+                        let pt = Point {
+                            x: c.x + r * trig_cos(ang),
+                            y: c.y + r * trig_sin(ang),
+                        };
+                        self.draw_line(prev, pt, color, lw);
+                        prev = pt;
+                    }
+                    current = Some(prev);
                 }
                 PathCmd::ClosePath => {
-                    // Close path: line from current to last MoveTo point.
-                    // Simplified: no-op for now.
+                    if let (Some(start), Some(first)) = (current, subpath_start) {
+                        if (start.x - first.x).abs() > 0.01 || (start.y - first.y).abs() > 0.01 {
+                            self.draw_line(start, first, color, lw);
+                        }
+                        current = Some(first);
+                    }
                 }
             }
+        }
+    }
+
+    /// İkinci derece Bézier'i doğrusal segmentlere düzleştirip çizer.
+    fn stroke_quad(&mut self, p0: Point, c: Point, p1: Point, color: Rgba, lw: usize) {
+        const SEGS: usize = 16;
+        let mut prev = p0;
+        for i in 1..=SEGS {
+            let t = i as f32 / SEGS as f32;
+            let u = 1.0 - t;
+            let pt = Point {
+                x: u * u * p0.x + 2.0 * u * t * c.x + t * t * p1.x,
+                y: u * u * p0.y + 2.0 * u * t * c.y + t * t * p1.y,
+            };
+            self.draw_line(prev, pt, color, lw);
+            prev = pt;
+        }
+    }
+
+    /// Üçüncü derece Bézier'i doğrusal segmentlere düzleştirip çizer.
+    fn stroke_cubic(&mut self, p0: Point, c1: Point, c2: Point, p1: Point, color: Rgba, lw: usize) {
+        const SEGS: usize = 20;
+        let mut prev = p0;
+        for i in 1..=SEGS {
+            let t = i as f32 / SEGS as f32;
+            let u = 1.0 - t;
+            let pt = Point {
+                x: u * u * u * p0.x
+                    + 3.0 * u * u * t * c1.x
+                    + 3.0 * u * t * t * c2.x
+                    + t * t * t * p1.x,
+                y: u * u * u * p0.y
+                    + 3.0 * u * u * t * c1.y
+                    + 3.0 * u * t * t * c2.y
+                    + t * t * t * p1.y,
+            };
+            self.draw_line(prev, pt, color, lw);
+            prev = pt;
         }
     }
 
@@ -380,22 +703,33 @@ impl Canvas2dContext {
         if self.path.is_empty() {
             return;
         }
-        let _color = Rgba::from_u32(self.fill_style);
-        // Simplified fill: only handle rectangular paths (MoveTo + LineTo forming a rect).
-        // For a full scanline fill, we'd need a proper polygon fill algorithm.
-        // Here we fill the bounding box of the path as an approximation.
+        // Basitleştirilmiş doldurma: yolun sınırlayıcı kutusu (gradyan
+        // dolgusu paint_at üzerinden piksel başına çözülür).
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
         let mut max_y = f32::NEG_INFINITY;
+        let note =
+            |p: Point, min_x: &mut f32, min_y: &mut f32, max_x: &mut f32, max_y: &mut f32| {
+                let tp = self.transform_point(p);
+                *min_x = min_x.min(tp.x);
+                *min_y = min_y.min(tp.y);
+                *max_x = max_x.max(tp.x);
+                *max_y = max_y.max(tp.y);
+            };
         for cmd in &self.path {
             match cmd {
                 PathCmd::MoveTo(p) | PathCmd::LineTo(p) => {
-                    let tp = self.transform_point(*p);
-                    min_x = min_x.min(tp.x);
-                    min_y = min_y.min(tp.y);
-                    max_x = max_x.max(tp.x);
-                    max_y = max_y.max(tp.y);
+                    note(*p, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
+                }
+                PathCmd::QuadTo { cp, p } => {
+                    note(*cp, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
+                    note(*p, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
+                }
+                PathCmd::CubicTo { c1, c2, p } => {
+                    note(*c1, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
+                    note(*c2, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
+                    note(*p, &mut min_x, &mut min_y, &mut max_x, &mut max_y);
                 }
                 _ => {}
             }
@@ -454,7 +788,6 @@ impl Canvas2dContext {
     /// Fill text at the given position using the current fill style.
     /// Uses a simple 5x7 bitmap font for ASCII characters.
     pub fn fill_text(&mut self, text: &str, x: f32, y: f32) {
-        let color = Rgba::from_u32(self.fill_style);
         let size = self.font_size as usize;
         let mut cx = x as usize;
         let cy = y as usize;
@@ -470,6 +803,7 @@ impl Canvas2dContext {
                             let px = cx + dx * size / 5;
                             let py = cy + dy * size / 5;
                             if px < self.width && py < self.height {
+                                let color = self.paint_at(px as f32, py as f32);
                                 self.put_pixel_blend(px, py, color);
                             }
                         }

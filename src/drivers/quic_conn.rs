@@ -255,9 +255,11 @@ impl QuicConn {
             let mut frames = Vec::new();
             quic::encode_crypto_frame(off as u64, &data[off..end], &mut frames);
             if ptype == quic::PT_INITIAL {
-                // 1200 bayt minimumu için PADDING (RFC 9000 §14.1)
-                let header_len_est = 7 + CID_LEN + 1 + CID_LEN + 1 + PN_LEN + frames.len() + 16;
-                while header_len_est + frames.len() < INITIAL_MIN_LEN {
+                // 1200 bayt minimumu için PADDING (RFC 9000 §14.1).
+                // Datagram boyutu ≈ başlık + pn + şifreli yük + AEAD etiketi;
+                // yük = frames. frames.len() iki kez sayılmamalı.
+                let overhead = 7 + CID_LEN + 1 + CID_LEN + 1 + PN_LEN + 16;
+                while overhead + frames.len() < INITIAL_MIN_LEN {
                     frames.push(quic::FRAME_PADDING);
                 }
             }

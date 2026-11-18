@@ -106,7 +106,15 @@ def make_handler():
             self._http = None
             self._bodies = {}  # stream_id -> bytearray (echo icin)
 
+        def datagram_received(self, data: bytes, addr) -> None:
+            print(
+                f"[h3-test] datagram {len(data)}B addr={addr} ilk={data[:24].hex()}",
+                flush=True,
+            )
+            super().datagram_received(data, addr)
+
         def quic_event_received(self, event: QuicEvent) -> None:
+            print(f"[h3-test] quic_event {type(event).__name__}", flush=True)
             if self._http is None:
                 self._http = H3Connection(self._quic)
             for http_event in self._http.handle_event(event):

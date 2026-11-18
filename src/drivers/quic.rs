@@ -251,16 +251,14 @@ pub fn seal_packet(
     is_long: bool,
 ) -> Option<Vec<u8>> {
     let nonce = keys.nonce(packet_number);
-    // AAD header pn'i İÇERMEZ (RFC 9001 §5.3: AEAD AAD = header without pn).
-    let (ct, tag) = keys.gcm.encrypt(&nonce, &header, payload).ok()?;
-
-    // Header sonuna pn ekle
+    // Header sonuna pn ekle — AAD pn'İ İÇERİR (RFC 9001 §5.3: ilk bayttan
+    // "unprotected packet number" dahil header sonuna kadar).
     let mut pn_buf = [0u8; MAX_PKT_NUM_LEN];
     encode_packet_number(packet_number, pn_len, &mut pn_buf[..pn_len]);
     header.extend_from_slice(&pn_buf[..pn_len]);
-
-    // pn_offset = header sonundaki pn başlangıcı
     let pn_offset = header.len() - pn_len;
+
+    let (ct, tag) = keys.gcm.encrypt(&nonce, &header, payload).ok()?;
 
     let mut body = ct;
     body.extend_from_slice(&tag);
@@ -346,11 +344,12 @@ pub fn open_packet(
     });
     let packet_number = decode_packet_number(truncated, pn_len * 8, expected_pn);
 
-    // AAD = header WITHOUT pn (RFC 9001 §5.3): ilk bayt çözülmüş +
-    // pn_offset'e kadar olan başlık baytları.
-    let mut header = Vec::with_capacity(pn_offset);
+    // AAD = header INCLUDING pn (RFC 9001 §5.3): çözülmüş ilk bayt +
+    // pn_offset'e kadar başlık + çözülmüş pn baytları.
+    let mut header = Vec::with_capacity(pn_offset + pn_len);
     header.push(fb);
     header.extend_from_slice(&packet[1..pn_offset]);
+    header.extend_from_slice(&pn_enc[..pn_len]);
 
     // Kalan = ciphertext || tag
     let ct_start = pn_offset + pn_len;

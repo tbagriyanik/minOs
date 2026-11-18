@@ -1377,8 +1377,7 @@ mod tests {
         let ci = (10 * w + 10) * 3;
         assert_eq!(&px[ci..ci + 3], &[255, 255, 255]);
         let ei = (10 * w + 18) * 3; // sağ kenar
-        assert_eq!(&px[ei], &[0]);
-        assert_eq!(&px[ei + 1], &[255]);
+        assert_eq!(&px[ei..ei + 3], &[0, 255, 0]);
     }
 
     #[test]
@@ -1388,7 +1387,7 @@ mod tests {
         let at5 = (1 * w + 6) * 3;
         assert_eq!(&px[at5..at5 + 3], &[0, 0, 255]);
         let at1 = (1 * w + 1) * 3;
-        assert_eq!(&px[at1..at5], &[255, 255, 255]);
+        assert_eq!(&px[at1..at1 + 3], &[255, 255, 255]);
     }
 
     #[test]
@@ -1397,9 +1396,7 @@ mod tests {
             b"<svg width='10' height='10'><path d='M1,1 L8,1 L8,8 L1,8 Z' fill='#123456'/></svg>";
         let (w, _, px) = render_svg(src).unwrap();
         let i = (4 * w + 4) * 3;
-        assert_eq!(&px[i], &[0x12]);
-        assert_eq!(&px[i + 1], &[0x34]);
-        assert_eq!(&px[i + 2], &[0x56]);
+        assert_eq!(&px[i..i + 3], &[0x12, 0x34, 0x56]);
     }
 
     #[test]

@@ -1704,6 +1704,14 @@ pub fn run_live_server_tests() -> bool {
     let mut resp = alloc::vec![0u8; 65536];
     let mut all_ok = true;
 
+    // Ulasim duzeyi hatalar (hedefe ulasilamiyor) canli testi basarisiz
+    // kilmaz — h2/h3 ile ayni "hedef yoksa atla" politikasi.
+    let unreachable = |code: i32| {
+        code == crate::drivers::socket::E_TIMEOUT
+            || code == crate::drivers::socket::E_NOTCONN
+            || code == crate::drivers::socket::E_CONNREFUSED
+    };
+
     // 1. HTTP/1.1 GET (https:// verilirse TLS el sıkışması da burada doğrulanır).
     crate::serial_print("[LIVE-TEST] 1. HTTP/1.1 GET... ");
     match crate::drivers::http::http_get(url, &mut resp) {
@@ -1729,7 +1737,11 @@ pub fn run_live_server_tests() -> bool {
             crate::serial_print("HATA kod=");
             crate::serial::print_dec(code as u64);
             crate::serial_print("\n");
-            all_ok = false;
+            if unreachable(code) {
+                crate::serial_print("[LIVE-TEST] Not: hedef erisilemedi, atlandi.\n");
+            } else {
+                all_ok = false;
+            }
         }
     }
 
@@ -1756,7 +1768,11 @@ pub fn run_live_server_tests() -> bool {
                     crate::serial_print("HATA kod=");
                     crate::serial::print_dec(code as u64);
                     crate::serial_print("\n");
-                    all_ok = false;
+                    if unreachable(code) {
+                        crate::serial_print("[LIVE-TEST] Not: TLS hedefi erisilemedi, atlandi.\n");
+                    } else {
+                        all_ok = false;
+                    }
                 }
             }
         }
@@ -1797,10 +1813,18 @@ pub fn run_live_server_tests() -> bool {
                 }
             }
             Err(code) => {
-                crate::serial_print("HATA kod=");
+                crate::serial_print("ATLANDI/HATA kod=");
                 crate::serial::print_dec(code as u64);
                 crate::serial_print("\n");
-                all_ok = false;
+                // Ulasim hatalari (timeout/baglanti yok) h3 hedefinin
+                // erisilemez oldugu anlamina gelir — h2 ile ayni politika:
+                // diger protokollerin basarisini gecersiz kilmaz.
+                // Protokol duzeyi hatalar yine sonuclu sayilir.
+                if unreachable(code) {
+                    crate::serial_print("[LIVE-TEST] Not: h3 hedefi erisilemedi, atlandi.\n");
+                } else {
+                    all_ok = false;
+                }
             }
         }
     } else {

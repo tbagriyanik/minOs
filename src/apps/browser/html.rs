@@ -1050,9 +1050,6 @@ pub fn render_html_to_lines(
     }
     #[allow(unused)]
     let mut details_stack: Vec<DetailsCtx> = Vec::new();
-    // Kapalı details'in summary sonrası içeriği atlanırken açık etiket sayısı.
-    #[allow(unused)]
-    let mut details_skip: usize = 0;
     /// `<picture>` kaynak adayları (srcset/media/type).
     #[allow(dead_code)]
     struct PictureSource {
@@ -1065,13 +1062,12 @@ pub fn render_html_to_lines(
     // `<video>`/`<audio>` içindeyken > 0 — `<source>` ayrıştırması için.
     #[allow(unused)]
     let mut media_depth: usize = 0;
-    #[allow(dead_code)]
-    static DETAILS_ID_COUNTER: core::sync::atomic::AtomicUsize =
-        core::sync::atomic::AtomicUsize::new(0);
+    // details anahtarları her render'da aynı sırayla üretilir — böylece
+    // tarayıcının details_state haritası yeniden çizimlerde de geçerli kalır.
+    let details_id_counter = core::sync::atomic::AtomicUsize::new(0);
 
     // details_state haritasından etkin açık durumu: override varsa o,
     // yoksa `open` özniteliği.
-    #[allow(unused)]
     let details_is_open =
         |key: &str, has_open: bool| -> bool { details_state.get(key).copied().unwrap_or(has_open) };
 
@@ -1137,7 +1133,25 @@ pub fn render_html_to_lines(
                 && hidden_until_close
                     .as_ref()
                     .is_some_and(|(_, depth)| *depth == 0);
+            // Kapalı <details> gizleme modunda ilk <summary> öğesi (ve açılış
+            // işaretçisi metni) görünür kalır; diğer içerik atlanır.
+            let details_hidden = hidden_until_close
+                .as_ref()
+                .is_some_and(|(n, _)| n == b"details");
+            let summary_passthrough =
+                details_hidden && details_stack.last().is_some_and(|c| c.summary_active);
+            let allow_summary = details_hidden
+                && eq_ascii(name, b"summary")
+                && ((!closing
+                    && details_stack
+                        .last()
+                        .is_some_and(|c| !c.disclosure_done && !c.summary_active))
+                    || (closing && summary_passthrough));
             if hidden_close {
+                // Kapalı details'in gizli bölgesi bitti — ctx'ini düşür.
+                if eq_ascii(name, b"details") {
+                    details_stack.pop();
+                }
                 // display:none ile gizlenen öğenin rengini geri yükle.
                 if let Some(saved) = pop_inline_state(&mut state_stack, name) {
                     current_color = saved.color;
@@ -1151,7 +1165,10 @@ pub fn render_html_to_lines(
                 pop_dom_node(&mut dom_stack, name);
                 hidden_until_close = None;
             }
-            if hidden_until_close.is_some() || hidden_close {
+            if (hidden_until_close.is_some() || hidden_close)
+                && !summary_passthrough
+                && !allow_summary
+            {
                 p = end + 1;
                 continue;
             }
@@ -2627,7 +2644,7 @@ pub fn render_html_to_lines(
                     let key = extract_attr(attrs, b"id")
                         .map(String::from)
                         .unwrap_or_else(|| {
-                            let n = DETAILS_ID_COUNTER
+                            let n = details_id_counter
                                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                             format!("details_{}", n)
                         });
@@ -2639,11 +2656,14 @@ pub fn render_html_to_lines(
                         summary_active: false,
                         outer_onclick: None,
                     });
-                    // Kapalı details blok seviyesinde satır sonu.
+                    // Kapalı details: <summary> hariç tüm içerik gizlenir.
+                    // hidden_until_close "details" adıyla derinlik takibi yapar;
+                    // ilk <summary> öğesi summary_passthrough ile görünür kalır.
                     if !details_is_open(
                         &details_stack.last().unwrap().key,
                         details_stack.last().unwrap().has_open_attr,
                     ) {
+                        hidden_until_close = Some((b"details".to_vec(), 1));
                         flush_line(
                             out_lines,
                             &mut cur_line_spans,
@@ -3413,9 +3433,14 @@ pub fn render_html_to_lines(
         let (ch, clen) = decode_html_char(body, p);
         p += clen;
 
-        // <style> / <script> içindeki metin içeriğini gizle — sadece etiketler atlanıyordu,
-        // metin içeriği yine kelime buffer'ına eklenip ekrana yazdıyordu.
-        if hidden_until_close.is_some() {
+        // <style> / <script> / kapalı <details> gizli bölümündeki metni atla —
+        // <summary> açıklaması aktifken metin normal akar.
+        if hidden_until_close.is_some()
+            && !(hidden_until_close
+                .as_ref()
+                .is_some_and(|(n, _)| n == b"details")
+                && details_stack.last().is_some_and(|c| c.summary_active))
+        {
             continue;
         }
 

@@ -607,6 +607,34 @@ fn history_push(url: &str) {
     HISTORY_POS.store(count - 1, Ordering::Release);
 }
 
+/// Mevcut geçmiş girdisini (replaceState) yeni adresle değiştirir.
+fn history_replace_last(url: &str) {
+    let count = HISTORY_COUNT.load(Ordering::Acquire).min(HISTORY_MAX);
+    if count == 0 {
+        history_push(url);
+        return;
+    }
+    let pos = HISTORY_POS.load(Ordering::Acquire).min(count - 1);
+    let mut len = 0;
+    for (i, ch) in url.chars().take(HISTORY_URL_CAP).enumerate() {
+        HISTORY[pos][i].store(ch as u32, Ordering::Relaxed);
+        len = i + 1;
+    }
+    HISTORY_LEN[pos].store(len, Ordering::Release);
+}
+
+/// `canvasgrad<c>_<i>` referansını (canvas_idx, grad_idx) olarak çözer.
+fn parse_canvas_grad_ref(s: &str) -> Option<(usize, usize)> {
+    let rest = s.strip_prefix("canvasgrad")?;
+    let (c, i) = rest.split_once('_')?;
+    Some((c.parse().ok()?, i.parse().ok()?))
+}
+
+/// `canvasimg<N>` referansını ImageData dizin olarak çözer.
+fn parse_canvas_img_ref(s: &str) -> Option<usize> {
+    s.strip_prefix("canvasimg")?.parse().ok()
+}
+
 /// Bir önceki adrese döner; yoksa `None`.
 fn history_back() -> Option<String> {
     let count = HISTORY_COUNT.load(Ordering::Acquire);
@@ -724,6 +752,9 @@ pub struct BrowserApp {
     /// `<details>` aç/kapa durumu: element anahtarı → açık mı?
     /// `open` özniteliği yoksa bile tıklamayla açılabilir.
     pub details_state: BTreeMap<String, bool>,
+    /// DOM durumu değişti (details toggle vb.) — sonraki ağ turunda sayfa
+    /// `original_html` ile yeniden çizilir.
+    pub page_rerender_requested: bool,
     /// Yeni sayfa yüklendiğinde kaydırmayı başa al.
     pub scroll_reset: bool,
     pub request_pending: bool,
@@ -779,6 +810,8 @@ pub struct BrowserApp {
     pub download_data: Option<Vec<u8>>,
     /// Canvas elements created by <canvas> tags on the current page.
     pub canvases: Vec<canvas::CanvasElement>,
+    /// JS'e açılan ImageData nesneleri: `canvasimg<N>` referansları.
+    pub canvas_imagedata: Vec<canvas::ImageData>,
     /// Media players for <audio> and <video> elements on the current page.
     pub media_players: media::MediaPlayers,
     /// Nested browsing contexts (<iframe> elements) on the current page.
@@ -1025,6 +1058,7 @@ impl BrowserApp {
             transition_start_ms: 0,
             previous_styles: BTreeMap::new(),
             details_state: BTreeMap::new(),
+            page_rerender_requested: false,
             scroll_reset: true,
             request_pending: false,
             request_host: [0; 128],
@@ -1064,6 +1098,7 @@ impl BrowserApp {
             download_path: None,
             download_data: None,
             canvases: Vec::new(),
+            canvas_imagedata: Vec::new(),
             media_players: media::MediaPlayers::new(),
             iframes: iframe::IFrames::new(),
             wasm_modules: wasm::WasmModules::new(),
@@ -1566,6 +1601,7 @@ impl BrowserApp {
                 if let Some((key, val)) = rest.rsplit_once(':') {
                     self.details_state.insert(key.to_string(), val == "1");
                 }
+                self.page_rerender_requested = true;
                 return None;
             }
             self.execute_js(&js_code);
@@ -1618,6 +1654,51 @@ impl BrowserApp {
 
     fn execute_js_statement(&mut self, stmt: &str) {
         let stmt = stmt.trim();
+        // Gradyan durak ekleme: `degisken.addColorStop(offset, 'renk')`
+        // — değişken `canvasgrad<c>_<i>` referansı taşır.
+        if stmt.contains(".addColorStop(") {
+            if let Some(dot) = stmt.find('.') {
+                let head = stmt[..dot].trim();
+                let call = stmt[dot + 1..].trim();
+                if call.starts_with("addColorStop(") {
+                    let gref = self
+                        .js_vars
+                        .iter()
+                        .find(|(k, _)| k == head)
+                        .map(|(_, v)| v.clone());
+                    if let Some((ci, gi)) = gref.as_deref().and_then(parse_canvas_grad_ref) {
+                        if let Some(inner) = call
+                            .strip_prefix("addColorStop(")
+                            .and_then(|s| s.strip_suffix(')'))
+                        {
+                            let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+                            if parts.len() >= 2 {
+                                if let Ok(off) = parts[0].parse::<f32>() {
+                                    let cexpr =
+                                        parts[1].trim().trim_matches(|c| c == '\'' || c == '"');
+                                    // Renk değişken olabilir — js_vars'ten çöz.
+                                    let cexpr = self
+                                        .js_vars
+                                        .iter()
+                                        .find(|(k, _)| k == cexpr)
+                                        .map(|(_, v)| v.clone())
+                                        .unwrap_or_else(|| String::from(cexpr));
+                                    let cexpr = cexpr.trim_matches(|c| c == '\'' || c == '"');
+                                    if let Some(color) = html_color(cexpr.as_bytes()) {
+                                        if let Some(canvas) = self.canvases.get_mut(ci) {
+                                            let ctx = canvas.get_context_2d();
+                                            ctx.gradient_add_color_stop(gi, off, color);
+                                            canvas.dirty = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         if stmt.starts_with("alert(") && stmt.ends_with(')') {
             let inner = &stmt[6..stmt.len() - 1];
             let val = self.eval_js_expr(inner);
@@ -1729,8 +1810,21 @@ impl BrowserApp {
                     if rest.starts_with("fillStyle =") || rest.starts_with("fillStyle=") {
                         let val = rest.split('=').nth(1).unwrap_or("").trim();
                         let val = val.trim_matches(|c| c == '\'' || c == '"');
-                        if let Some(c) = html_color(val.as_bytes()) {
+                        // Değişken referansı olabilir: js_vars üzerinden çöz.
+                        let resolved = self
+                            .js_vars
+                            .iter()
+                            .find(|(k, _)| k == val)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_else(|| String::from(val));
+                        let resolved = resolved.trim_matches(|c| c == '\'' || c == '"');
+                        if let Some(c) = html_color(resolved.as_bytes()) {
                             ctx.set_fill_style(c);
+                        } else if let Some((gci, gi)) = parse_canvas_grad_ref(resolved) {
+                            // Gradyan kendi canvas'ına aitse bu ctx'e bağla.
+                            if gci == canvas_idx {
+                                ctx.set_fill_gradient(gi);
+                            }
                         }
                     } else if rest.starts_with("strokeStyle =") || rest.starts_with("strokeStyle=")
                     {
@@ -1841,6 +1935,89 @@ impl BrowserApp {
                         }
                     } else if rest == "closePath()" {
                         ctx.close_path();
+                    } else if rest == "save()" {
+                        ctx.save();
+                    } else if rest == "restore()" {
+                        ctx.restore();
+                        canvas.dirty = true;
+                    } else if rest.starts_with("rect(") && rest.ends_with(')') {
+                        let args = &rest[5..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 4 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let w = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let h = parts[3].parse::<f32>().unwrap_or(0.0);
+                            ctx.rect(x, y, w, h);
+                        }
+                    } else if rest.starts_with("quadraticCurveTo(") && rest.ends_with(')') {
+                        let args = &rest[16..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 4 {
+                            let cpx = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let cpy = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let x = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[3].parse::<f32>().unwrap_or(0.0);
+                            ctx.quadratic_curve_to(cpx, cpy, x, y);
+                        }
+                    } else if rest.starts_with("bezierCurveTo(") && rest.ends_with(')') {
+                        let args = &rest[13..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 6 {
+                            let c1x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let c1y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let c2x = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let c2y = parts[3].parse::<f32>().unwrap_or(0.0);
+                            let x = parts[4].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[5].parse::<f32>().unwrap_or(0.0);
+                            ctx.bezier_curve_to(c1x, c1y, c2x, c2y, x, y);
+                        }
+                    } else if rest.starts_with("lineWidth") && rest.contains('=') {
+                        let val = rest.split('=').nth(1).unwrap_or("").trim();
+                        if let Ok(v) = val.parse::<f32>() {
+                            ctx.line_width = v.max(0.0);
+                        }
+                    } else if rest.starts_with("globalAlpha") && rest.contains('=') {
+                        let val = rest.split('=').nth(1).unwrap_or("").trim();
+                        if let Ok(v) = val.parse::<f32>() {
+                            ctx.global_alpha = v.clamp(0.0, 1.0);
+                        }
+                    } else if rest.starts_with("font") && rest.contains('=') {
+                        // font='12px sans-serif' — punto değerini font_size'a al.
+                        let val = rest.split('=').nth(1).unwrap_or("").trim();
+                        let val = val.trim_matches(|c| c == '\'' || c == '"');
+                        let num: String = val
+                            .chars()
+                            .take_while(|c| c.is_ascii_digit() || *c == '.')
+                            .collect();
+                        if let Ok(v) = num.parse::<f32>() {
+                            if v > 0.0 {
+                                ctx.font_size = v;
+                            }
+                        }
+                    } else if rest.starts_with("putImageData(") && rest.ends_with(')') {
+                        let args = &rest[12..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 3 {
+                            let src_var = parts[0];
+                            let img_ref = self
+                                .js_vars
+                                .iter()
+                                .find(|(k, _)| k == src_var)
+                                .map(|(_, v)| v.clone());
+                            if let Some(r) = img_ref {
+                                if let Some(idx) = parse_canvas_img_ref(&r) {
+                                    let dx = parts[1].parse::<f32>().unwrap_or(0.0);
+                                    let dy = parts[2].parse::<f32>().unwrap_or(0.0);
+                                    if let Some(img) = self.canvas_imagedata.get(idx) {
+                                        // ctx zaten self.canvases'ten ödünç;
+                                        // canvas_imagedata ayrı alan — çakışma yok.
+                                        ctx.put_image_data(img, dx, dy);
+                                        canvas.dirty = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1848,6 +2025,13 @@ impl BrowserApp {
             let decl = &stmt[4..];
             if let Some((var, val_part)) = decl.split_once('=') {
                 let var = var.trim();
+                let val_part = val_part.trim();
+                // `var g = canvas2dN.createLinearGradient(...)` gibi canvas
+                // ifade atamaları özel işlenir (değer referans olarak döner).
+                if val_part.starts_with("canvas2d") {
+                    self.exec_canvas_expr(var, val_part);
+                    return;
+                }
                 let val = self.eval_js_expr(val_part);
                 if let Some(existing) = self.js_vars.iter_mut().find(|(k, _)| k == var) {
                     existing.1 = val;
@@ -1868,6 +2052,79 @@ impl BrowserApp {
         }
     }
 
+    /// `var x = canvas2dN.<ifade>(args)` — canvas'tan değer üreten çağrılar
+    /// (createLinearGradient/createRadialGradient/getImageData/createImageData).
+    /// Sonuç `lhs` değişkenine `canvasgrad<c>_<i>` / `canvasimg<n>` referansı
+    /// olarak yazılır.
+    fn exec_canvas_expr(&mut self, lhs: &str, rhs: &str) {
+        let rhs = rhs.trim().trim_end_matches(';').trim();
+        let Some(dot) = rhs.find('.') else {
+            return;
+        };
+        let ctx_ref = &rhs[..dot];
+        let Some(ci) = ctx_ref
+            .strip_prefix("canvas2d")
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            return;
+        };
+        let after = &rhs[dot + 1..];
+        let Some(op) = after.find('(') else {
+            return;
+        };
+        if !after.ends_with(')') {
+            return;
+        }
+        let method = &after[..op];
+        let args = &after[op + 1..after.len() - 1];
+        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+        let f = |i: usize| {
+            parts
+                .get(i)
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(0.0)
+        };
+
+        let val = {
+            let Some(canvas) = self.canvases.get_mut(ci) else {
+                return;
+            };
+            let ctx = canvas.get_context_2d();
+            match method {
+                "createLinearGradient" if parts.len() >= 4 => {
+                    let gi = ctx.create_linear_gradient(f(0), f(1), f(2), f(3));
+                    format!("canvasgrad{}_{}", ci, gi)
+                }
+                "createRadialGradient" if parts.len() >= 3 => {
+                    let gi = ctx.create_radial_gradient(f(0), f(1), f(2));
+                    format!("canvasgrad{}_{}", ci, gi)
+                }
+                "getImageData" if parts.len() >= 4 => {
+                    let img = ctx.get_image_data(f(0), f(1), f(2), f(3));
+                    let n = self.canvas_imagedata.len();
+                    self.canvas_imagedata.push(img);
+                    format!("canvasimg{}", n)
+                }
+                "createImageData" if parts.len() >= 2 => {
+                    let w = parts[0].parse::<usize>().unwrap_or(0);
+                    let h = parts
+                        .get(1)
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(w);
+                    let n = self.canvas_imagedata.len();
+                    self.canvas_imagedata.push(canvas::ImageData::new(w, h));
+                    format!("canvasimg{}", n)
+                }
+                _ => return,
+            }
+        };
+        if let Some(existing) = self.js_vars.iter_mut().find(|(k, _)| k == lhs) {
+            existing.1 = val;
+        } else {
+            self.js_vars.push((String::from(lhs), val));
+        }
+    }
+
     pub fn load_html(
         &mut self,
         body: &[u8],
@@ -1880,10 +2137,12 @@ impl BrowserApp {
             self.original_html = body.to_vec();
         }
 
+        self.page_rerender_requested = false;
         self.page_lines.clear();
         self.rendered_links.borrow_mut().clear();
         self.rendered_images.borrow_mut().clear();
         self.canvases.clear();
+        self.canvas_imagedata.clear();
         self.media_players = media::MediaPlayers::new();
         self.iframes = iframe::IFrames::new();
         self.wasm_modules = wasm::WasmModules::new();
@@ -3524,6 +3783,19 @@ impl BrowserApp {
 
     /// Ana döngüden çağrılır; ağ bekleyişi ekran olaylarını durdurmaz.
     pub fn poll_network(&mut self, vfs: &mut VirtualFileSystem) {
+        // DOM durumu değiştiyse (details toggle) sayfayı yeniden çiz —
+        // kaydırma konumu korunur.
+        if self.page_rerender_requested {
+            self.page_rerender_requested = false;
+            if !self.original_html.is_empty() {
+                let saved_scroll = self.scroll_target;
+                let html = self.original_html.clone();
+                self.load_html(&html, 600, 256, Some(vfs));
+                self.scroll_target = saved_scroll;
+                self.scroll_reset = false;
+            }
+        }
+
         // Media player'ları her karede güncelle (ses oynatma için).
         let now = crate::boot::time::main_monotonic_ms() as u64;
         self.media_players.update_all(now);
@@ -4778,6 +5050,26 @@ impl BrowserApp {
     /// Betik kaynaklı gezinme isteğini uygular (`location.assign/replace`,
     /// `location.href = ...`, `history.back/forward/go`, `location.reload`).
     fn handle_script_navigation(&mut self, nav: &str) {
+        // history.pushState / replaceState: sayfa yenilenmeden adres ve
+        // geçmiş güncellenir (içerik aynı kalır).
+        for (prefix, is_replace) in [
+            ("__minos_pushstate__:", false),
+            ("__minos_replacestate__:", true),
+        ] {
+            if let Some(rest) = nav.strip_prefix(prefix) {
+                let page = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+                let target = resolve_script_url(rest, page);
+                if !target.is_empty() && target.len() <= self.url.len() {
+                    self.set_url(target.as_bytes());
+                    if is_replace {
+                        history_replace_last(&target);
+                    } else {
+                        history_push(&target);
+                    }
+                }
+                return;
+            }
+        }
         match nav {
             "__minos_reload__" => {
                 self.navigate();

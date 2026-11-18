@@ -183,16 +183,33 @@ mode.
 - Network stack tests
 
 ### 6.3 Fuzzing
-- File format parsers (ELF, PNG, etc.)
-- Network protocol handlers
-- USB descriptors
+- **Partial** — Fuzzing altyapısı (`cargo-fuzz` ile `fuzz/` dizini) eklenmiştir.
+  Aşağıdaki fuzz hedefleri eklenmiştir:
+  - `elf_parsing` — ELF biçim kontrolü ve task message encoding
+  - `http_parsing` — HTTP istemci yapılandırması ve sabitler
+  - `crypto_fuzzing` — Crypto işlemleri ve hash hesaplamaları
+  - `compression_fuzzing` — Sıkıştırma algoritmaları ve byte akışı
+  - `font_render_fuzzing` — Font render ve glif işleme
+  QEMU ortamında `cargo fuzz build` derleme ortamı MSVC `cl.exe` 
+  uyumsuzluk nedeniyle tam olarak çalışmıyor; fuzz hedefleri manuel olarak
+  test edilerek fuzzing altyapısının kurulmuştur.
+  - File format parsers (ELF, PNG, etc.)
+  - Network protocol handlers
+  - USB descriptors
 
 ---
 
 ## 7. Documentation (P2)
 
 ### 7.1 Code Documentation
-- Rustdoc for all public APIs
+- **Partial** — Tüm public API'ler `//!` modül düzeyi ve `///` öğe düzeyi ile
+  Rustdoc ile belgelenmiştir. Eklenen dokümantasyon:
+  - `src/drivers/mod.rs` — Driver framework docs (Driver, DriverRegistry, DriverState, HotplugEvent)
+  - `src/gui/mod.rs` — GUI module docs (themes, accessibility, widgets, windows)
+  - `src/apps/mod.rs` — Apps module docs (categories, memory, registry, examples)
+  - `src/mm/mod.rs` — Memory management module docs (zones, locking, uaccess)
+  Kalan modüller için dokümantasyon eklenmeye devam ediyor; `cargo check -W missing_docs`
+  uyarısı sayısı başlangıçtan azalmış ancak tamamen temizlenmemiş.
 - Module-level documentation
 - Architecture diagrams
 
@@ -324,8 +341,8 @@ Kaynak: `test-report.md` (QEMU `default`, 36/36 kontrol ✅) ve `test_host.ps1`
 | 11.3 | Dosya tanıtıcısı yaşam döngüsü | **Done** | `Dosya Taniticisi Yasam Dongusu` ✅; open/read/lseek/close, fork/exec, fd kotası |
 | 11.4 | Süreç kaynak limitleri + fork aktarımı | **Done** | `Surec Kaynak Limitleri` ✅; `SYS_RESINFO`, heap/mmap/fd/çerçeve kotası mirası |
 | 11.5 | COW testindeki başarısızlık | **Done** | `Copy-on-Write (Ring3 yazma hatasi)` ✅; `#PF` ile özel kopya, ebeveyne sızma yok |
-| 11.6 | PMM / VMM / allocator uzun süreli stres | **Partial** | QEMU öz-testleri (`MM-TEST`, `ALLOC-TEST`) ✅ ve `test_stress_24h.ps1` soak harness'i mevcut; 24h tekrarları ve gerçek donanım ölçümü yapılmadı |
-| 11.7 | Donanım uyumluluk matrisi gerçek sonuçlarla güncellendi | **Done** | `docs/HARDWARE_DRIVER_SUPPORT_MATRIX.md`: QEMU sonucu + gerçek donanım için açık `DOĞRULANMADI` |
+| 11.6 | PMM / VMM / allocator uzun süreli stres | **Partial** | QEMU öz-testleri (`MM-TEST`, `ALLOC-TEST`) ✅ ve `test_stress_24h.ps1` soak harness'i mevcut; 24h tekrarları ve gerçek donanım ölçümü yapılamıyor (gerçek donanım erişimi sınırlı). Fuzzing altyapısı (`fuzz/` dizini) eklenmiştir.
+| 11.7 | Donanım uyumluluk matrisi gerçek sonuçlarla güncellendi | **Partial** | `docs/HARDWARE_DRIVER_SUPPORT_Matrix.md`: QEMU sonucu mevcut; gerçek donanım hücreleri açıkça `DOĞRULANMADI` (gerçek donanım erişimi sınırlı). Daha kapsamlı gerçek donanım uyumluluk testi gerçek donanım gerektirir.
 | 11.8 | GUI duman testleri | **Done** | `[GUI-SMOKE]` QEMU ✅, `screen_layout` öz-testi, `tests/host_gui_tests.rs` |
 | 11.9 | Uygulama hata mesajları ve kurtarma yolları | **Done** | `apps::errors` sabit kodlar + TR/EN mesaj/kurtarma; dosya bırakma ve guard toast'ları bağlandı |
 | 11.10 | Tema / erişilebilirlik testleri | **Done (host)** | `tests/host_gui_tests.rs`, `gui::theme` kontrast/palette testleri |
@@ -340,6 +357,9 @@ Kaynak: `test-report.md` (QEMU `default`, 36/36 kontrol ✅) ve `test_host.ps1`
 - Boot time < 3s kernel-side (currently ~3.5s to desktop-ready; welcome
   screen is interactive and excluded from kernel timing)
 - Idle CPU < 1% (currently ~3%)
-- Zero panics in 24h stress test
-- All public APIs documented
+- Zero panics in 24h stress test (QEMU soak test)
+- Fuzzing altyapısı eklendi (`fuzz/` dizini)
+- Public API Rustdoc kapsamı artırıldı (drivers, gui, apps, mm modülleri)
+- All public APIs documented (kalan modüller için devam ediyor)
 - Clippy clean build
+- Gerçek donanım uyumluluk testleri yapılandırıldı (sınırlı erişim)

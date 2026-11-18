@@ -1,0 +1,53 @@
+[package]
+name = "minos-kernel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "fuzz_target_1"
+path = "fuzz_targets/fuzz_target_1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "elf_parsing"
+path = "fuzz_targets/elf_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_parsing"
+path = "fuzz_targets/http_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_fuzzing"
+path = "fuzz_targets/crypto_fuzzing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compression_fuzzing"
+path = "fuzz_targets/compression_fuzzing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "font_render_fuzzing"
+path = "fuzz_targets/font_render_fuzzing.rs"
+test = false
+doc = false
+bench = false

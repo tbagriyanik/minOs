@@ -82,17 +82,35 @@ Write-Host "   minOs QEMU Entegrasyon Test Kosucusu  " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
 # 1. QEMU kontrolu (Windows + Linux/macOS)
+# QEMU'yu PATH, ortam değişkeni ve yaygın yollardan ara
 $qemu = $null
-foreach ($candidate in @("qemu-system-x86_64", "qemu-system-x86_64.exe")) {
+$qemuCandidates = @(
+    "qemu-system-x86_64",
+    "qemu-system-x86_64.exe",
+    "$env:ProgramFiles\qemu\qemu-system-x86_64.exe",
+    "$env:ProgramFiles(x86)\qemu\qemu-system-x86_64.exe"
+)
+
+foreach ($candidate in $qemuCandidates) {
     $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-    if ($cmd) { $qemu = $cmd.Source; break }
+    if ($cmd) {
+        $qemu = $cmd.Source
+        break
+    }
+    if (Test-Path $candidate) {
+        $qemu = $candidate
+        break
+    }
+}
+# Ekstra: PATH'de qemu-system-x86_64 ara
+if (-not $qemu) {
+    $found = Get-Command qemu-system-x86_64 -ErrorAction SilentlyContinue
+    if ($found) { $qemu = $found.Source }
 }
 if (-not $qemu) {
-    $winPath = "C:\Program Files\qemu\qemu-system-x86_64.exe"
-    if (Test-Path $winPath) { $qemu = $winPath }
-}
-if (-not $qemu) {
-    Write-Host "[HATA] QEMU bulunamadi (qemu-system-x86_64 PATH'te yok)." -ForegroundColor Red
+    Write-Host "[HATA] QEMU bulunamadi (qemu-system-x86_64 PATH'te yok ya da kurulu degil)." -ForegroundColor Red
+    Write-Host "QEMU installation paths checked:" -ForegroundColor DarkYellow
+    @("$env:ProgramFiles\qemu\qemu-system-x86_64.exe", "$env:ProgramFiles(x86)\qemu\qemu-system-x86_64.exe") | ForEach-Object { Write-Host "  ${_}: $(Test-Path $_)" -ForegroundColor DarkYellow }
     exit 1
 }
 

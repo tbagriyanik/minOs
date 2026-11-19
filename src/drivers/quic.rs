@@ -24,6 +24,11 @@ use super::crypto::hmac::HmacSha256;
 pub const VERSION_1: u32 = 0x0000_0001;
 
 /// QUIC v1 Initial tuzu (RFC 9001 §5.2).
+///
+/// Bu değer IETF RFC 9001 tarafından tanımlanan ortak bir protokol sabitidir;
+/// tüm QUIC v1 uygulamaları aynı tuzu kullanır. Gizli bir anahtar değildir ve
+/// HKDF-Extract'in salt girdisi olarak kullanılarak Initial paket koruma
+/// anahtarları türetilir. Sabit kalması protokol uyumluluğu için zorunludur.
 const INITIAL_SALT: [u8; 20] = [
     0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad,
     0xcc, 0xbb, 0x7f, 0x0a,

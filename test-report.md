@@ -1,8 +1,8 @@
-﻿# minOs QEMU Entegrasyon Test Raporu
+# minOs QEMU Entegrasyon Test Raporu
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-18 20:03:44 UTC |
+| Zaman | 2026-11-19 12:24:54 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |

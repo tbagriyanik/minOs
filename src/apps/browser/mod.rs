@@ -57,6 +57,15 @@ extern crate alloc;
 
 const BROWSER_ERROR_LOG_LIMIT: usize = 64;
 
+/// `livetest_insecure` cmdline token'ı var mı? (Yalnızca gömülü test
+/// sunucusuna karşı sertifika doğrulamasını atlatmak için; `h3.rs` ile aynı
+/// mekanizma, burada TCP/TLS oturumları için kullanılır.)
+fn livetest_insecure_enabled() -> bool {
+    crate::boot::limine::limine_boot_cmdline()
+        .map(|c| c.split_whitespace().any(|t| t == "livetest_insecure"))
+        .unwrap_or(false)
+}
+
 /// Tek bir uyandırma turunda HTML düzeni için ayrılan azami CPU süresi (ms).
 /// Bu bütçeyi aşan sayfalar parça parça düzenlenir; tarayıcı bir siteye girerken
 /// sistem kilitlenmez, olay döngüsü çalışmaya devam eder.
@@ -4403,6 +4412,11 @@ impl BrowserApp {
                         // TLS 1.3 anahtar türetimi için istemci ECDHE gizlileri saklanır.
                         tls_session.set_client_ecdhe_secret(ecdhe_secret);
                         tls_session.set_client_x25519_secret(x25519_secret);
+                        // Canlı test: `livetest_insecure` token'ı verilmişse
+                        // öz-imzalı yerel test sertifikası kabul edilir.
+                        if livetest_insecure_enabled() {
+                            tls_session.set_skip_cert_validation(true);
+                        }
                         // Oturum yeniden kullanımı: önbellekte PSK varsa sunucuya
                         // teklif edilir (RFC 8446 §4.2.11).
                         if let Some(ref p) = psk {

@@ -1,0 +1,109 @@
+/* minOs webtest — harici stil sayfasi */
+body {
+    font-family: sans-serif;
+    margin: 24px;
+    background: #1a1a24;
+    color: #e8e8f0;
+}
+
+h1 {
+    color: #4da3ff;
+    border-bottom: 2px solid #4da3ff;
+    padding-bottom: 6px;
+}
+
+h2 {
+    color: #7ee787;
+    font-size: 1.1em;
+}
+
+.lead {
+    color: #9aa0b4;
+    font-style: italic;
+}
+
+.card {
+    border: 1px solid #33334a;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    background: #232336;
+}
+
+.card:hover {
+    border-color: #4da3ff;
+}
+
+code {
+    background: #0d0d14;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #ffd479;
+}
+
+.grid {
+    border-collapse: collapse;
+    margin-top: 8px;
+}
+
+.grid th, .grid td {
+    border: 1px solid #44445e;
+    padding: 4px 14px;
+    text-align: left;
+}
+
+.grid th {
+    background: #2c2c44;
+    color: #7ee787;
+}
+
+button {
+    padding: 6px 16px;
+    margin: 2px;
+    background: #2050c0;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #184aae;
+}
+
+#count {
+    font-family: monospace;
+    font-weight: bold;
+    color: #4da3ff;
+    margin-left: 10px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 10px;
+    margin: 2px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    border: 1px solid #44445e;
+}
+
+.badge.ok {
+    background: #1d4d2b;
+    border-color: #2ea043;
+    color: #7ee787;
+}
+
+.badge.warn {
+    background: #4d3a1d;
+    border-color: #d29922;
+    color: #ffd479;
+}
+
+img {
+    border: 2px solid #4da3ff;
+    border-radius: 6px;
+}
+
+a {
+    color: #79b8ff;
+}

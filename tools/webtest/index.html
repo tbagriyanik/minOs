@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>minOs Web Test</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>minOs Web Test Sayfasi</h1>
+<p class="lead">Yerel HTTP/HTTPS test sayfasi: HTML, CSS, JS ve resim render dogrulamasi.</p>
+
+<section class="card">
+<h2>1. HTML Yapisi</h2>
+<p>Paragraf, <strong>kalin</strong>, <em>italik</em>, <code>kod</code> ve <a href="#">baglanti</a> testleri.</p>
+<ul>
+<li>Liste maddesi bir</li>
+<li>Liste maddesi iki</li>
+<li>Liste maddesi uc</li>
+</ul>
+<table class="grid">
+<tr><th>Ozellik</th><th>Durum</th></tr>
+<tr><td>HTML</td><td>Test ediliyor</td></tr>
+<tr><td>CSS</td><td>Test ediliyor</td></tr>
+<tr><td>JS</td><td>Test ediliyor</td></tr>
+<tr><td>PNG</td><td>Test ediliyor</td></tr>
+</table>
+</section>
+
+<section class="card">
+<h2>2. Harici CSS (style.css)</h2>
+<p>Bu bolum harici <code>style.css</code> dosyasi ile bicimlendirildi; yesil kart ve mavi baslik beklenir.</p>
+<span class="badge ok">CSS yuklendi</span>
+<span class="badge warn">badge</span>
+</section>
+
+<section class="card">
+<h2>3. JavaScript (inline script)</h2>
+<p>
+<button id="btn" onclick="increment()">Artir</button>
+<button onclick="resetCount()">Sifirla</button>
+<span id="count">0</span>
+</p>
+<p id="jsstatus">JS durumu: <span id="jsok">deneniyor</span></p>
+</section>
+
+<section class="card">
+<h2>4. Resim (test.png)</h2>
+<p><img src="test.png" alt="Test gorseli" width="96" height="96"></p>
+<p>PNG gorseli <code>test.png</code> uzerinden yuklendi; kirmizi/mavi desen gorunmelidir.</p>
+</section>
+
+<section class="card">
+<h2>5. Diger Uclar</h2>
+<p>
+<a href="/api/ping">/api/ping</a> |
+<a href="/api/info">/api/info</a> |
+<a href="/style.css">style.css</a> |
+<a href="/test.png">test.png</a>
+</p>
+</section>
+
+<script>
+var count = 0;
+function increment() {
+    count = count + 1;
+    document.getElementById('count').innerText = count;
+}
+function resetCount() {
+    count = 0;
+    document.getElementById('count').innerText = 0;
+}
+document.getElementById('jsok').innerText = 'calisiyor';
+document.getElementById('jsstatus').innerText = 'JS durumu: script calisti';
+</script>
+</body>
+</html>

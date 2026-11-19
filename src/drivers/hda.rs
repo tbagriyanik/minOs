@@ -324,8 +324,6 @@ unsafe fn send_verb(verb: u32) -> u64 {
 
     let mut rirb_spins = 0u32;
 
-    let mut got_response = false;
-
     loop {
         let rwp = mmio_read16(mmio, RIRB_WP) & 0xFF;
 
@@ -338,8 +336,6 @@ unsafe fn send_verb(verb: u32) -> u64 {
 
             response = (*pool).rirb[idx];
 
-            got_response = true;
-
             break;
         }
 
@@ -351,20 +347,6 @@ unsafe fn send_verb(verb: u32) -> u64 {
 
         core::hint::spin_loop();
     }
-
-    serial_print("[HDA] verb 0x");
-
-    crate::serial::print_hex(verb as u64);
-
-    serial_print(" rsp=");
-
-    if got_response {
-        crate::serial::print_hex(response);
-    } else {
-        serial_print("YOK");
-    }
-
-    serial_print("\n");
 
     response
 }

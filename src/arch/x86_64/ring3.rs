@@ -1193,7 +1193,11 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) -> u64 
             "\n==================== [ CEKIRDEK HATASI (EXCEPTION) ] ====================\n",
         );
 
-        smp::print_locked("[RING3] KRITIK: cekirdek hatasi (vektor ");
+        smp::print_locked("[RING3] KRITIK: cekirdek hatasi (cpu=");
+
+        smp::print_locked_dec(smp::current_cpu_index() as u64);
+
+        smp::print_locked(", vektor ");
 
         smp::print_locked_dec(vec as u64);
 

@@ -521,8 +521,10 @@ impl PkgDownload {
             }
             req.extend_from_slice(&digits[idx..]);
         }
+        req.extend_from_slice(b"\r\nUser-Agent: ");
+        req.extend_from_slice(crate::user_agent::USER_AGENT.as_bytes());
         req.extend_from_slice(
-            b"\r\nUser-Agent: minOs/1.5\r\nAccept: application/octet-stream,*/*\r\nConnection: close\r\n\r\n",
+            b"\r\nAccept: application/octet-stream,*/*\r\nConnection: close\r\n\r\n",
         );
         self.request = req;
         self.req_sent = 0;

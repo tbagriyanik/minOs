@@ -225,6 +225,10 @@ pub mod quic;
 #[path = "../src/drivers/huffman.rs"]
 pub mod huffman;
 
+// HTTP istemcilerinin ortak User-Agent dizesi.
+#[path = "../src/user_agent.rs"]
+pub mod user_agent;
+
 // QPACK (RFC 9204) statik tablo kodlayıcı/çözücü.
 #[path = "../src/drivers/qpack.rs"]
 pub mod qpack;

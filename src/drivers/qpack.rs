@@ -142,22 +142,22 @@ fn decode_int(data: &[u8], pos: &mut usize, prefix_bits: u8) -> Option<u64> {
     Some(value)
 }
 
-/// Dizge literali: H baytı + uzunluk + baytlar. `huffman` bayrağı
-/// desteklenir (çözme tarafında HPACK Huffman'ı kullanılır).
+/// Dizge literali: H baytı + uzunluk + baytlar.
+///
+/// Huffman kodlaması ham baytlardan daha kısa ise kullanılır (RFC 7541 §5.2);
+/// böylece başlık değerleri (özellikle `user-agent`, `cookie` gibi uzun
+/// metinler) ağ üzerinde daha az yer kaplar.
 fn encode_string(s: &str, out: &mut Vec<u8>) {
-    // H=0 (Huffman yok), 7-bit uzunluk öneki
     let bytes = s.as_bytes();
-    if bytes.len() < 127 {
-        out.push(bytes.len() as u8);
-    } else {
-        out.push(0x7f);
-        let mut v = bytes.len() as u64 - 127;
-        while v >= 0x80 {
-            out.push((v as u8 & 0x7f) | 0x80);
-            v >>= 7;
-        }
-        out.push(v as u8);
+    let huff = crate::drivers::huffman::encode(bytes);
+    if huff.len() < bytes.len() {
+        // H=1, 7-bit uzunluk öneki
+        encode_int(huff.len() as u64, 7, 0x80, out);
+        out.extend_from_slice(&huff);
+        return;
     }
+    // H=0 (Huffman yok), 7-bit uzunluk öneki
+    encode_int(bytes.len() as u64, 7, 0x00, out);
     out.extend_from_slice(bytes);
 }
 
@@ -236,10 +236,18 @@ pub fn qpack_encode(headers: &[(String, String)]) -> Vec<u8> {
             encode_string(value, &mut out);
             continue;
         }
-        // 3) Literal Field Line With Literal Name: '001' N=0 H=0 name(3+)
-        // encode_int ilk baytı '001' + 3-bit önek olarak yazar.
-        encode_int(name.len() as u64, 3, 0x20, &mut out);
-        out.extend_from_slice(name.as_bytes());
+        // 3) Literal Field Line With Literal Name: '001' N=0 H=? name(3+)
+        // encode_int ilk baytı '001' + 3-bit önek olarak yazar; ad Huffman
+        // ile sıkıştırılırsa H baytı da set edilir (0x08).
+        let name_bytes = name.as_bytes();
+        let name_huff = crate::drivers::huffman::encode(name_bytes);
+        if name_huff.len() < name_bytes.len() {
+            encode_int(name_huff.len() as u64, 3, 0x28, &mut out);
+            out.extend_from_slice(&name_huff);
+        } else {
+            encode_int(name_bytes.len() as u64, 3, 0x20, &mut out);
+            out.extend_from_slice(name_bytes);
+        }
         encode_string(value, &mut out);
     }
     out
@@ -481,6 +489,7 @@ impl QpackDecoder {
                 out.push((name, String::from_utf8_lossy(&value).into_owned()));
             } else if b & 0x20 != 0 {
                 // Literal With Literal Name: '001' N H NameLen(3+)
+                let name_huff = b & 0x08 != 0;
                 pos -= 1;
                 let name_len = decode_int(data, &mut pos, 3)
                     .ok_or_else(|| String::from("qpack_int"))?
@@ -488,8 +497,15 @@ impl QpackDecoder {
                 if pos + name_len > data.len() {
                     return Err(String::from("qpack_name"));
                 }
-                let name = String::from_utf8_lossy(&data[pos..pos + name_len]).into_owned();
+                let raw_name = &data[pos..pos + name_len];
                 pos += name_len;
+                let name = if name_huff {
+                    let decoded =
+                        huffman_decode_pub(raw_name).ok_or_else(|| String::from("qpack_huff"))?;
+                    String::from_utf8_lossy(&decoded).into_owned()
+                } else {
+                    String::from_utf8_lossy(raw_name).into_owned()
+                };
                 let value =
                     decode_string(data, &mut pos).ok_or_else(|| String::from("qpack_str"))?;
                 out.push((name, String::from_utf8_lossy(&value).into_owned()));

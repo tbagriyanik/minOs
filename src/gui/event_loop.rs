@@ -699,6 +699,25 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     serial_print("[BOOT] Desktop loop started.\n");
 
+    // Önyükleme komut satırında `browserurl=<url>` varsa tarayıcı bu adresle
+    // açılır. Canlı doğrulama (QEMU + gerçek sunucu) için kullanılır: gerçek
+    // bir sitede sayfa yükleme, kaynak indirme ve keep-alive akışı ölçülür.
+    if let Some(cmdline) = crate::boot::limine::limine_boot_cmdline() {
+        for tok in cmdline.split_whitespace() {
+            if let Some(url) = tok.strip_prefix("browserurl=") {
+                if !url.is_empty() {
+                    browser_app.set_url(url.as_bytes());
+                    browser_app.navigate();
+                    compositor.launch_app_window(3);
+                    serial_print("[BOOT] browserurl=");
+                    serial_print(url);
+                    serial_print("\n");
+                    break;
+                }
+            }
+        }
+    }
+
     // Uygulama bazlı bellek raporu döngünün ilk turunda da yayınlanır; ancak
     // TCG altında ilk kare yavaş olabildiği için masaüstüne geçişte bir kez
     // hemen yayınlanır. Böylece `[APP-MEM]` işareti sistemin gerçekten

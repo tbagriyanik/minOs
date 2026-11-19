@@ -26,13 +26,14 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 
 | Özellik | Açıklama |
 | :--- | :--- |
-| **Protokol** | HTTP/1.1, `Connection: close`, `Host` ve `User-Agent: minOs/2.1` başlıkları |
+| **Protokol** | HTTP/1.1, `Connection: keep-alive`, `Host` ve `User-Agent: Mozilla/5.0 (…) Firefox/128.0 minOs/2.5` başlıkları |
 | **Yöntemler** | GET, POST (`application/x-www-form-urlencoded`) |
 | **Yönlendirme** | HTTP 3xx (301, 302, 303, 307, 308) ve `Location:` başlığı çözümleyicisi (azami 3 atlama) |
 | **Çerezler** | `Set-Cookie:` başlıklarının otomatik kaydedilmesi ve domain/path eşleşmesine göre `Cookie:` başlığının gönderilmesi |
 | **Parçalı Gönderim** | `Transfer-Encoding: chunked` yanıtlarının yerinde çözülmesi |
+| **Keep-Alive** | Sunucu `Connection: close` demediğinde bağlantı açık tutulur; aynı kaynağa yapılan sonraki isteklerde (CSS/görsel/JS) DNS + TCP + TLS el sıkışması yapılmaz |
 | **Zaman Aşımı** | 15 saniyelik ağ zaman aşımı |
-| **Tamponlar** | 64 KB TCP alma tamponu, 64 KB dinamik yanıt tamponu |
+| **Tamponlar** | 256 KB TCP alma tamponu, 64 KB → **8 MB** dinamik yanıt tamponu (`Content-Length` biliniyorsa doğrudan o boyuta büyütülür; aşımda açık hata) |
 | **IPv6 Öncelikli Bağlantı** | İstek öncesi AAAA çözülür ve `connect_v6` ile IPv6 bağlanılır (HTTPS'te TLS el sıkışması IPv6 üzerinden); AAAA yoksa/başarısızsa IPv4 `fetch_once` yoluna düşülür |
 
 ---
@@ -46,7 +47,8 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 | **Çerçeve Katmanı** | `h2` modülü: `build_frame`, `parse_frame_header`, `build_window_update`; DATA, HEADERS, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE sabitleri |
 | **HPACK** | `encode_get_headers` ile `:method GET`, `:scheme`, `:authority`, `:path` başlık bloğu kodlaması (statik tablo indeksleri) |
 | **Bağlantı** | `Http2Connection::connect` (istemci önyüzü + sunucu SETTINGS bekleme), `get()` (tek soket üzerinden çoklu akış, tek sayılı akış ID'leri), `close()` (GOAWAY) |
-| **Kolaylık API** | `http2_get(url, &mut buf)` |
+| **Kolaylık API** | `http2_get(url, &mut buf)`, `http2_get_full_vec(url, &mut Vec<u8>, …)` (büyüyebilir gövde) |
+| **Bağlantı Yeniden Kullanımı** | Aynı kaynak için açık HTTP/2 bağlantısı saklanır; sonraki isteklerde DNS + TCP + TLS el sıkışması yapılmaz, istek mevcut bağlantıda yeni akış üzerinden gönderilir |
 | **Sınırlar** | HTTPS'te TLS kaydı şifrelemesi, `Upgrade: h2c` ve HPACK dinamik tablo + tam başlık çözümlemesi henüz yok (yalnızca `:status 200` sezgisel olarak bulunur); ALPN `h2` pazarlığı artık çalışmaktadır |
 
 > Sunucu ALPN ile `h2` seçerse tarayıcı `http2_get()` üzerinden HTTP/2 kullanır; aksi takdirde HTTP/1.1'e düşülür.

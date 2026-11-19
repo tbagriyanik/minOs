@@ -24,6 +24,9 @@ pub const MAX_REDIRECTS: usize = 3;
 pub const MAX_HOST: usize = 96;
 pub const MAX_PATH: usize = 256;
 
+/// minOs HTTP istemcilerinin gönderdiği User-Agent dizesi (ortak kaynak).
+pub use crate::user_agent::USER_AGENT;
+
 /// HTTP istemci yapılandırması: zaman aşımları, yeniden deneme politikası ve proxy ayarları.
 #[derive(Clone, Debug)]
 pub struct HttpClientConfig {
@@ -723,7 +726,7 @@ fn build_request_with_headers(
         path,
         b" HTTP/1.1\r\nHost: ",
         host,
-        b"\r\nUser-Agent: minOs-curl/1.0\r\nAccept-Encoding: gzip, deflate, br\r\nConnection: keep-alive",
+        b"\r\nUser-Agent: minOs-http/2.5\r\nAccept-Encoding: gzip, deflate, br\r\nConnection: keep-alive",
     ];
 
     let mut n = 0usize;
@@ -2372,7 +2375,8 @@ pub fn self_test() -> bool {
 // Geriye dönük uyumluluk için adlar burada yeniden dışa aktarılır.
 // ---------------------------------------------------------------------------
 pub use crate::drivers::http2::{
-    h2, h2_send_preface, http2_get, http2_get_full, is_http2_response, Http2Connection,
+    h2, h2_send_preface, http2_get, http2_get_full, http2_get_full_vec, is_http2_response,
+    Http2Connection,
 };
 
 /// WebSocket (RFC 6455) yardımcıları. TCP/TLS taşımasını çağıran katman sağlar.

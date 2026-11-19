@@ -2163,11 +2163,11 @@ impl JsRuntime {
         let mut map = BTreeMap::new();
         map.insert(
             String::from("userAgent"),
-            JsValue::String(String::from("minOs/1.5")),
+            JsValue::String(String::from(crate::user_agent::USER_AGENT)),
         );
         map.insert(
             String::from("appVersion"),
-            JsValue::String(String::from("5.0 (minOs)")),
+            JsValue::String(String::from("5.0 (minOs/2.5)")),
         );
         map.insert(
             String::from("appName"),

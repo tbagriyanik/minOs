@@ -26,13 +26,14 @@ PCI network identification includes Intel PRO/1000, Realtek RTL8139 and AMD PCne
 
 | Feature | Description |
 | :--- | :--- |
-| **Protocol** | HTTP/1.1, `Connection: close`, `Host` and `User-Agent: minOs/2.1` headers |
+| **Protocol** | HTTP/1.1, `Connection: keep-alive`, `Host` and `User-Agent: Mozilla/5.0 (…) Firefox/128.0 minOs/2.5` headers |
 | **Methods** | GET, POST (`application/x-www-form-urlencoded`) |
 | **Redirects** | HTTP 3xx (301, 302, 303, 307, 308) and `Location:` header resolver (max 3 hops) |
 | **Cookies** | `Set-Cookie:` headers automatically saved and `Cookie:` header sent based on domain/path matching |
 | **Chunked Transfer** | `Transfer-Encoding: chunked` responses decoded in place |
+| **Keep-Alive** | The connection is kept open unless the server sends `Connection: close`; follow-up requests to the same origin (CSS/image/JS) skip DNS + TCP + TLS handshakes |
 | **Timeout** | 15-second network timeout |
-| **Buffers** | 64 KB TCP receive buffer, 64 KB dynamic response buffer |
+| **Buffers** | 256 KB TCP receive buffer, 64 KB → **8 MB** dynamic response buffer (grown straight to `Content-Length` when known; an explicit error is raised when exceeded) |
 | **IPv6-First Connection** | AAAA is resolved before the request and IPv6 is used via `connect_v6` (the TLS handshake runs over IPv6 for HTTPS); falls back to the IPv4 `fetch_once` path when AAAA is missing or fails |
 
 ---
@@ -46,7 +47,8 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | **Frame Layer** | `h2` module: `build_frame`, `parse_frame_header`, `build_window_update`; DATA, HEADERS, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE constants |
 | **HPACK** | `encode_get_headers` encodes `:method GET`, `:scheme`, `:authority`, `:path` (static table indices) |
 | **Connection** | `Http2Connection::connect` (client preface + server SETTINGS wait), `get()` (multiplexed streams on one socket, odd stream IDs), `close()` (GOAWAY) |
-| **Convenience API** | `http2_get(url, &mut buf)` |
+| **Convenience API** | `http2_get(url, &mut buf)`, `http2_get_full_vec(url, &mut Vec<u8>, …)` (growable body) |
+| **Connection Reuse** | An open HTTP/2 connection for the same origin is kept; follow-up requests skip DNS + TCP + TLS handshakes and are sent as new streams on that connection |
 | **Limits** | No TLS record encryption on HTTPS, no `Upgrade: h2c` and no HPACK dynamic table or full header decoding yet (only `:status 200` is detected heuristically); ALPN `h2` negotiation now works |
 
 > If the server selects `h2` via ALPN, the browser uses HTTP/2 via `http2_get()`; otherwise it falls back to HTTP/1.1.

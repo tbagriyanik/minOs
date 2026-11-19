@@ -33,6 +33,9 @@ pub mod apps;
 
 pub mod serial;
 
+/// HTTP istemcilerinin ortak User-Agent dizesi (tarayıcı, pkgmgr, HTTP/2).
+pub mod user_agent;
+
 // --- Asama 1: ayristirilan moduller -------------------------------------------------
 
 // Tasima yok: bu modullerdeki ogeler crate kokunde yeniden disa aktarilir, boylece

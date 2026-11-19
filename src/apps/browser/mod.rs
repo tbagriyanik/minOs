@@ -15,9 +15,9 @@ mod devtools;
 mod html;
 mod iframe;
 mod media;
-// SVG rasterizer henüz tarayıcı hattına bağlanmadı (WIP).
-#[allow(dead_code)]
-mod svg;
+// SVG rasterizer: hem satır içi `<svg>` etiketlerinde (html.rs) hem de
+// harici SVG dosyalarında (`<img src="…svg">`, imgdecode) kullanılır.
+pub(crate) mod svg;
 mod types;
 mod wasm;
 mod worker;
@@ -40,7 +40,6 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::fmt::Write;
@@ -69,8 +68,19 @@ const MAX_REDIRECTS: usize = 10;
 
 /// HTTP yanıt tamponunun başlangıç boyutu (bayt).
 const RESPONSE_BUF_MIN: usize = 64 * 1024;
-/// HTTP yanıt tamponunun azami boyutu (bayt). Büyük resimler için büyütülür.
-const RESPONSE_BUF_MAX: usize = 512 * 1024;
+/// HTTP yanıt tamponunun azami boyutu (bayt).
+///
+/// Gerçek dünya siteleri (haber, e-ticaret, sosyal medya, orta ölçekli bloglar)
+/// kolayca 500 KB – 2 MB HTML gövdesi gönderir. Eski 512 KB sınırı bu sayfaları
+/// yarım bırakıyordu: gövde tamamlanmadan işleme geçilmediği için sayfa hiç
+/// render edilmeden istek zaman aşımına uğruyordu. Sınır 8 MB'ye çıkarıldı;
+/// aşımda veri sessizce kesilmek yerine kullanıcıya açık hata verilir.
+const RESPONSE_BUF_MAX: usize = 8 * 1024 * 1024;
+
+/// "Sayfayı indir" için saklanan gövde üst sınırı (bayt).
+///
+/// Büyük sayfalarda gövdenin ikinci bir tam kopyası bellekte tutulmaz.
+const DOWNLOAD_KEEP_MAX: usize = 1024 * 1024;
 
 // ── Tur (frame) yardımcıları ─────────────────────────────────────
 // Ana döngü her turda `begin_turn` çağırır; `mark_turn_busy` bu turda iş
@@ -189,6 +199,64 @@ fn header_is_chunked(headers: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// Chunked gövdenin tamamının gelip gelmediğini, veriyi değiştirmeden kontrol
+/// eder.
+///
+/// Gövde yerinde çözülürken eksik parça hatalı sonuç verir; bu yüzden
+/// önce yalnızca boyut satırları taranır. Son parça (`0`) ve varsa trailer
+/// başlıkları görüldüğünde gövde tamamlanmış sayılır.
+fn chunked_body_complete(body: &[u8]) -> bool {
+    let mut read = 0usize;
+    loop {
+        // Boyut satırının sonu (CRLF).
+        let Some(rel) = body[read..].iter().position(|&b| b == b'\n') else {
+            return false;
+        };
+        let line_end = read + rel;
+        let line = &body[read..line_end];
+        // Satır sonundaki CR karakterini at.
+        let line = if line.last() == Some(&b'\r') {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        // Boyut alanı: hex rakamlar; sonra ';' ile uzantı gelebilir.
+        let mut size = 0usize;
+        let mut digits = 0usize;
+        for &b in line {
+            if b == b';' {
+                break;
+            }
+            let Some(d) = (b as char).to_digit(16) else {
+                return false;
+            };
+            size = size.saturating_mul(16).saturating_add(d as usize);
+            digits += 1;
+        }
+        if digits == 0 {
+            return false;
+        }
+        read = line_end + 1;
+        if size == 0 {
+            // Son parça: trailer başlıkları (varsa) ve boş satır beklenir.
+            let rest = &body[read..];
+            if rest.starts_with(b"\r\n") {
+                return true;
+            }
+            return rest.windows(4).any(|w| w == b"\r\n\r\n");
+        }
+        // Parça verisi + CRLF.
+        if read + size + 2 > body.len() {
+            return false;
+        }
+        read += size;
+        if &body[read..read + 2] != b"\r\n" {
+            return false;
+        }
+        read += 2;
+    }
 }
 
 /// Bir kaynak URL'sini (scheme, host, port, path) bileşenlerine ayırır.
@@ -793,6 +861,30 @@ pub struct BrowserApp {
     revocation_checked: bool,
     pub response_data: Vec<u8>,
     pub response_len: usize,
+    /// Başlıklardan öğrenilen gövde boyutu (Content-Length). Biliniyorsa
+    /// yanıt tamponu doğrudan bu boyuta büyütülür; 0 = bilinmiyor.
+    pub expected_response_len: usize,
+    /// Keep-alive: açık tutulan bağlantı yeniden kullanılabilir mi?
+    pub keep_alive_ready: bool,
+    /// Açık tutulan bağlantının kaynağı (aynı kaynak için yeniden kullanılır).
+    pub keep_alive_host: [u8; 128],
+    pub keep_alive_host_len: usize,
+    pub keep_alive_port: u16,
+    pub keep_alive_https: bool,
+    /// HTTP/2 bağlantısı: aynı kaynak için sonraki isteklerde yeniden
+    /// kullanılır (yeni TCP + TLS el sıkışması yapılmaz).
+    pub h2_conn: Option<crate::drivers::http2::Http2Connection>,
+    /// Açık tutulan HTTP/2 bağlantısının kaynağı.
+    pub h2_origin_host: [u8; 128],
+    pub h2_origin_host_len: usize,
+    pub h2_origin_port: u16,
+    pub h2_origin_https: bool,
+    /// Mevcut HTTP/2 bağlantısı üzerinden istek yapılacak (DNS/TCP/TLS atlanır).
+    pub h2_reuse_pending: bool,
+    /// HTTP/2 destekleyen bilinen sunucular. Bu sunucularda gereksiz
+    /// netstack DNS + TCP + TLS el sıkışması yapılmaz; istek doğrudan
+    /// HTTP/2 bağlantısı üzerinden gider.
+    pub h2_capable_hosts: BTreeMap<String, ()>,
     pub tls_session: Option<crate::drivers::tls::TlsSession>,
     pub tls_app_data: Vec<u8>,
     /// El sıkışması tamamlanınca TLS üzerinden gönderilecek HTTP isteği.
@@ -1084,6 +1176,19 @@ impl BrowserApp {
             revocation_checked: false,
             response_data: Vec::new(),
             response_len: 0,
+            expected_response_len: 0,
+            keep_alive_ready: false,
+            keep_alive_host: [0u8; 128],
+            keep_alive_host_len: 0,
+            keep_alive_port: 0,
+            keep_alive_https: false,
+            h2_conn: None,
+            h2_origin_host: [0u8; 128],
+            h2_origin_host_len: 0,
+            h2_origin_port: 0,
+            h2_origin_https: false,
+            h2_reuse_pending: false,
+            h2_capable_hosts: BTreeMap::new(),
             tls_session: None,
             tls_app_data: Vec::new(),
             tls_pending_request: Vec::new(),
@@ -3354,21 +3459,270 @@ impl BrowserApp {
         }
     }
 
+    /// HTTP isteğini kurar (Host, User-Agent, Accept, Cookie, gövde).
+    ///
+    /// Hem yeni bağlantı kurulurken hem de keep-alive ile yeniden kullanılan
+    /// bağlantıda aynı istek biçimi kullanılır.
+    fn build_request(&self) -> Vec<u8> {
+        let host = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
+        let path = core::str::from_utf8(&self.request_path[..self.request_path_len]).unwrap_or("/");
+
+        let mut req_buf: Vec<u8> = Vec::with_capacity(1024);
+        if self.is_post {
+            req_buf.extend_from_slice(b"POST ");
+        } else {
+            req_buf.extend_from_slice(b"GET ");
+        }
+        req_buf.extend_from_slice(path.as_bytes());
+        req_buf.extend_from_slice(b" HTTP/1.1\r\nHost: ");
+        // Standart dışı port kullanılıyorsa Host başlığına port eklenir.
+        let default_port = if self.is_https { 443 } else { 80 };
+        if self.request_port != default_port {
+            req_buf.extend_from_slice(host.as_bytes());
+            req_buf.push(b':');
+            let mut digits = [0u8; 5];
+            let mut n = self.request_port;
+            let mut idx = digits.len();
+            loop {
+                idx -= 1;
+                digits[idx] = b'0' + (n % 10) as u8;
+                n /= 10;
+                if n == 0 || idx == 0 {
+                    break;
+                }
+            }
+            req_buf.extend_from_slice(&digits[idx..]);
+        } else {
+            req_buf.extend_from_slice(host.as_bytes());
+        }
+        req_buf.extend_from_slice(b"\r\nUser-Agent: ");
+        req_buf.extend_from_slice(crate::user_agent::USER_AGENT.as_bytes());
+        req_buf.extend_from_slice(b"\r\nAccept: ");
+        if self.request_is_resource {
+            req_buf.extend_from_slice(b"image/*,*/*;q=0.8\r\n");
+        } else {
+            req_buf.extend_from_slice(b"text/html,application/xhtml+xml,text/plain,*/*\r\n");
+        }
+        // Keep-alive: sunucu bağlantıyı açık tutarsa aynı oturum üzerinden
+        // sonraki kaynaklar (CSS/görsel) yeniden kullanılır.
+        req_buf.extend_from_slice(b"Connection: keep-alive\r\n");
+
+        // Cookie başlığı ekle (RFC 6265 global jar: domain/path/Secure/SameSite)
+        let cookie_header =
+            crate::drivers::cookie::get_cookie_header(host, path, self.is_https, true);
+        if !cookie_header.is_empty() {
+            req_buf.extend_from_slice(b"Cookie: ");
+            req_buf.extend_from_slice(cookie_header.as_bytes());
+            req_buf.extend_from_slice(b"\r\n");
+        }
+
+        if self.is_post {
+            req_buf.extend_from_slice(
+                b"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: ",
+            );
+            let mut len_digits = [0u8; 12];
+            let mut val = self.post_body.len();
+            let mut pos = 0;
+            if val == 0 {
+                len_digits[0] = b'0';
+                pos = 1;
+            } else {
+                while val > 0 && pos < len_digits.len() {
+                    len_digits[pos] = b'0' + (val % 10) as u8;
+                    val /= 10;
+                    pos += 1;
+                }
+                len_digits[..pos].reverse();
+            }
+            req_buf.extend_from_slice(&len_digits[..pos]);
+            req_buf.extend_from_slice(b"\r\n\r\n");
+            req_buf.extend_from_slice(&self.post_body);
+        } else {
+            req_buf.extend_from_slice(b"\r\n");
+        }
+        req_buf
+    }
+
+    /// Yanıt, bağlantının yeniden kullanılmasına izin veriyor mu?
+    ///
+    /// HTTP/1.1'de bağlantı varsayılan olarak açık tutulur; sunucu
+    /// `Connection: close` derse veya HTTP/1.0 kullanıyorsa (açıkça
+    /// `Connection: keep-alive` demiyorsa) bağlantı kapatılır. TLS'te sunucu
+    /// `close_notify` gönderdiyse oturum yeniden kullanılamaz.
+    fn response_allows_keep_alive(&self, status_line: &[u8], headers: &[u8]) -> bool {
+        let connection = crate::drivers::http::header_value(headers, b"Connection");
+        if let Some(raw) = connection {
+            if raw.windows(5).any(|w| w.eq_ignore_ascii_case(b"close")) {
+                return false;
+            }
+        }
+        if !status_line.starts_with(b"HTTP/1.1") {
+            // HTTP/1.0: keep-alive açıkça istenmiş olmalı.
+            let keep = connection
+                .map(|v| v.windows(10).any(|w| w.eq_ignore_ascii_case(b"keep-alive")))
+                .unwrap_or(false);
+            if !keep {
+                return false;
+            }
+        }
+        if self.is_https {
+            match self.tls_session.as_ref() {
+                Some(tls) if !tls.peer_closed() => {}
+                _ => return false,
+            }
+        }
+        // Sunucu bağlantıyı zaten kapattıysa yeniden kullanılamaz.
+        !crate::drivers::netstack::tcp_finished()
+    }
+
+    /// Yanıt bittikten sonra bağlantıyı kapatır veya keep-alive için açık tutar.
+    ///
+    /// Açık tutulan bağlantı, aynı kaynağa yapılan sonraki isteklerde (CSS,
+    /// görsel, betik) DNS + TCP + TLS el sıkışması yapılmadan yeniden
+    /// kullanılır.
+    fn finish_response_connection(&mut self, keep_alive_ok: bool) {
+        if keep_alive_ok {
+            crate::drivers::netstack::tcp_clear_result_keep_conn();
+            self.keep_alive_ready = true;
+            self.keep_alive_host = self.request_host;
+            self.keep_alive_host_len = self.request_host_len;
+            self.keep_alive_port = self.request_port;
+            self.keep_alive_https = self.is_https;
+        } else {
+            crate::drivers::netstack::tcp_close();
+            crate::drivers::netstack::tcp_clear_result();
+            self.keep_alive_ready = false;
+            self.tls_session = None;
+        }
+    }
+
+    /// Açık tutulan bağlantı verilen kaynak için kullanılabilir mi?
+    fn keep_alive_matches(&self, is_https: bool, port: u16, host: &[u8]) -> bool {
+        self.keep_alive_ready
+            && self.keep_alive_https == is_https
+            && self.keep_alive_port == port
+            && self.keep_alive_host_len == host.len()
+            && &self.keep_alive_host[..self.keep_alive_host_len] == host
+            // Bağlantı hâlâ açık ve sunucu kapatmamış olmalı.
+            && crate::drivers::netstack::tcp_connected()
+            && !crate::drivers::netstack::tcp_finished()
+    }
+
+    /// HTTP/2 isteğini yapar; aynı kaynak için açık bağlantı varsa yeniden
+    /// kullanılır.
+    ///
+    /// Böylece sayfanın kaynakları (CSS/görsel/JS) için her birinde yeni TCP
+    /// ve TLS el sıkışması yapılmaz; istekler mevcut bağlantıda ayrı akışlar
+    /// üzerinden gönderilir.
+    fn h2_request(
+        &mut self,
+        host: &str,
+        path: &str,
+        resp: &mut Vec<u8>,
+        extra_headers: &[(&[u8], &[u8])],
+        resp_headers: &mut crate::drivers::http2::h2::HeaderList,
+    ) -> Result<(u16, usize, usize), i32> {
+        let same_origin = self.h2_conn.is_some()
+            && self.h2_origin_https == self.is_https
+            && self.h2_origin_port == self.request_port
+            && self.h2_origin_host_len == self.request_host_len
+            && self.h2_origin_host[..self.h2_origin_host_len]
+                == self.request_host[..self.request_host_len];
+
+        if same_origin {
+            if let Some(conn) = self.h2_conn.as_mut() {
+                let r = conn.get(
+                    host.as_bytes(),
+                    path.as_bytes(),
+                    resp,
+                    extra_headers,
+                    resp_headers,
+                );
+                if r.is_err() {
+                    // Bağlantı ölü: kapat ve yeni bağlantıyla bir kez daha dene.
+                    if let Some(old) = self.h2_conn.take() {
+                        let _ = old.close();
+                    }
+                } else {
+                    return r;
+                }
+            }
+        }
+
+        // Farklı kaynak (veya bağlantı yok): eskiyi kapat, yenisini kur.
+        if let Some(old) = self.h2_conn.take() {
+            let _ = old.close();
+        }
+        let mut conn = crate::drivers::http2::Http2Connection::connect(
+            host,
+            self.request_port,
+            self.is_https,
+        )?;
+        let result = conn.get(
+            host.as_bytes(),
+            path.as_bytes(),
+            resp,
+            extra_headers,
+            resp_headers,
+        );
+        if result.is_ok() {
+            self.h2_origin_host = self.request_host;
+            self.h2_origin_host_len = self.request_host_len;
+            self.h2_origin_port = self.request_port;
+            self.h2_origin_https = self.is_https;
+            self.h2_conn = Some(conn);
+            // Bu sunucu h2 destekliyor: sonraki gezinmelerde gereksiz
+            // netstack el sıkışması (DNS + TCP + TLS) yapılmaz.
+            self.h2_capable_hosts.insert(String::from(host), ());
+        } else {
+            let _ = conn.close();
+        }
+        result
+    }
+
+    /// Açık tutulan HTTP/2 bağlantısı mevcut istek için kullanılabilir mi?
+    fn h2_conn_matches_request(&self) -> bool {
+        self.h2_conn.is_some()
+            && self.h2_origin_https == self.is_https
+            && self.h2_origin_port == self.request_port
+            && self.h2_origin_host_len == self.request_host_len
+            && self.h2_origin_host[..self.h2_origin_host_len]
+                == self.request_host[..self.request_host_len]
+    }
+
     /// HTTP yanıt tamponunu sıfırlar (yeni istek için).
     fn reset_response_buffer(&mut self) {
         self.response_len = 0;
+        self.expected_response_len = 0;
         self.response_data.clear();
         self.response_data.resize(RESPONSE_BUF_MIN, 0);
     }
 
-    /// Yanıt tamponu dolduğunda büyütür; azami sınıra ulaşıldıysa `false` döner.
-    fn grow_response_buffer(&mut self) -> bool {
-        if self.response_data.len() >= RESPONSE_BUF_MAX {
+    /// Yanıt tamponunu gereken boyuta kadar büyütür.
+    ///
+    /// `needed` bayt sığmıyorsa ve azami sınır aşılıyorsa `false` döner.
+    /// Çağıran bunu sessizce yutmamalı: veri kesilmek yerine kullanıcıya
+    /// açık bir hata bildirilmelidir.
+    fn ensure_response_capacity(&mut self, needed: usize) -> bool {
+        if needed <= self.response_data.len() {
+            return true;
+        }
+        if needed > RESPONSE_BUF_MAX {
             return false;
         }
-        let new_len = (self.response_data.len() * 2).min(RESPONSE_BUF_MAX);
+        let mut new_len = self.response_data.len().max(RESPONSE_BUF_MIN);
+        while new_len < needed {
+            new_len = new_len.saturating_mul(2).min(RESPONSE_BUF_MAX);
+        }
         self.response_data.resize(new_len, 0);
         true
+    }
+
+    /// Yanıt tamponu dolduğunda büyütür; azami sınıra ulaşıldıysa `false` döner.
+    #[allow(dead_code)]
+    fn grow_response_buffer(&mut self) -> bool {
+        let needed = self.response_data.len().saturating_add(1);
+        self.ensure_response_capacity(needed)
     }
 
     /// Tamamlanan alt kaynak (resim/CSS) isteğini işler.
@@ -3376,7 +3730,15 @@ impl BrowserApp {
     /// Kaynak önce imza ile çözülür; görsel ise `image_cache` içine alınır ve
     /// sayfa yeniden çizilir. Böylece `<img src="http://...">` etiketleri
     /// uzak sunucudan gelen JPEG/PNG dosyalarını da gösterebilir.
-    fn finish_resource_request(&mut self, body: &[u8], vfs: &mut VirtualFileSystem) {
+    ///
+    /// `keep_alive_ok` true ise bağlantı açık tutulur; aynı kaynaktaki
+    /// sonraki kaynaklar yeni el sıkışma yapmadan bu bağlantıyı kullanır.
+    fn finish_resource_request(
+        &mut self,
+        body: &[u8],
+        vfs: &mut VirtualFileSystem,
+        keep_alive_ok: bool,
+    ) {
         let url = self.current_resource_url.clone();
 
         // Görseli uzantıya değil, gerçek dosya imzasına göre çöz.
@@ -3414,20 +3776,19 @@ impl BrowserApp {
         self.scroll_target = saved_scroll;
         self.scroll_reset = false;
 
-        // Bağlantıyı ve TLS durumunu temizle.
+        // Bağlantıyı ve TLS durumunu temizle. Sunucu izin veriyorsa
+        // bağlantı açık tutulur (keep-alive); sonraki kaynaklar aynı
+        // oturumu kullanır.
         self.request_pending = false;
         self.request_state = 0;
         self.request_deadline = 0;
         self.request_is_resource = false;
-        self.tls_session = None;
         self.tls_app_data.clear();
         self.tls_pending_request.clear();
         self.tls_request_sent = false;
-        self.tls13_finished_sent = false;
         self.revocation_checked = false;
         self.reset_response_buffer();
-        crate::drivers::netstack::tcp_close();
-        crate::drivers::netstack::tcp_clear_result();
+        self.finish_response_connection(keep_alive_ok);
 
         self.resource_fetch_state = if self.pending_resources.is_empty() {
             0
@@ -3624,6 +3985,35 @@ impl BrowserApp {
                 self.tls13_finished_sent = false;
                 self.revocation_checked = false;
                 self.tls_app_data.clear();
+                // Yeni gezinme: açık tutulan keep-alive bağlantısı geçersizdir.
+                self.keep_alive_ready = false;
+                // HTTP/2 bağlantısı: aynı kaynak için korunur (bağlantı
+                // yeniden kullanılır), farklı kaynak için kapatılır.
+                if !self.h2_conn_matches_request() {
+                    if let Some(conn) = self.h2_conn.take() {
+                        let _ = conn.close();
+                    }
+                }
+                self.h2_reuse_pending = false;
+                // Sunucunun h2 desteklediği biliniyorsa DNS + TCP + TLS el
+                // sıkışması tamamen atlanır; istek doğrudan HTTP/2 bağlantısı
+                // üzerinden gider (gereksiz ikinci el sıkışma olmaz).
+                if is_https {
+                    let host_str =
+                        core::str::from_utf8(&self.request_host[..self.request_host_len])
+                            .unwrap_or("");
+                    if self.h2_capable_hosts.contains_key(host_str) {
+                        self.h2_reuse_pending = true;
+                        self.tls_request_sent = false;
+                        self.tls13_finished_sent = true;
+                        self.request_state = 2;
+                        self.load_progress = 40;
+                        self.status = crate::gui::ui_text(
+                            "HTTP/2 bağlantısı hazırlanıyor...",
+                            "Preparing HTTP/2 connection...",
+                        );
+                    }
+                }
                 self.reset_response_buffer();
                 self.status = if is_https {
                     crate::gui::ui_text(
@@ -3875,6 +4265,23 @@ impl BrowserApp {
                     core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
                 let clean_host = host.trim().trim_start_matches('[').trim_end_matches(']');
                 self.load_progress = 10;
+
+                // Aynı kaynak için açık bir HTTP/2 bağlantısı varsa istek
+                // doğrudan o bağlantı üzerinden yapılır: DNS, TCP ve TLS el
+                // sıkışması tamamen atlanır.
+                if self.h2_conn_matches_request() {
+                    self.h2_reuse_pending = true;
+                    self.tls_request_sent = false;
+                    self.request_state = 2;
+                    self.request_deadline = 0;
+                    self.load_progress = 40;
+                    self.status = crate::gui::ui_text(
+                        "HTTP/2 bağlantısı yeniden kullanılıyor...",
+                        "Reusing HTTP/2 connection...",
+                    );
+                    return;
+                }
+
                 if let Some(_v6) = crate::drivers::netstack::parse_ipv6(clean_host) {
                     // IPv6 adresi doğrudan girildiğinde (ör: http://[::1]/ veya http://[fe80::1]/)
                     self.finish_network_error(crate::gui::ui_text(
@@ -3932,6 +4339,9 @@ impl BrowserApp {
                     self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 30;
                     if crate::drivers::netstack::tcp_begin_owned(ip, self.request_port, 49153, 1) {
+                        // Yeni TCP bağlantısı açıldı: önceki keep-alive
+                        // oturumu artık geçerli değil.
+                        self.keep_alive_ready = false;
                         self.request_state = 1;
                         self.status = crate::gui::ui_text(
                             "TCP bağlantısı kuruluyor...",
@@ -3954,82 +4364,10 @@ impl BrowserApp {
                 } else if crate::drivers::netstack::tcp_syn_acked() {
                     self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 40;
+
                     let host = core::str::from_utf8(&self.request_host[..self.request_host_len])
                         .unwrap_or("");
-                    let path = core::str::from_utf8(&self.request_path[..self.request_path_len])
-                        .unwrap_or("/");
-
-                    let mut req_buf: Vec<u8> = Vec::with_capacity(1024);
-                    if self.is_post {
-                        req_buf.extend_from_slice(b"POST ");
-                    } else {
-                        req_buf.extend_from_slice(b"GET ");
-                    }
-                    req_buf.extend_from_slice(path.as_bytes());
-                    req_buf.extend_from_slice(b" HTTP/1.1\r\nHost: ");
-                    // Standart dışı port kullanılıyorsa Host başlığına port eklenir.
-                    let default_port = if self.is_https { 443 } else { 80 };
-                    if self.request_port != default_port {
-                        req_buf.extend_from_slice(host.as_bytes());
-                        req_buf.push(b':');
-                        let mut digits = [0u8; 5];
-                        let mut n = self.request_port;
-                        let mut idx = digits.len();
-                        loop {
-                            idx -= 1;
-                            digits[idx] = b'0' + (n % 10) as u8;
-                            n /= 10;
-                            if n == 0 || idx == 0 {
-                                break;
-                            }
-                        }
-                        req_buf.extend_from_slice(&digits[idx..]);
-                    } else {
-                        req_buf.extend_from_slice(host.as_bytes());
-                    }
-                    req_buf.extend_from_slice(b"\r\nUser-Agent: minOs/1.5\r\nAccept: ");
-                    if self.request_is_resource {
-                        req_buf.extend_from_slice(b"image/*,*/*;q=0.8\r\n");
-                    } else {
-                        req_buf.extend_from_slice(
-                            b"text/html,application/xhtml+xml,text/plain,*/*\r\n",
-                        );
-                    }
-                    req_buf.extend_from_slice(b"Connection: close\r\n");
-
-                    // Cookie başlığı ekle (RFC 6265 global jar: domain/path/Secure/SameSite)
-                    let cookie_header =
-                        crate::drivers::cookie::get_cookie_header(host, path, self.is_https, true);
-                    if !cookie_header.is_empty() {
-                        req_buf.extend_from_slice(b"Cookie: ");
-                        req_buf.extend_from_slice(cookie_header.as_bytes());
-                        req_buf.extend_from_slice(b"\r\n");
-                    }
-
-                    if self.is_post {
-                        req_buf.extend_from_slice(
-                            b"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: ",
-                        );
-                        let mut len_digits = [0u8; 12];
-                        let mut val = self.post_body.len();
-                        let mut pos = 0;
-                        if val == 0 {
-                            len_digits[0] = b'0';
-                            pos = 1;
-                        } else {
-                            while val > 0 && pos < len_digits.len() {
-                                len_digits[pos] = b'0' + (val % 10) as u8;
-                                val /= 10;
-                                pos += 1;
-                            }
-                            len_digits[..pos].reverse();
-                        }
-                        req_buf.extend_from_slice(&len_digits[..pos]);
-                        req_buf.extend_from_slice(b"\r\n\r\n");
-                        req_buf.extend_from_slice(&self.post_body);
-                    } else {
-                        req_buf.extend_from_slice(b"\r\n");
-                    }
+                    let req_buf = self.build_request();
 
                     if self.is_https {
                         self.tls_pending_request = req_buf;
@@ -4100,6 +4438,17 @@ impl BrowserApp {
                 }
             }
             2 => {
+                // Sunucu bağlantıyı sıfırladıysa (keep-alive oturumu bozulmuş
+                // olabilir) beklemek yerine hızlıca hata ver.
+                if crate::drivers::netstack::tcp_reset_received() {
+                    self.keep_alive_ready = false;
+                    crate::drivers::netstack::tcp_clear_result();
+                    self.finish_network_error(crate::gui::ui_text(
+                        "Sunucu bağlantıyı sıfırladı.",
+                        "Server reset the connection.",
+                    ));
+                    return;
+                }
                 // TCP verisini al ve TLS oturumuna besle (https için).
                 crate::serial_print("[HTTP] request_state=2, response_len=");
                 crate::serial::print_dec(self.response_len as u64);
@@ -4113,13 +4462,50 @@ impl BrowserApp {
                 if self.response_data.len() < RESPONSE_BUF_MIN {
                     self.response_data.resize(RESPONSE_BUF_MIN, 0);
                 }
-                // Tampon dolduysa büyüt; büyük resimler sığsın diye.
+                // Tampon dolduysa büyüt. Content-Length biliniyorsa doğrudan
+                // gereken boyuta atlanır (kademeli büyütme yok); bilinmiyorsa
+                // boyut iki katına çıkar. Sınır aşıldıysa veri sessizce
+                // kesilmez: kullanıcıya açık hata verilir.
                 if self.response_len >= self.response_data.len() {
-                    self.grow_response_buffer();
+                    if self.response_data.len() >= RESPONSE_BUF_MAX {
+                        self.finish_network_error(crate::gui::ui_text(
+                            "Yanıt çok büyük (arabellek sınırı aşıldı).",
+                            "Response too large (buffer limit exceeded).",
+                        ));
+                        return;
+                    }
+                    let target = if self.expected_response_len > 0 {
+                        self.expected_response_len
+                            .saturating_add(16 * 1024)
+                            .min(RESPONSE_BUF_MAX)
+                    } else {
+                        self.response_data.len().saturating_mul(2)
+                    };
+                    if !self.ensure_response_capacity(target) {
+                        self.finish_network_error(crate::gui::ui_text(
+                            "Yanıt çok büyük (arabellek sınırı aşıldı).",
+                            "Response too large (buffer limit exceeded).",
+                        ));
+                        return;
+                    }
                 }
                 let room = self.response_data.len().saturating_sub(self.response_len);
                 let mut progressed = false;
-                if room > 0 {
+                if self.is_https {
+                    // Şifreli akışta ham TLS kayıtları yanıt tamponunda
+                    // saklanmaz; doğrudan TLS oturumuna beslenir. Böylece
+                    // bellekte hem şifreli hem düz metin kopyası tutulmaz ve
+                    // düz metin sınırı şifreli sınırla sınırlanmaz.
+                    let mut staging = [0u8; 4096];
+                    let n = crate::drivers::netstack::take_tcp_data(&mut staging);
+                    if n > 0 {
+                        progressed = true;
+                        self.request_deadline = 0; // Yeni pencere: 15 sn daha
+                        if let Some(ref mut tls) = self.tls_session {
+                            tls.feed_tcp_data(&staging[..n]);
+                        }
+                    }
+                } else if room > 0 {
                     let n = crate::drivers::netstack::take_tcp_data(
                         &mut self.response_data[self.response_len..],
                     );
@@ -4311,43 +4697,30 @@ impl BrowserApp {
                 }
 
                 // ── HTTP/2 entegrasyonu ─────────────────────────────────────
-                // ALPN ile h2leşmişse http2_get üzerinden HTTP/2 isteği yapar.
-                // http2_get kendi TCP/TLS bağlantısını kurar; mevcut bağlantı
-                // zaman aşımına uğrayarak temizlenir.
-                if tls_established
-                    && !self.tls_request_sent
+                // ALPN ile h2leşmişse veya aynı kaynak için açık bir HTTP/2
+                // bağlantısı varsa istek HTTP/2 üzerinden yapılır.
+                // Bağlantı aynı kaynaktaysa yeniden kullanılır (yeni TCP/TLS
+                // el sıkışması yapılmaz); değilse yeni bağlantı kurulur.
+                let h2_negotiated = tls_established
                     && self
                         .tls_session
                         .as_ref()
                         .and_then(|t| t.negotiated_protocol())
-                        .is_some_and(|p| p == b"h2")
-                {
-                    let host_str =
+                        .is_some_and(|p| p == b"h2");
+                if (h2_negotiated || self.h2_reuse_pending) && !self.tls_request_sent {
+                    self.h2_reuse_pending = false;
+                    // `self` alanlarından ödünç alınan metinler kopyalanır:
+                    // istek `self`'i değiştiren bir çağrıyla yapılır.
+                    let h2_host = String::from(
                         core::str::from_utf8(&self.request_host[..self.request_host_len])
-                            .unwrap_or("");
-                    let path_str =
+                            .unwrap_or(""),
+                    );
+                    let h2_path = String::from(
                         core::str::from_utf8(&self.request_path[..self.request_path_len])
-                            .unwrap_or("/");
-                    let mut url = HeaplessString::<256>::new();
-                    let default_port = if self.is_https { 443 } else { 80 };
-                    if self.request_port != default_port {
-                        let _ = write!(
-                            url,
-                            "{}://{}:{}{}",
-                            if self.is_https { "https" } else { "http" },
-                            host_str,
-                            self.request_port,
-                            path_str
-                        );
-                    } else {
-                        let _ = write!(
-                            url,
-                            "{}://{}{}",
-                            if self.is_https { "https" } else { "http" },
-                            host_str,
-                            path_str
-                        );
-                    }
+                            .unwrap_or("/"),
+                    );
+                    let host_str: &str = &h2_host;
+                    let path_str: &str = &h2_path;
 
                     self.load_progress = 55;
                     self.status = crate::gui::ui_text(
@@ -4369,9 +4742,12 @@ impl BrowserApp {
                     };
                     let mut h2_headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
 
-                    let mut resp_buf = vec![0u8; 64 * 1024];
-                    match crate::drivers::http::http2_get_full(
-                        &url,
+                    // Gövde sabit tampona değil, büyüyebilen bir Vec'e yazılır:
+                    // 64 KB'lık tampon büyük sayfaları sessizce kesiyordu.
+                    let mut resp_buf: Vec<u8> = Vec::new();
+                    match self.h2_request(
+                        &h2_host,
+                        &h2_path,
                         &mut resp_buf,
                         h2_extra,
                         &mut h2_headers,
@@ -4470,6 +4846,13 @@ impl BrowserApp {
                                 return;
                             }
 
+                            // Alt kaynak (resim/CSS) yanıtı belge olarak
+                            // render edilmez; görsel çözülür, CSS uygulanır.
+                            if self.request_is_resource {
+                                self.finish_resource_request(body, vfs, false);
+                                return;
+                            }
+
                             // HTML gövdesini render et
                             self.load_html(body, 600, 256, None);
                             self.page_loaded = true;
@@ -4527,12 +4910,13 @@ impl BrowserApp {
                 }
                 // HTTPS'te ham (şifreli) kayıtlar HTTP olarak ayrıştırılmaz;
                 // yalnızca çözülmüş uygulama verisi kullanılır.
-                let data_to_parse: &[u8] =
-                    if self.is_https || (tls_established && !self.tls_app_data.is_empty()) {
-                        &self.tls_app_data
-                    } else {
-                        &self.response_data[..self.response_len]
-                    };
+                let https_plaintext =
+                    self.is_https || (tls_established && !self.tls_app_data.is_empty());
+                let data_to_parse: &[u8] = if https_plaintext {
+                    &self.tls_app_data
+                } else {
+                    &self.response_data[..self.response_len]
+                };
 
                 if !data_to_parse.is_empty() {
                     if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {
@@ -4655,6 +5039,7 @@ impl BrowserApp {
                                     crate::drivers::netstack::tcp_close();
                                     crate::drivers::netstack::tcp_clear_result();
                                     self.response_len = 0;
+                                    self.expected_response_len = 0;
                                     self.response_data.clear();
                                     self.response_data.resize(RESPONSE_BUF_MIN, 0);
                                     self.tls_app_data.clear();
@@ -4705,8 +5090,6 @@ impl BrowserApp {
                         // ── Gövde hazırlığı ─────────────────────────────────
                         let body_start = end + 4;
                         let raw_body_len = data_to_parse.len().saturating_sub(body_start);
-                        let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
-                        body_bytes.extend_from_slice(&data_to_parse[body_start..]);
 
                         // Transfer-Encoding: chunked kontrolü
                         let is_chunked = header_is_chunked(headers);
@@ -4715,29 +5098,59 @@ impl BrowserApp {
                             self.tls_session.as_ref().is_some_and(|t| t.peer_closed());
                         let eof = crate::drivers::netstack::tcp_finished() || peer_closed;
 
-                        // Chunked gövde ancak tamamen geldiğinde çözülebilir;
-                        // eksik veriyle çözüm hatalı sonuç verir.
-                        let chunked_decoded = if is_chunked {
-                            crate::drivers::http::decode_chunked(&mut body_bytes, raw_body_len)
-                        } else {
-                            None
-                        };
-
                         // Gövde tamamen alınmadan işleme yapma: yarım gelen bir
                         // JPEG/PNG çözülemez ve sayfa bozuk gösterilir.
                         let body_complete = if is_chunked {
-                            chunked_decoded.is_some()
+                            // Chunked gövde, parçalar tamam gelmeden çözülmez;
+                            // taranma veriyi bozmaz.
+                            chunked_body_complete(&data_to_parse[body_start..])
                         } else if let Some(len) = content_length {
                             raw_body_len >= len
                         } else {
                             eof
                         };
+
+                        // Content-Length biliniyorsa gövde boyutu baştan bellidir:
+                        // beklenen boyut kaydedilir (tampon doğrudan o boyuta
+                        // büyütülür) ve aşırı büyük gövdeler kullanıcıya açık
+                        // bir hata ile bildirilir.
+                        if let Some(len) = content_length {
+                            self.expected_response_len = len;
+                            if len > RESPONSE_BUF_MAX {
+                                self.finish_network_error(crate::gui::ui_text(
+                                    "Sayfa çok büyük (indirilemiyor).",
+                                    "Page too large to download.",
+                                ));
+                                return;
+                            }
+                        }
                         if !body_complete {
                             // Daha fazla veri bekleniyor; bağlantı açık kalsın.
                             return;
                         }
-                        if let Some(decoded_len) = chunked_decoded {
-                            body_bytes.truncate(decoded_len);
+
+                        // Gövdeyi kopyasız devral: şifreli akışta çözülmüş metin
+                        // (tls_app_data), düz akışta ham yanıt tamponu. Böylece
+                        // büyük sayfalar bellekte iki kez kopyalanmaz.
+                        let mut body_bytes: Vec<u8> = if https_plaintext {
+                            core::mem::take(&mut self.tls_app_data)
+                        } else {
+                            let mut raw = core::mem::take(&mut self.response_data);
+                            raw.truncate(self.response_len);
+                            raw
+                        };
+                        // Tampon artık gövdeyi taşımıyor; sayaç sıfırlanır.
+                        self.response_len = 0;
+                        // Başlıklar gövdenin önünde: yalnızca gövde kalsın.
+                        body_bytes.drain(..body_start);
+
+                        if is_chunked {
+                            let raw_len = body_bytes.len();
+                            if let Some(decoded_len) =
+                                crate::drivers::http::decode_chunked(&mut body_bytes, raw_len)
+                            {
+                                body_bytes.truncate(decoded_len);
+                            }
                         } else if let Some(len) = content_length {
                             body_bytes.truncate(len.min(body_bytes.len()));
                         }
@@ -4745,7 +5158,8 @@ impl BrowserApp {
                         // Alt kaynak (resim/CSS) yanıtı belge olarak işlenmez:
                         // görsel çözülür, önbelleğe alınır ve sayfa yeniden çizilir.
                         if self.request_is_resource {
-                            self.finish_resource_request(&body_bytes, vfs);
+                            let keep_alive = self.response_allows_keep_alive(status_line, headers);
+                            self.finish_resource_request(&body_bytes, vfs, keep_alive);
                             return;
                         }
 
@@ -4765,7 +5179,13 @@ impl BrowserApp {
                             self.status = crate::gui::ui_text("Resim açıldı.", "Image opened.");
                         } else {
                             // Basit indirme için son yanıt gövdesini sakla.
-                            self.download_data = Some(body_bytes.clone());
+                            // Büyük sayfalarda gövdenin ikinci bir tam kopyası
+                            // bellekte tutulmaz (sınır: DOWNLOAD_KEEP_MAX).
+                            self.download_data = if body_bytes.len() <= DOWNLOAD_KEEP_MAX {
+                                Some(body_bytes.clone())
+                            } else {
+                                None
+                            };
 
                             self.page_lines.clear();
                             let status_str =
@@ -4837,8 +5257,10 @@ impl BrowserApp {
                         self.request_pending = false;
                         self.request_state = 0;
                         self.request_deadline = 0;
-                        crate::drivers::netstack::tcp_close();
-                        crate::drivers::netstack::tcp_clear_result();
+                        // Bağlantı keep-alive için açık tutulabilir: sayfanın
+                        // kaynakları (CSS/görsel) aynı oturumu kullanır.
+                        let keep_alive = self.response_allows_keep_alive(status_line, headers);
+                        self.finish_response_connection(keep_alive);
                     }
                 }
                 if self.request_pending {
@@ -4881,7 +5303,8 @@ impl BrowserApp {
                             .unwrap_or_else(|| String::from("oturum yok")),
                     );
                     crate::serial_print("\n");
-                    if self.response_len > 0 && !self.page_loaded {
+                    if (self.response_len > 0 || !self.tls_app_data.is_empty()) && !self.page_loaded
+                    {
                         self.finish_http_response();
                     }
                     if self.page_loaded {
@@ -4943,6 +5366,38 @@ impl BrowserApp {
                 self.request_path = path_buf;
                 self.request_path_len = path_len;
                 self.request_port = port;
+
+                // Keep-alive: aynı kaynak için açık bir bağlantı varsa
+                // yeniden kullanılır — DNS, TCP ve TLS el sıkışması atlanır,
+                // istek doğrudan mevcut oturum üzerinden gönderilir.
+                if self.keep_alive_matches(is_https, port, &host_buf[..host_len])
+                    && crate::drivers::netstack::tcp_claim(1)
+                {
+                    self.request_state = 2; // doğrudan "yanıt bekleniyor"
+                    self.request_pending = true;
+                    self.request_deadline = 0;
+                    self.resource_fetch_state = 2;
+                    self.load_progress = 40;
+                    self.status =
+                        crate::gui::ui_text("Kaynak getiriliyor...", "Fetching resource...");
+                    self.reset_response_buffer();
+                    self.tls_app_data.clear();
+                    // Sertifika daha önce doğrulandı; tekrar sorgulanmaz.
+                    self.revocation_checked = true;
+                    // El sıkışma zaten tamamlandı: yeniden Finished gönderilmez.
+                    self.tls13_finished_sent = true;
+                    let req_buf = self.build_request();
+                    if self.is_https {
+                        // Şifreli istek: state 2 dalı mevcut TLS oturumuyla
+                        // şifreleyip gönderir.
+                        self.tls_pending_request = req_buf;
+                        self.tls_request_sent = false;
+                    } else {
+                        let _ = crate::drivers::netstack::tcp_send(&req_buf);
+                    }
+                    return;
+                }
+
                 self.request_state = 0;
                 self.request_pending = true;
                 self.request_deadline = 0;

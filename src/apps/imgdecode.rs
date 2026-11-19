@@ -2737,8 +2737,23 @@ fn is_svg(data: &[u8]) -> bool {
     offset + 4 <= remaining.len() && &remaining[offset..offset + 4] == b"<svg"
 }
 
-/// Basit SVG kod çözücü (temel şekiller için).
+/// SVG kod çözücü.
+///
+/// Önce tarayıcının tam rasterizer'ı denenir (`browser::svg::render_svg`):
+/// path/gradient/transform desteği vardır ve satır içi `<svg>` ile harici SVG
+/// dosyaları aynı motorla çizilir. Bu yol başarısız olursa aşağıdaki basit
+/// çözücüye (yalnızca temel şekiller) düşülür.
 pub fn decode_svg(data: &[u8]) -> Option<DecodedImage> {
+    if let Some((width, height, rgb)) = crate::apps::browser::svg::render_svg(data) {
+        if width > 0 && height > 0 {
+            return Some(DecodedImage {
+                width,
+                height,
+                rgb,
+                format: "svg",
+            });
+        }
+    }
     // Parse SVG to extract viewBox or default size
     let svg_text = core::str::from_utf8(data).ok()?;
 

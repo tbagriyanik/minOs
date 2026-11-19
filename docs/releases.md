@@ -8,6 +8,13 @@ README'den ayrılan v1.6.0 ve v1.5.0 değişiklik listeleri.
 
 ## Yenilikler (v2.5.0)
 
+- **🌐 Web Tarayıcısı Ağ Katmanı Yenilemesi:**
+  - **Yanıt tamponu sınırı 512 KB → 8 MB:** `Content-Length` biliniyorsa tampon doğrudan o boyuta büyütülür; sınır aşılırsa veri sessizce kesilmek yerine kullanıcıya açık hata gösterilir. HTTPS akışında şifreli kayıtlar artık tamponda saklanmaz (doğrudan TLS oturumuna beslenir), böylece düz metin sınırı şifreli sınırla sınırlanmaz ve gövde kopyası bellekte iki kez tutulmaz.
+  - **HTTP/2 gövde kesme duvarı kaldırıldı:** ALPN ile `h2` seçen sunucularda yanıt 64 KB'lık sabit tamponla sınırlanıp sessizce kesiliyordu; gövde artık 8 MB sınırına kadar büyüyebilen bir tampona yazılır.
+  - **Keep-alive:** İstekler `Connection: keep-alive` ile gönderilir. Sunucu `Connection: close` demediğinde bağlantı açık tutulur ve aynı kaynağa yapılan sonraki isteklerde (CSS/görsel/JS) DNS + TCP + TLS el sıkışması atlanır. HTTP/2'de bağlantı saklanır ve istekler mevcut bağlantıda yeni akışlar üzerinden gönderilir.
+  - **User-Agent güncellendi:** `minOs/1.5` yerine ortak tek kaynaktan (`src/user_agent.rs`) yönetilen `Mozilla/5.0 (…) Firefox/128.0 minOs/2.5` gönderilir; tanınmayan User-Agent nedeniyle bot koruması tetiklenen sitelerin engellenmesi azaltılır.
+  - **SVG hattı:** Harici SVG dosyaları da satır içi `<svg>` ile aynı rasterizer'dan (`browser::svg`) geçer; eski `WIP` yorumu kaldırıldı.
+- **🧪 QPACK/Huffman tamamlandı:** HPACK/QPACK ortak Huffman tablosuna **kodlayıcı** eklendi (RFC 7541 Ek C.4.1 vektörüyle doğrulandı) ve QPACK gönderimi artık isim/değer dizgelerini Huffman ile sıkıştırıyor; çözücü tarafında ad için `H` baytı destekleniyor. Dinamik tablo çözücüsü zaten mevcuttu ve testlerle doğrulanıyor.
 - **✅ P1 bellek ve süreç testleri (Doğrulandı):** `brk` büyütme/küçültme, `mmap`/`munmap` sınır ve hata testleri, dosya tanıtıcısı yaşam döngüsü, süreç kaynak limitleri ve `fork` aktarımı, COW yazma hatası QEMU `default` profilinde geçti (`test-report.md`, 36/36 ✅).
 - **✅ GUI duman testleri (Doğrulandı, host):** açılış, yükleme, hata ve kapanış ekranları `screen_layout` üzerinden ortak geometri/metin kullanıyor; `[GUI-SMOKE]` seri marker'ı ve host testleri eklendi; QEMU `default` profilinde ✅ doğrulandı.
 - **✅ Uygulama hataları ve kurtarma (Doğrulandı, kod):** kararlı hata kodları, TR/EN açıklama ve kurtarma adımları; Dosya Yöneticisi sürükle-bırak hataları ile bellek guard bildirimleri bu yollara bağlandı.

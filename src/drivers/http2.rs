@@ -16,6 +16,12 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+/// Tek bir yanıt gövdesinin azami boyutu (bayt).
+///
+/// Sabit 64 KB'lık tamponlar büyük sayfaları sessizce kesiyordu; bu sınır
+/// tarayıcıdaki `RESPONSE_BUF_MAX` ile aynı (8 MB).
+pub const MAX_RESPONSE_BODY: usize = 8 * 1024 * 1024;
+
 /// HTTP/2 çerçeve türleri ve sabitleri.
 pub mod h2 {
     use alloc::vec::Vec;
@@ -1272,7 +1278,7 @@ impl Http2Connection {
         &mut self,
         authority: &[u8],
         path: &[u8],
-        resp_buf: &mut [u8],
+        resp_buf: &mut Vec<u8>,
         extra_headers: &[(&[u8], &[u8])],
         resp_headers: &mut h2::HeaderList,
     ) -> Result<(u16, usize, usize), i32> {
@@ -1288,7 +1294,7 @@ impl Http2Connection {
         &mut self,
         authority: &[u8],
         path: &[u8],
-        resp_buf: &mut [u8],
+        resp_buf: &mut Vec<u8>,
         extra_headers: &[(&[u8], &[u8])],
         resp_headers: &mut h2::HeaderList,
     ) -> Result<(u16, usize, usize), i32> {
@@ -1409,8 +1415,8 @@ impl Http2Connection {
                             self.connection_window =
                                 self.connection_window.saturating_sub(data_len);
 
-                            if body.len() < resp_buf.len() {
-                                let room = resp_buf.len() - body.len();
+                            if body.len() < MAX_RESPONSE_BODY {
+                                let room = MAX_RESPONSE_BODY - body.len();
                                 body.extend_from_slice(&data[..data.len().min(room)]);
                             }
                             if fh.flags & h2::FLAG_END_STREAM != 0 {
@@ -1477,8 +1483,8 @@ impl Http2Connection {
                 continue; // Aynı tamponda başka çerçeve olabilir.
             }
 
-            if body.len() >= resp_buf.len() && !resp_buf.is_empty() {
-                break; // Yanıt tamponu doldu.
+            if body.len() >= MAX_RESPONSE_BODY {
+                break; // Yanıt boyutu sınırına ulaşıldı.
             }
             if crate::boot::time::main_monotonic_ms() > deadline {
                 return Err(socket::E_TIMEOUT);
@@ -1499,12 +1505,13 @@ impl Http2Connection {
         // İşlenmemiş çerçeve baytlarını bir sonraki get() için sakla.
         self.rx_pending = pending;
 
-        // Gövdeyi resp_buf'ye kopyala.
+        // Gövdeyi `resp_buf`'ye (büyüyebilen Vec) kopyala.
         let status = status_code.unwrap_or(200);
-        let copy_len = body.len().min(resp_buf.len());
-        resp_buf[..copy_len].copy_from_slice(&body[..copy_len]);
+        let body_len = body.len();
+        resp_buf.clear();
+        resp_buf.extend_from_slice(&body);
 
-        Ok((status, 0, copy_len))
+        Ok((status, 0, body_len))
     }
 
     /// HEADERS/DATA çerçeve payload'ından padding'i ve HEADERS durumunda
@@ -1537,7 +1544,7 @@ impl Http2Connection {
         &mut self,
         authority: &[u8],
         path: &[u8],
-        resp_buf: &mut [u8],
+        resp_buf: &mut Vec<u8>,
         extra_headers: &[(&[u8], &[u8])],
         resp_headers: &mut h2::HeaderList,
     ) -> Result<(u16, usize, usize), i32> {
@@ -1546,7 +1553,9 @@ impl Http2Connection {
         req.extend_from_slice(path);
         req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
         req.extend_from_slice(authority);
-        req.extend_from_slice(b"\r\nUser-Agent: minOs/1.0\r\nAccept: */*\r\nConnection: close\r\n");
+        req.extend_from_slice(b"\r\nUser-Agent: ");
+        req.extend_from_slice(crate::user_agent::USER_AGENT.as_bytes());
+        req.extend_from_slice(b"\r\nAccept: */*\r\nConnection: close\r\n");
         for (name, value) in extra_headers {
             if name.is_empty() {
                 continue;
@@ -1582,7 +1591,7 @@ impl Http2Connection {
                     }
                 }
             }
-            if raw.len() >= resp_buf.len() + 8192 {
+            if raw.len() >= MAX_RESPONSE_BODY {
                 break; // Yeterli veri toplandı.
             }
             if crate::boot::time::main_monotonic_ms() > deadline {
@@ -1640,9 +1649,10 @@ impl Http2Connection {
             }
         }
 
-        let copy_len = body.len().min(resp_buf.len());
-        resp_buf[..copy_len].copy_from_slice(&body[..copy_len]);
-        Ok((status, 0, copy_len))
+        let body_len = body.len();
+        resp_buf.clear();
+        resp_buf.extend_from_slice(&body);
+        Ok((status, 0, body_len))
     }
 
     /// Bağlantıyı kapatır (h2 ise GOAWAY gönderir).
@@ -1694,7 +1704,11 @@ fn parse_status_code(v: &[u8]) -> Option<u16> {
 /// Yeni bir bağlantı kurar, istek gönderir, yanıtı okur ve bağlantıyı kapatır.
 pub fn http2_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i32> {
     let mut headers = Vec::new();
-    http2_get_full(url, resp_buf, &[], &mut headers)
+    let mut body: Vec<u8> = Vec::new();
+    let (status, hlen, len) = http2_get_full_vec(url, &mut body, &[], &mut headers)?;
+    let copy_len = len.min(resp_buf.len()).min(body.len());
+    resp_buf[..copy_len].copy_from_slice(&body[..copy_len]);
+    Ok((status, hlen, copy_len))
 }
 
 /// `http2_get`'in genişletilmiş sürümü: `req_extra` ile ek istek başlıkları
@@ -1703,6 +1717,24 @@ pub fn http2_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), 
 pub fn http2_get_full(
     url: &str,
     resp_buf: &mut [u8],
+    req_extra: &[(&[u8], &[u8])],
+    resp_headers: &mut h2::HeaderList,
+) -> Result<(u16, usize, usize), i32> {
+    let mut body: Vec<u8> = Vec::new();
+    let (status, hlen, len) = http2_get_full_vec(url, &mut body, req_extra, resp_headers)?;
+    let copy_len = len.min(resp_buf.len()).min(body.len());
+    resp_buf[..copy_len].copy_from_slice(&body[..copy_len]);
+    Ok((status, hlen, copy_len))
+}
+
+/// `http2_get_full`'in büyüyebilir gövde sürümü.
+///
+/// Gövde `resp` içine yazılır ve boyut sınırına (MAX_RESPONSE_BODY) kadar
+/// büyüyebilir; sabit 64 KB'lık bir tamponla büyük sayfalar sessizce
+/// kesilmezdi.
+pub fn http2_get_full_vec(
+    url: &str,
+    resp: &mut Vec<u8>,
     req_extra: &[(&[u8], &[u8])],
     resp_headers: &mut h2::HeaderList,
 ) -> Result<(u16, usize, usize), i32> {
@@ -1716,7 +1748,7 @@ pub fn http2_get_full(
     let result = conn.get(
         &host[..host_len],
         &path[..path_len],
-        resp_buf,
+        resp,
         req_extra,
         resp_headers,
     );

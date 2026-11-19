@@ -1206,6 +1206,19 @@ pub fn tcp_clear_result() {
     }
 }
 
+/// Bir sonraki HTTP isteği için bağlantıyı **açık tutarak** durumu temizler.
+///
+/// `tcp_clear_result` bağlantıyı da kapatır (TCP_CONNECTED = false); HTTP
+/// keep-alive'da bağlantı açık kalmalı, yalnızca alınan veri ve son durum
+/// bayrakları sıfırlanmalıdır.
+pub fn tcp_clear_result_keep_conn() {
+    unsafe {
+        TCP_DATA_LEN = 0;
+        TCP_FIN_RECEIVED = false;
+        TCP_RESET = false;
+    }
+}
+
 /// UDP datagram gönderir. IPv4 UDP checksum'i isteğe bağlı olduğu için sıfır bırakılır.
 pub fn send_udp(dst: Ipv4Address, src_port: u16, dst_port: u16, data: &[u8]) -> bool {
     if data.len() > 1400 {

@@ -263,6 +263,35 @@ pub const HUFFMAN: &[(u32, u8)] = &[
     (0x3ffffee, 26),
     (0x3fffffff, 30), // EOS (256)
 ];
+/// Veriyi HPACK/QPACK Huffman kodlamasıyla sıkıştırır (RFC 7541 Ek B).
+///
+/// Çıktı bit düzeyinde üretilir: son bayt, kalan bitler EOS sembolünün
+/// (tümü 1) en anlamlı bitleriyle doldurulur. Doldurma 7 bayttan uzun
+/// olamaz (RFC 7541 §5.2).
+pub fn encode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut acc: u64 = 0;
+    let mut bits: u32 = 0;
+    for &byte in data {
+        let (code, len) = HUFFMAN[byte as usize];
+        acc = (acc << len) | u64::from(code);
+        bits += u32::from(len);
+        while bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xFF) as u8);
+        }
+        // Tüketilen üst bitler temizlenir (akümülatör taşmasın).
+        acc &= if bits == 0 { 0 } else { (1u64 << bits) - 1 };
+    }
+    if bits > 0 {
+        // Kalan bitler EOS önekiyle (hepsi 1) doldurulur.
+        let pad = 8 - bits;
+        let value = (acc << pad) | ((1u64 << pad) - 1);
+        out.push((value & 0xFF) as u8);
+    }
+    out
+}
+
 /// Huffman kodu `data` içinden çözer; semboller MSB-öncelikli okunur.
 /// Girdi bitleri EOS önekiyle (hepsi 1) doldurulur; kalan dolgulu bitler
 /// yok sayılır. `index`, `HuffmanDecoder::new` tarafından kurulan
@@ -307,4 +336,35 @@ pub fn build_index() -> Vec<(u64, u16)> {
 /// Kolaylık sarmalayıcısı: indeks her çağrıda kurulur (nadir kullanım).
 pub fn decode(data: &[u8]) -> Option<Vec<u8>> {
     decode_with_index(&build_index(), data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn huffman_encode_known_vector() {
+        // RFC 7541 Ek C.4.1: "www.example.com" Huffman kodu (12 bayt).
+        let encoded = encode(b"www.example.com");
+        assert_eq!(
+            encoded,
+            vec![0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff]
+        );
+    }
+
+    #[test]
+    fn huffman_encode_decode_roundtrip() {
+        let data = b"minOs/2.5 Mozilla/5.0 (X11; Linux x86_64) gzip, deflate, br";
+        let encoded = encode(data);
+        // Sıkıştırma kazancı: ASCII başlıklar ~%25 küçülür.
+        assert!(encoded.len() < data.len());
+        let decoded = decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn huffman_encode_empty() {
+        assert!(encode(b"").is_empty());
+    }
 }

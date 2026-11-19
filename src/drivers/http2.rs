@@ -1083,14 +1083,16 @@ impl Http2Connection {
             })()?;
 
         // ALPN sonucu: h2 seçildiyse HTTP/2, değilse HTTP/1.1'e düş.
-        // Şifresiz http:// için prior-knowledge HTTP/2 varsayılır.
+        // Şifresiz HTTP'de prior-knowledge h2 kullanma: port 80'deki çoğu
+        // sunucu HTTP/1.1 bekler ve HTTP/2 preface'i görünce bağlantıyı kapatır.
+        // h2c yükseltmesi ayrıca doğrulanana kadar HTTP/1.1 güvenli varsayılandır.
         let h2_enabled = if is_https {
             tls_session
                 .as_ref()
                 .and_then(|s| s.negotiated_protocol())
                 .is_some_and(|p| p == b"h2")
         } else {
-            true
+            false
         };
 
         let mut conn = Self {
@@ -1129,7 +1131,7 @@ impl Http2Connection {
 
     /// Uygulama verisini gönderir: TLS oturumu varsa şifreler, değilse düz.
     /// Kısmi gönderimleri de tamamlar.
-    fn send_app_data(&mut self, data: &[u8]) -> Result<(), i32> {
+    pub fn send_app_data(&mut self, data: &[u8]) -> Result<(), i32> {
         let mut off = 0usize;
         while off < data.len() {
             let sent = if self.tls_session.is_some() {

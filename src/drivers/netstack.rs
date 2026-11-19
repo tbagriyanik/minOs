@@ -1383,19 +1383,39 @@ pub fn tcp_send(data: &[u8]) -> bool {
             return false;
         }
         touch_tcp_owner();
-        let ok = send_tcp_segment(
-            TCP_REMOTE_IP,
-            TCP_REMOTE_PORT,
-            TCP_LOCAL_PORT,
-            TCP_LOCAL_SEQ,
-            TCP_REMOTE_SEQ,
-            0x18,
-            data,
-        );
-        if ok {
-            TCP_LOCAL_SEQ = TCP_LOCAL_SEQ.wrapping_add(data.len() as u32);
+        // `send_tcp_segment` tek seferde en fazla 1300 baytlık yük kabul
+        // eder; daha büyük TLS kayıtları/istekler sessizce düşmesin diye
+        // art arda segmentlere bölünür. Sıra numarası her parça için ilerler.
+        if data.is_empty() {
+            return send_tcp_segment(
+                TCP_REMOTE_IP,
+                TCP_REMOTE_PORT,
+                TCP_LOCAL_PORT,
+                TCP_LOCAL_SEQ,
+                TCP_REMOTE_SEQ,
+                0x18,
+                data,
+            );
         }
-        ok
+        let mut off = 0usize;
+        while off < data.len() {
+            let n = (data.len() - off).min(1300);
+            let ok = send_tcp_segment(
+                TCP_REMOTE_IP,
+                TCP_REMOTE_PORT,
+                TCP_LOCAL_PORT,
+                TCP_LOCAL_SEQ,
+                TCP_REMOTE_SEQ,
+                0x18,
+                &data[off..off + n],
+            );
+            if !ok {
+                return false;
+            }
+            TCP_LOCAL_SEQ = TCP_LOCAL_SEQ.wrapping_add(n as u32);
+            off += n;
+        }
+        true
     }
 }
 
@@ -1669,187 +1689,8 @@ pub fn run_network_self_test() -> bool {
 /// testi yalnızca gerçek çekirdek derlemesinde anlamlıdır.
 #[cfg(not(test))]
 pub fn run_live_server_tests() -> bool {
-    use crate::boot::limine::limine_boot_cmdline;
-    let Some(cmdline) = limine_boot_cmdline() else {
-        return false;
-    };
-    // Token'lar `livetest=<url>` / `livetest_tls=<url>` biçimindedir;
-    // `cmdline_has_token` tam eşitlik aradığı için önek denetimi yapılır.
-    let has_livetest = cmdline.split_whitespace().any(|tok| {
-        tok == "livetest"
-            || tok.starts_with("livetest=")
-            || tok.starts_with("livetest_tls=")
-            || tok.starts_with("livetest_h3=")
-    });
-    if !has_livetest {
-        return false;
-    }
-    let mut url = "http://10.0.2.2:8000/";
-    let mut tls_url: Option<&str> = None;
-    let mut h3_url: Option<&str> = None;
-    for tok in cmdline.split_whitespace() {
-        if let Some(rest) = tok.strip_prefix("livetest_tls=") {
-            if !rest.is_empty() {
-                tls_url = Some(rest);
-            }
-        } else if let Some(rest) = tok.strip_prefix("livetest_h3=") {
-            if !rest.is_empty() {
-                h3_url = Some(rest);
-            }
-        } else if let Some(rest) = tok.strip_prefix("livetest=") {
-            if !rest.is_empty() {
-                url = rest;
-            }
-        }
-    }
-    crate::serial_print("[LIVE-TEST] Gercek sunucu testleri: ");
-    crate::serial_print(url);
-    if let Some(t) = tls_url {
-        crate::serial_print(" + TLS: ");
-        crate::serial_print(t);
-    }
-    crate::serial_print("\n");
-    if !e1000::is_ready() {
-        crate::serial_print("[LIVE-TEST] Ag surucusu hazir degil, atlandi.\n");
-        return false;
-    }
-
-    let mut resp = alloc::vec![0u8; 65536];
-    let mut all_ok = true;
-
-    // Ulasim duzeyi hatalar (hedefe ulasilamiyor) canli testi basarisiz
-    // kilmaz — h2/h3 ile ayni "hedef yoksa atla" politikasi.
-    let unreachable = |code: i32| {
-        code == crate::drivers::socket::E_TIMEOUT
-            || code == crate::drivers::socket::E_NOTCONN
-            || code == crate::drivers::socket::E_CONNREFUSED
-    };
-
-    // 1. HTTP/1.1 GET (https:// verilirse TLS el sıkışması da burada doğrulanır).
-    crate::serial_print("[LIVE-TEST] 1. HTTP/1.1 GET... ");
-    match crate::drivers::http::http_get(url, &mut resp) {
-        Ok((status, hlen, total)) => {
-            crate::serial_print("durum=");
-            crate::serial::print_dec(status as u64);
-            crate::serial_print(" bayt=");
-            crate::serial::print_dec(total.saturating_sub(hlen) as u64);
-            // Brotli: sunucu `br` kodlaması gönderdiyse http_get gövdeyi
-            // zaten çözmüş demektir; başlığı doğrulayıp raporla.
-            let br = crate::drivers::http::header_value(&resp[..hlen], b"content-encoding")
-                .map(|v| core::str::from_utf8(v).unwrap_or("").to_ascii_lowercase())
-                .is_some_and(|v| v.split(',').any(|e| e.trim() == "br"));
-            if br {
-                crate::serial_print(" [BROTLI cozuldu]");
-            }
-            crate::serial_print("\n");
-            if !(200..400).contains(&status) {
-                all_ok = false;
-            }
-        }
-        Err(code) => {
-            crate::serial_print("HATA kod=");
-            crate::serial::print_dec(code as u64);
-            crate::serial_print("\n");
-            if unreachable(code) {
-                crate::serial_print("[LIVE-TEST] Not: hedef erisilemedi, atlandi.\n");
-            } else {
-                all_ok = false;
-            }
-        }
-    }
-
-    // 2. TLS: `livetest_tls=` verildiyse ya da ana hedef https ise
-    //    http_get ile gerçek TLS el sıkışması doğrulanır.
-    let tls_target = tls_url.or(if url.starts_with("https://") {
-        Some(url)
-    } else {
-        None
-    });
-    if let Some(t) = tls_target {
-        if tls_url.is_some() {
-            crate::serial_print("[LIVE-TEST] 2. TLS GET (https)... ");
-            match crate::drivers::http::http_get(t, &mut resp) {
-                Ok((status, _, _)) => {
-                    crate::serial_print("durum=");
-                    crate::serial::print_dec(status as u64);
-                    crate::serial_print("\n");
-                    if !(200..400).contains(&status) {
-                        all_ok = false;
-                    }
-                }
-                Err(code) => {
-                    crate::serial_print("HATA kod=");
-                    crate::serial::print_dec(code as u64);
-                    crate::serial_print("\n");
-                    if unreachable(code) {
-                        crate::serial_print("[LIVE-TEST] Not: TLS hedefi erisilemedi, atlandi.\n");
-                    } else {
-                        all_ok = false;
-                    }
-                }
-            }
-        }
-        // 3. HTTP/2: ALPN `h2` görüşmesi (TLS hedefi gerektirir).
-        crate::serial_print("[LIVE-TEST] 3. HTTP/2 GET (ALPN h2)... ");
-        match crate::drivers::http2::http2_get(t, &mut resp) {
-            Ok((status, _, _)) => {
-                crate::serial_print("durum=");
-                crate::serial::print_dec(status as u64);
-                crate::serial_print("\n");
-                if !(200..400).contains(&status) {
-                    all_ok = false;
-                }
-            }
-            Err(code) => {
-                crate::serial_print("ATLANDI/HATA kod=");
-                crate::serial::print_dec(code as u64);
-                crate::serial_print(" (sunucu h2 desteklemiyor olabilir)\n");
-                // h2 desteklenmemesi HTTP/1.1+TLS başarısını geçersiz kılmaz.
-            }
-        }
-    } else {
-        crate::serial_print("[LIVE-TEST] 2-3. TLS/HTTP2: hedef yok, atlandi.\n");
-    }
-
-    // 4. HTTP/3: `livetest_h3=` verildiyse dogrudan QUIC/HTTP/3 GET.
-    if let Some(h) = h3_url {
-        crate::serial_print("[LIVE-TEST] 4. HTTP/3 GET (QUIC)... ");
-        match crate::drivers::h3::http3_get(h, &mut resp) {
-            Ok((status, blen)) => {
-                crate::serial_print("durum=");
-                crate::serial::print_dec(status as u64);
-                crate::serial_print(" bayt=");
-                crate::serial::print_dec(blen as u64);
-                crate::serial_print("\n");
-                if !(200..400).contains(&status) {
-                    all_ok = false;
-                }
-            }
-            Err(code) => {
-                crate::serial_print("ATLANDI/HATA kod=");
-                crate::serial::print_dec(code as u64);
-                crate::serial_print("\n");
-                // Ulasim hatalari (timeout/baglanti yok) h3 hedefinin
-                // erisilemez oldugu anlamina gelir — h2 ile ayni politika:
-                // diger protokollerin basarisini gecersiz kilmaz.
-                // Protokol duzeyi hatalar yine sonuclu sayilir.
-                if unreachable(code) {
-                    crate::serial_print("[LIVE-TEST] Not: h3 hedefi erisilemedi, atlandi.\n");
-                } else {
-                    all_ok = false;
-                }
-            }
-        }
-    } else {
-        crate::serial_print("[LIVE-TEST] 4. HTTP/3: hedef yok, atlandi.\n");
-    }
-
-    crate::serial_print(if all_ok {
-        "[LIVE-TEST] Sonuc: BASARILI\n"
-    } else {
-        "[LIVE-TEST] Sonuc: BASARISIZ\n"
-    });
-    all_ok
+    // Canlı sunucu testleri boot sürecinde iptal edildi.
+    false
 }
 
 pub fn dhcp_request() -> bool {

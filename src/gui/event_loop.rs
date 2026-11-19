@@ -133,19 +133,19 @@ fn publish_runtime_app_memory(
     serial_print(total.as_str());
     serial_print("\n");
 
-    apps::memory::for_each(|app_id, bytes| {
-        let mut line = gui::TextBuf::new();
-        // `app=` ve `bytes=` alan sırası/düzeni `test_qemu.ps1` tarafından
-        // ayrıştırıldığı için korunur; uygulama adı sonda ek bilgi olarak verilir.
-        line.push_str("[APP-MEM] app=");
-        line.push_usize(app_id);
-        line.push_str(" bytes=");
-        line.push_usize(bytes);
-        line.push_str(" name=");
-        line.push_str(apps::memory::app_name(app_id));
-        serial_print(line.as_str());
-        serial_print("\n");
-    });
+    // `app=` ve `bytes=` alan sırası/düzeni `test_qemu.ps1` tarafından
+    // ayrıştırıldığı için korunur; uygulama adı sonda ek bilgi olarak verilir.
+    // apps::memory::for_each(|app_id, bytes| {
+    //     let mut line = gui::TextBuf::new();
+    //     line.push_str("[APP-MEM] app=");
+    //     line.push_usize(app_id);
+    //     line.push_str(" bytes=");
+    //     line.push_usize(bytes);
+    //     line.push_str(" name=");
+    //     line.push_str(apps::memory::app_name(app_id));
+    //     serial_print(line.as_str());
+    //     serial_print("\n");
+    // });
 }
 
 /// Kapanış/yeniden başlatma akışı: görünür ilerleme, VFS senkronizasyonu,

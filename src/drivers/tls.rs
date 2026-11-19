@@ -595,8 +595,15 @@ pub struct TlsSession {
     client_gcm: Option<Gcm>,
     server_seq: u64,
     client_seq: u64,
-    record_buffer: HeaplessVec<u8, 8192>,
-    hs_buffer: HeaplessVec<u8, 8192>,
+    /// Gelen TLS kayıtlarının biriktirildiği tampon. Bir TLS kaydı en fazla
+    /// ~16.6 KB (2^14 düz metin + başlık/genişleme) olabilir; sabit kapasiteli
+    /// tampon bu boyutu karşılayamaz ve taşmada `extend_from_slice` sessizce
+    /// veri düşürürdü — büyük HTTPS yanıtları bu yüzden zaman aşımına uğrardı.
+    /// Bu nedenle büyüyebilen `Vec` kullanılır.
+    record_buffer: Vec<u8>,
+    /// El sıkışma mesajlarının birleştirildiği tampon. Certificate gibi
+    /// büyük el sıkışma mesajları 8 KB'ı aşabildiği için büyüyebilir.
+    hs_buffer: Vec<u8>,
     /// TLS 1.2 handshake hash (hash of all handshake messages).
     handshake_hash: Sha256,
     /// TLS 1.3 el sıkışmada kullanılan hash algoritması. ServerHello'daki paket
@@ -604,10 +611,11 @@ pub struct TlsSession {
     tls13_hash_alg: Tls13HashAlg,
     /// TLS 1.3 transcript: ham el sıkışma mesaj çerçeveleri. Hash algoritması
     /// paketle birlikte kesinleştiğinden (SHA-256 / SHA-384) ham baytlar
-    /// saklanır; Transcript-Hash gerektiğinde hesaplanır. 8192 bayt, büyük
-    /// sertifika zincirleri (örn. example.com ~3.7 KB) ile birlikte tüm el
-    /// sıkışma mesajlarını sarmak için yeterlidir.
-    tls13_transcript: HeaplessVec<u8, 8192>,
+    /// saklanır; Transcript-Hash gerektiğinde hesaplanır. Sertifika zinciri
+    /// gibi büyük el sıkışma mesajları toplamda 8 KB'ı aşabildiği için
+    /// büyüyebilen `Vec` kullanılır (sabit tampon taşmasında el sıkışma
+    /// transcript'i bozulurdu).
+    tls13_transcript: Vec<u8>,
     outgoing: HeaplessVec<u8, 2048>,
     /// Alınan son TLS uyarısı (seviye, açıklama).
     last_alert: Option<(u8, u8)>,
@@ -776,11 +784,11 @@ impl TlsSession {
             client_gcm: None,
             server_seq: 0,
             client_seq: 0,
-            record_buffer: HeaplessVec::new(),
-            hs_buffer: HeaplessVec::new(),
+            record_buffer: Vec::new(),
+            hs_buffer: Vec::new(),
             handshake_hash: Sha256::new(),
             tls13_hash_alg: Tls13HashAlg::Sha256,
-            tls13_transcript: HeaplessVec::new(),
+            tls13_transcript: Vec::new(),
             outgoing: HeaplessVec::new(),
             last_alert: None,
             peer_closed: false,
@@ -970,7 +978,9 @@ impl TlsSession {
     /// Uygulama verisi kaydı sayısını rate limiting için kaydeder.
     /// Dönüş: kayıt kabul edildi mi? (false = rate limit aşıldı).
     pub fn record_app_data(&mut self) -> bool {
-        const MAX_RECORDS_PER_WINDOW: usize = 100;
+        // 100 kayıt/sn gerçek sayfa indirmelerinde (büyük HTML + çok sayıda
+        // TLS kaydı) aşılabiliyordu; meşru trafik için yeterli bir üst sınır.
+        const MAX_RECORDS_PER_WINDOW: usize = 8192;
         const WINDOW_MS: u64 = 1000;
 
         let now = crate::monotonic_ms();
@@ -1001,11 +1011,11 @@ impl TlsSession {
         self.handshake_hash.update(client_hello_body);
         // TLS 1.3 transcript'i ham bayt olarak biriktirilir (hash algoritması
         // ServerHello'daki paketle kesinleşir).
-        let _ = self.tls13_transcript.extend_from_slice(client_hello_body);
+        self.tls13_transcript.extend_from_slice(client_hello_body);
     }
 
     pub fn feed_tcp_data(&mut self, data: &[u8]) {
-        let _ = self.record_buffer.extend_from_slice(data);
+        self.record_buffer.extend_from_slice(data);
     }
 
     pub fn take_outgoing(&mut self) -> HeaplessVec<u8, 2048> {
@@ -1029,12 +1039,10 @@ impl TlsSession {
             let payload = &self.record_buffer[5..5 + len];
             let payload_copy = payload.to_vec();
             let n = 5 + len;
-            let remaining_len = self.record_buffer.len().saturating_sub(n);
-            let _ = remaining_len;
-            let mut remaining = HeaplessVec::<u8, 8192>::new();
-            let _ = remaining.extend_from_slice(&self.record_buffer[n..]);
-            self.record_buffer.clear();
-            let _ = self.record_buffer.extend_from_slice(&remaining);
+            // İşlenen kayıt baştan düşülür; kayıt sınırını aşan kısmi veri
+            // bir sonraki `feed_tcp_data` için saklanır. `Vec::split_off`
+            // kalan kuyruğu yeni tampon olarak döndürür.
+            self.record_buffer = self.record_buffer.split_off(n);
 
             match ctype {
                 TLS_RECORD_HANDSHAKE => {
@@ -1232,7 +1240,7 @@ impl TlsSession {
         out_handshake: &mut Vec<u8>,
     ) -> Result<(), ()> {
         let mut buf = core::mem::take(&mut self.hs_buffer);
-        let _ = buf.extend_from_slice(payload);
+        buf.extend_from_slice(payload);
 
         // El sıkışma mesajı kayıt sınırını aşabilir: tek bir 0x16 kaydında
         // birden fazla mesaj olabildiği gibi (sunucular sık sık böyle yapar)
@@ -1264,11 +1272,7 @@ impl TlsSession {
             if !self.tls13_mode {
                 self.handshake_hash.update(msg_frame);
             }
-            self.tls13_transcript
-                .extend_from_slice(msg_frame)
-                .map_err(|_| {
-                    serial_print("[TLS] Transcript tamponu doldu, el sıkışma iptal ediliyor.\n");
-                })?;
+            self.tls13_transcript.extend_from_slice(msg_frame);
             out_handshake.extend_from_slice(msg_frame);
 
             serial_print("[TLS] HS mesajı geldi: tip=");
@@ -1294,7 +1298,7 @@ impl TlsSession {
                 _ => {}
             }
         }
-        let _ = self.hs_buffer.extend_from_slice(&buf[pos..]);
+        self.hs_buffer = buf.split_off(pos);
         Ok(())
     }
 
@@ -2233,7 +2237,7 @@ impl TlsSession {
         finished.extend_from_slice(&verify_data);
 
         // İstemci Finished transcript'e eklenir.
-        let _ = self.tls13_transcript.extend_from_slice(&finished);
+        self.tls13_transcript.extend_from_slice(&finished);
 
         // RFC 8446 §4.6.1: resumption_master_secret =
         //   Derive-Secret(Master Secret, "res master",
@@ -2525,7 +2529,7 @@ impl TlsSession {
         out.extend_from_slice(&verify_data);
         // Transcript'e eklenir — QUIC tarafı bu baytları CRYPTO stream'e
         // yazacağından TLS transcript'i de aynı sırayı görmelidir.
-        self.tls13_transcript.extend_from_slice(&out).ok()?;
+        self.tls13_transcript.extend_from_slice(&out);
         Some(out)
     }
 

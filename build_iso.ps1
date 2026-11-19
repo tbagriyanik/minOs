@@ -1,4 +1,4 @@
-# minOs Boot Edilebilir ISO Olusturma Betiği (PowerShell)
+﻿# minOs Boot Edilebilir ISO Olusturma Betiği (PowerShell)
 param(
     [string]$IsoName = "minos.iso",
     [string]$OutputDir = "target\iso_root"
@@ -167,12 +167,24 @@ if (-not $oscdimg -and (Test-Path "tools\oscdimg.exe")) { $oscdimg = (Get-Item "
 if (-not $mkisofs -and (Test-Path "tools\mkisofs.exe")) { $mkisofs = (Get-Item "tools\mkisofs.exe").FullName }
 
 # Limine'nin fiziksel USB/UEFI ile uyumlu hybrid ISO tarifi xorriso kullanir.
-# xorriso mevcutsa oscdimg yolunu bilincli olarak devre disi birak.
+# Ancak Windows ortaminda Cygwin/xorriso DLL relocation hatasi verirse oscdimg'e duser.
+if ($xorriso) {
+    try {
+        & $xorriso --version 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "xorriso calistirilamadi; oscdimg alternatifine geciliyor."
+            $xorriso = $null
+        }
+    } catch {
+        Write-Warning "xorriso calistirilamadi; oscdimg alternatifine geciliyor."
+        $xorriso = $null
+    }
+}
 if ($xorriso) {
     $oscdimg = $null
     $mkisofs = $null
 } elseif ($oscdimg) {
-    Write-Warning "xorriso bulunamadi; oscdimg yalnizca sanal makine testleri icin kullaniliyor. Fiziksel USB icin xorriso kurulmasi onerilir."
+    Write-Warning "xorriso bulunamadi veya calistirilamadi; oscdimg kullaniliyor."
 }
 
 if ($oscdimg) {

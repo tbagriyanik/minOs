@@ -85,6 +85,9 @@ const RESPONSE_BUF_MIN: usize = 64 * 1024;
 /// render edilmeden istek zaman aşımına uğruyordu. Sınır 8 MB'ye çıkarıldı;
 /// aşımda veri sessizce kesilmek yerine kullanıcıya açık hata verilir.
 const RESPONSE_BUF_MAX: usize = 8 * 1024 * 1024;
+// Yavaş QEMU/SLIRP bağlantılarında isteği erken kesme. Veri geldikçe
+// request_deadline yenilendiği için bu değer bağlantının boşta kalma süresidir.
+const NETWORK_IDLE_TIMEOUT_MS: usize = 60_000;
 
 /// "Sayfayı indir" için saklanan gövde üst sınırı (bayt).
 ///
@@ -4235,9 +4238,12 @@ impl BrowserApp {
         mark_turn_busy();
         let now = crate::boot::time::main_monotonic_ms();
         if self.request_deadline == 0 {
-            self.request_deadline = now.wrapping_add(15000);
+            self.request_deadline = now.wrapping_add(NETWORK_IDLE_TIMEOUT_MS);
         }
-        if now.wrapping_sub(self.request_deadline) >= usize::MAX / 2 {
+        // Deadline gelecekteyken `now - deadline` unsigned taşar ve isteği
+        // hemen timeout'a sokar. Monotonic saat için doğrudan karşılaştırma
+        // kullan; deadline yalnızca bu alan sıfır değilken aktiftir.
+        if now >= self.request_deadline {
             self.request_pending = false;
             self.status = crate::gui::ui_text(
                 "Ağ isteği zaman aşımına uğradı.",
@@ -4402,7 +4408,10 @@ impl BrowserApp {
                             &mut hello,
                             &mut ecdhe_secret,
                             &mut x25519_secret,
-                            &[b"h2", b"http/1.1"],
+                            // Tarayıcı olay döngüsünü kilitleyen senkron HTTP/2
+                            // yanıt toplama yolu tamamlanana kadar HTTPS'te
+                            // asenkron HTTP/1.1 yolunu seç.
+                            &[b"http/1.1"],
                             &mut psk,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };

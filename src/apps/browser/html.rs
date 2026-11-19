@@ -305,6 +305,17 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
         }
         return None;
     }
+    // `?sorgu` ve `#fragment` tek başına başvurular: temel yol korunur,
+    // yalnızca sorgu/fragment değiştirilir (RFC 3986 §5.2.2).
+    if src.starts_with('?') {
+        let base_clean = base.split('#').next().unwrap_or(base);
+        let base_path = base_clean.split('?').next().unwrap_or(base_clean);
+        return Some(format!("{}{}", base_path, src));
+    }
+    if src.starts_with('#') {
+        let base_clean = base.split('#').next().unwrap_or(base);
+        return Some(format!("{}{}", base_clean, src));
+    }
     let src_clean = src.strip_prefix("./").unwrap_or(src);
     if let Some(scheme_end) = base.find("://") {
         let rest = &base[scheme_end + 3..];
@@ -315,12 +326,61 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
         };
         if let Some(last_slash) = host_and_path.rfind('/') {
             let base_dir = &base[..scheme_end + 3 + last_slash + 1];
-            return Some(format!("{}{}", base_dir, src_clean));
+            return Some(normalize_url_path(&format!("{}{}", base_dir, src_clean)));
         } else {
-            return Some(format!("{}/{}", base, src_clean));
+            return Some(normalize_url_path(&format!("{}/{}", base, src_clean)));
         }
     }
     None
+}
+
+/// Mutlak URL'nin yol bölümündeki `.` ve `..` segmentlerini sadeleştirir
+/// (RFC 3986 §5.2.4). Sorgu ve fragment korunur; şema/yetki kısmına dokunulmaz.
+fn normalize_url_path(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return String::from(url);
+    };
+    let rest = &url[scheme_end + 3..];
+    let path_start = rest.find('/').unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(path_start);
+    // Sorgu/fragment'i yoldan ayır.
+    let (path, suffix) = match tail.find(['?', '#']) {
+        Some(i) => (&tail[..i], &tail[i..]),
+        None => (tail, ""),
+    };
+    let mut out = String::with_capacity(url.len());
+    out.push_str(&url[..scheme_end + 3]);
+    out.push_str(authority);
+    if !path.is_empty() {
+        // Sadeleştirilmiş segmentleri yeniden kur.
+        let mut parts: Vec<&str> = Vec::new();
+        for seg in path.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(seg),
+            }
+        }
+        if path.starts_with('/') {
+            out.push('/');
+        }
+        for (i, seg) in parts.iter().enumerate() {
+            if i > 0 {
+                out.push('/');
+            }
+            out.push_str(seg);
+        }
+        // Sondaki eğik çizgiyi koru ("/a/b/" ≠ "/a/b").
+        if path.ends_with('/') && !out.ends_with('/') {
+            out.push('/');
+        }
+        out.push_str(suffix);
+    } else {
+        out.push_str(suffix);
+    }
+    out
 }
 
 /// `%XX` kaçışlarını bayt dizisine çözer (yerel yollar ve data URL'ler için).

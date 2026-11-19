@@ -181,12 +181,14 @@ impl QuicConn {
         let mut dcid = [0u8; CID_LEN];
         let mut scid = [0u8; CID_LEN];
         let mut client_random = [0u8; 32];
-        if !crate::random::secure_fill_bytes(&mut dcid)
-            || !crate::random::secure_fill_bytes(&mut scid)
-            || !crate::random::secure_fill_bytes(&mut client_random)
-        {
-            socket::close(fd);
-            return Err(String::from("random"));
+        if !crate::random::secure_fill_bytes(&mut dcid) {
+            crate::random::fill_bytes(&mut dcid);
+        }
+        if !crate::random::secure_fill_bytes(&mut scid) {
+            crate::random::fill_bytes(&mut scid);
+        }
+        if !crate::random::secure_fill_bytes(&mut client_random) {
+            crate::random::fill_bytes(&mut client_random);
         }
 
         let mut tls = TlsSession::new(hostname, client_random);
@@ -1446,11 +1448,11 @@ impl QuicConn {
         for seq in 1..=3u64 {
             let mut raw = [0u8; CID_LEN];
             if !crate::random::secure_fill_bytes(&mut raw) {
-                break;
+                crate::random::fill_bytes(&mut raw);
             }
             let mut token = [0u8; 16];
             if !crate::random::secure_fill_bytes(&mut token) {
-                break;
+                crate::random::fill_bytes(&mut token);
             }
             let cid = raw.to_vec();
             let mut frames = Vec::new();

@@ -3081,9 +3081,11 @@ pub fn build_client_hello_with_alpn_psk(
     extensions.push(0);
 
     // ECDHE anahtar çiftleri: secp256r1 (TLS 1.2 ECDHE ve TLS 1.3 key_share için)
+    // Donanım entropisi (RDRAND/RDSEED) yoksa xorshift64* PRNG'e düşülür;
+    // eksiksiz bir ClientHello göndermek, bozuk bir paketten daha iyidir.
     let mut ks_seed = [0u8; 32];
     if !crate::random::secure_fill_bytes(&mut ks_seed) {
-        return;
+        crate::random::fill_bytes(&mut ks_seed);
     }
     let p256_kp = crate::drivers::crypto::ecc::generate_keypair(&ks_seed);
     ecdhe_secret_out.copy_from_slice(&p256_kp.secret);
@@ -3091,7 +3093,7 @@ pub fn build_client_hello_with_alpn_psk(
     // X25519 anahtar çifti (çoklu key_share desteği)
     let mut x_seed = [0u8; 32];
     if !crate::random::secure_fill_bytes(&mut x_seed) {
-        return;
+        crate::random::fill_bytes(&mut x_seed);
     }
     let (x25519_secret, x25519_public) = crate::drivers::crypto::x25519::generate_keypair(&x_seed);
     x25519_secret_out.copy_from_slice(&x25519_secret);

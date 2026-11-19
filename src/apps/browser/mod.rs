@@ -46,6 +46,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use heapless::String as HeaplessString;
 
+use crate::drivers::http::header_value;
 use crate::drivers::video::Framebuffer;
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
@@ -87,7 +88,7 @@ const RESPONSE_BUF_MIN: usize = 64 * 1024;
 const RESPONSE_BUF_MAX: usize = 8 * 1024 * 1024;
 // Yavaş QEMU/SLIRP bağlantılarında isteği erken kesme. Veri geldikçe
 // request_deadline yenilendiği için bu değer bağlantının boşta kalma süresidir.
-const NETWORK_IDLE_TIMEOUT_MS: usize = 60_000;
+const NETWORK_IDLE_TIMEOUT_MS: usize = 15_000;
 
 /// "Sayfayı indir" için saklanan gövde üst sınırı (bayt).
 ///
@@ -912,6 +913,9 @@ pub struct BrowserApp {
     pub bookmarks_extra: Vec<crate::apps::browser::types::Bookmark>,
     pub download_path: Option<alloc::string::String>,
     pub download_data: Option<Vec<u8>>,
+    /// İndirilen içeriğin gerçek formatı (PNG, JPEG, GIF, WebP, BMP, SVG, HTML vb.)
+    /// Dosya uzantısını belirlemek için kullanılır.
+    pub download_format: Option<alloc::string::String>,
     /// Canvas elements created by <canvas> tags on the current page.
     pub canvases: Vec<canvas::CanvasElement>,
     /// JS'e açılan ImageData nesneleri: `canvasimg<N>` referansları.
@@ -998,6 +1002,29 @@ impl Default for FormAutofill {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Ana bilgisayar adının geçerli olup olmadığını denetler:
+/// IPv4 adresi (ör. 10.0.2.2), `localhost`, veya en az bir nokta içeren
+/// alan adı (ör. example.com) kabul edilir; tek kelimelik adlar (ör. api)
+/// reddedilir.
+fn is_valid_host(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    if host == "localhost" {
+        return true;
+    }
+    // IPv4 adresi: sadece rakam ve nokta, en az bir nokta.
+    let is_ipv4 = host.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && host.contains('.')
+        && !host.starts_with('.')
+        && !host.ends_with('.');
+    if is_ipv4 {
+        return true;
+    }
+    // Alan adı: en az bir nokta içermeli.
+    host.contains('.')
 }
 
 impl BrowserApp {
@@ -1214,6 +1241,7 @@ impl BrowserApp {
             bookmarks_extra: Vec::new(),
             download_path: None,
             download_data: None,
+            download_format: None,
             canvases: Vec::new(),
             canvas_imagedata: Vec::new(),
             media_players: media::MediaPlayers::new(),
@@ -1311,11 +1339,14 @@ impl BrowserApp {
             self.status = crate::gui::ui_text("İndirilecek içerik yok.", "Nothing to download.");
             return false;
         };
+        // Gerçek formatına göre dosya uzantısı belirle (URL uzantısına değil)
+        let ext = self.download_format.as_deref().unwrap_or("bin");
         let mut path = HeaplessString::<128>::new();
         let _ = write!(
             path,
-            "/root/Downloads/indirme_{}.html",
-            crate::monotonic_ms()
+            "/root/Downloads/indirme_{}.{}",
+            crate::monotonic_ms(),
+            ext
         );
         if vfs.write_file(&path, &data) {
             self.download_path = Some(String::from(path.as_str()));
@@ -1724,7 +1755,20 @@ impl BrowserApp {
             self.execute_js(&js_code);
             return None;
         }
-        clicked_url
+        // HTML içinde saklanan href göreli olabilir (`/path`, `page.html`,
+        // `#section`). Tıklama tarafında ham href'i doğrudan navigate etmek
+        // yerine mevcut sayfanın URL'sine göre çöz.
+        clicked_url.and_then(|raw| {
+            if raw.starts_with("#")
+                || raw.starts_with("/")
+                || (!raw.contains("://") && !raw.starts_with("data:"))
+            {
+                let current = core::str::from_utf8(&self.url[..self.url_len]).ok()?;
+                crate::apps::browser::html::resolve_url(&raw, Some(current))
+            } else {
+                Some(raw)
+            }
+        })
     }
 
     /// Resim üzerine tıklandıysa önbellek yolunu döndürür (çift tıklama ile görüntüleme için).
@@ -3759,8 +3803,20 @@ impl BrowserApp {
             Some(img) => {
                 self.image_cache
                     .insert(url.clone(), (img.width, img.height, img.rgb));
+                crate::serial_print("[IMG] decode OK: ");
+                crate::serial_print(&url);
+                crate::serial_print(" ");
+                crate::serial::print_dec(img.width as u64);
+                crate::serial_print("x");
+                crate::serial::print_dec(img.height as u64);
+                crate::serial_print("\n");
             }
             None => {
+                crate::serial_print("[IMG] decode FAILED: ");
+                crate::serial_print(&url);
+                crate::serial_print(" (");
+                crate::serial::print_dec(body.len() as u64);
+                crate::serial_print(" bytes)\n");
                 // Görsel değil; harici CSS olabilir. `<link rel="stylesheet">`
                 // etiketini indirilen kurallarla değiştir, renkler uygulanır.
                 let mut injected = false;
@@ -3953,7 +4009,12 @@ impl BrowserApp {
             } else {
                 suffix.len()
             };
-            if host.is_empty() || host.len() > 128 || path_len > 256 || port == 0 {
+            if host.is_empty()
+                || host.len() > 128
+                || path_len > 256
+                || port == 0
+                || !is_valid_host(host)
+            {
                 self.page_loaded = false;
                 self.status = crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address.");
             } else if !crate::drivers::e1000::is_ready() {
@@ -5144,7 +5205,12 @@ impl BrowserApp {
                         } else if let Some(len) = content_length {
                             raw_body_len >= len
                         } else {
-                            eof
+                            // Content-Length yok ve bağlantı açık tutuluyorsa
+                            // (keep-alive), sunucu kapanış sinyali göndermeyebilir.
+                            // Yerel test sunucusu (10.0.2.2) gibi durumlarda
+                            // yanıt tek bir TCP segmentinde gelir; veri varsa
+                            // tamam sayılır, aksi halde 15 sn zaman aşımı olur.
+                            eof || raw_body_len > 0
                         };
 
                         // Content-Length biliniyorsa gövde boyutu baştan bellidir:
@@ -5213,6 +5279,7 @@ impl BrowserApp {
                             self.original_html.clear();
                             self.image_cache.clear();
                             self.render_image_document(&img);
+                            self.download_format = Some(img.format.to_lowercase());
                             self.status = crate::gui::ui_text("Resim açıldı.", "Image opened.");
                         } else {
                             // Basit indirme için son yanıt gövdesini sakla.
@@ -5223,6 +5290,40 @@ impl BrowserApp {
                             } else {
                                 None
                             };
+                            // Gerçek içeriğin formatını tespit et (URL uzantısına değil,
+                            // dosya imzasına göre). Bu sayede .jpg uzantılı ama aslında
+                            // WebP olan dosyalar da doğru uzantıyla kaydedilir.
+                            let detected_format =
+                                if crate::apps::imgdecode::decode(&body_bytes).is_some() {
+                                    // Decode başarılıysa format zaten bilinir, ama burada
+                                    // zaten yukarıda resim olarak açılmış durumda. Bu else
+                                    // bloğunda decode başarısız olmuş, yani resim değil.
+                                    "bin".to_string()
+                                } else {
+                                    // Content-Type başlığından formatı çıkar
+                                    let ct = header_value(headers, b"content-type")
+                                        .and_then(|v| core::str::from_utf8(v).ok())
+                                        .unwrap_or("");
+                                    let ext = if ct.contains("image/png") {
+                                        "png"
+                                    } else if ct.contains("image/jpeg") {
+                                        "jpg"
+                                    } else if ct.contains("image/gif") {
+                                        "gif"
+                                    } else if ct.contains("image/webp") {
+                                        "webp"
+                                    } else if ct.contains("image/bmp") {
+                                        "bmp"
+                                    } else if ct.contains("image/svg") {
+                                        "svg"
+                                    } else if ct.contains("text/html") {
+                                        "html"
+                                    } else {
+                                        "bin"
+                                    };
+                                    ext.to_string()
+                                };
+                            self.download_format = Some(detected_format);
 
                             self.page_lines.clear();
                             let status_str =

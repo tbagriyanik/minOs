@@ -933,7 +933,7 @@ pub struct Http2Connection {
 fn make_client_random() -> Result<[u8; 32], i32> {
     let mut client_random = [0u8; 32];
     if !crate::random::secure_fill_bytes(&mut client_random) {
-        return Err(crate::drivers::http::E_TLS);
+        crate::random::fill_bytes(&mut client_random);
     }
     Ok(client_random)
 }

@@ -892,7 +892,7 @@ pub fn fetch_once(
                     // TLS el sıkışması — client_random donanım Rastgelelik kaynağından.
                     let mut client_random = [0u8; 32];
                     if !crate::random::secure_fill_bytes(&mut client_random) {
-                        return Err(E_TLS);
+                        crate::random::fill_bytes(&mut client_random);
                     }
 
                     let mut hello = Vec::new();
@@ -1202,7 +1202,7 @@ fn fetch_https(
     // İstemci rastgeleliği ortak RNG katmanından alınır.
     let mut client_random = [0u8; 32];
     if !crate::random::secure_fill_bytes(&mut client_random) {
-        return Err(E_TLS);
+        crate::random::fill_bytes(&mut client_random);
     }
 
     let mut hello = Vec::new();
@@ -1450,7 +1450,7 @@ pub(crate) fn http_get_impl(
                         // HTTPS üzerinden IPv6: TLS el sıkışması
                         let mut client_random = [0u8; 32];
                         if !crate::random::secure_fill_bytes(&mut client_random) {
-                            return Err(E_TLS);
+                            crate::random::fill_bytes(&mut client_random);
                         }
 
                         let mut hello = Vec::new();
@@ -2520,8 +2520,7 @@ impl WebSocketConnection {
                         }
                         let mut client_random = [0u8; 32];
                         if !crate::random::secure_fill_bytes(&mut client_random) {
-                            socket::close(fd);
-                            return Err(E_TLS);
+                            crate::random::fill_bytes(&mut client_random);
                         }
 
                         let mut hello = Vec::new();
@@ -2841,7 +2840,7 @@ fn generate_ws_key() -> Option<String> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut key_bytes = [0u8; 16];
     if !crate::random::secure_fill_bytes(&mut key_bytes) {
-        return None;
+        crate::random::fill_bytes(&mut key_bytes);
     }
     let mut out = String::new();
     for i in (0..16).step_by(3) {

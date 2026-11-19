@@ -3822,20 +3822,178 @@ impl TerminalApp {
         self.push_line(QUOTES[idx], Color::ACCENT_PINK);
     }
 
+    /// Beş alt sistemi (CPU, RAM, disk, ağ, ses) sırayla ölçer; her biri
+    /// sabit bir referans değere normalize edilip 0-1000 arası puana
+    /// dönüştürülür. Nihai sonuç beş puanın ortalamasıdır (tek değer).
+    /// Donanımı bulunmayan alt sistem 0 puan alır ve çıktıda belirtilir.
     fn run_benchmark(&mut self, pmm: &PhysicalMemoryManager) {
-        let start = crate::monotonic_ms();
+        // Referans değerler: "ortalama bir masaüstü" beklentisi. Gerçek
+        // donanımın 2 katı hızlı olması ~2000 puan üretir; bileşen başına
+        // 4000 puanla sınırlandırılır ki tek bir hızlı alt sistem toplamı
+        // domine etmesin.
+        const CPU_REF: u64 = 400_000_000; // iterasyon/sn
+        const RAM_REF: u64 = 1_500_000_000; // bayt/sn
+        const DISK_REF: u64 = 15_000_000; // bayt/sn (PIO)
+        const NET_REF: u64 = 20_000_000; // bayt/sn (UDP TX)
+        const AUDIO_REF: u64 = 20_000_000; // örnek/sn (PCM üretimi)
+        const SCORE_CAP: u64 = 4_000;
+
+        fn elapsed_us(start: u64) -> u64 {
+            let delta = crate::boot::time::read_cpu_cycles().wrapping_sub(start);
+            delta / unsafe { crate::boot::time::TSC_CYCLES_PER_US }.max(1)
+        }
+        fn score(value: u64, reference: u64) -> u64 {
+            if value == 0 {
+                return 0;
+            }
+            ((value.saturating_mul(1_000)) / reference.max(1)).min(SCORE_CAP)
+        }
+
+        // 1) CPU: karmaşık aritmetik karışımı.
+        let cpu_start = crate::boot::time::read_cpu_cycles();
         let mut checksum = 0u64;
-        for i in 0..200_000u64 {
+        for i in 0..5_000_000u64 {
             checksum = checksum.rotate_left(5) ^ i.wrapping_mul(0x9e37_79b9);
         }
         core::hint::black_box(checksum);
-        let elapsed = crate::monotonic_ms().wrapping_sub(start);
+        let cpu_us = elapsed_us(cpu_start).max(1);
+        let cpu_ips = 5_000_000u64.saturating_mul(1_000_000) / cpu_us;
+        let cpu_score = score(cpu_ips, CPU_REF);
+
+        // 2) RAM: 4 MiB tampon üzerine desen yazma + checksum okuma.
+        const RAM_SIZE: usize = 4 * 1024 * 1024;
+        let ram_start = crate::boot::time::read_cpu_cycles();
+        let mut ram_buf = alloc::vec![0u8; RAM_SIZE];
+        let mut ram_sum = 0u64;
+        for (i, b) in ram_buf.iter_mut().enumerate() {
+            *b = (i & 0xFF) as u8;
+        }
+        for chunk in ram_buf.as_chunks::<8>().0 {
+            ram_sum = ram_sum.wrapping_add(u64::from_le_bytes(*chunk));
+        }
+        core::hint::black_box(ram_sum);
+        let ram_us = elapsed_us(ram_start).max(1);
+        let ram_bps = (RAM_SIZE as u64)
+            .saturating_mul(2)
+            .saturating_mul(1_000_000)
+            / ram_us;
+        let ram_score = score(ram_bps, RAM_REF);
+        drop(ram_buf);
+
+        // 3) Disk: ATA/USB depolama biriminden ardışık 1 MiB okuma.
+        //    Yalnızca okuma yapılır; diske hiçbir şey yazılmaz.
+        let mut disk_bps = 0u64;
+        {
+            use crate::drivers::ata;
+            const DISK_SECTORS: usize = 2048; // 1 MiB
+            let mut chosen = None;
+            for drive in 0..4u8 {
+                if ata::device(drive)
+                    .map(|d| d.kind == ata::DeviceKind::Ata)
+                    .unwrap_or(false)
+                    && ata::drive_capacity_sectors(drive) > (DISK_SECTORS as u64 + 128)
+                {
+                    chosen = Some(drive);
+                    break;
+                }
+            }
+            if let Some(drive) = chosen {
+                let cap = ata::drive_capacity_sectors(drive);
+                let lba = ((cap / 2).min(0x0FFF_FFFF) as u32) & !63;
+                let mut buf = alloc::vec![0u8; DISK_SECTORS * 512];
+                let disk_start = crate::boot::time::read_cpu_cycles();
+                let got = ata::read_sectors(drive, lba, DISK_SECTORS, &mut buf);
+                let disk_us = elapsed_us(disk_start).max(1);
+                if got == DISK_SECTORS {
+                    disk_bps = (got as u64 * 512).saturating_mul(1_000_000) / disk_us;
+                }
+            }
+        }
+        let disk_score = score(disk_bps, DISK_REF);
+
+        // 4) Ağ: e1000 hazırsa ağ geçidine 200 ms boyunca UDP TX.
+        //    Gerçek NIC aktarım yolunu (ARP çözümü + IPv4 + Ethernet + TX
+        //    ring) ölçer; alıcı gerekmez, warmup paketi ARP'yi hazırlar.
+        let mut net_bps = 0u64;
+        {
+            use crate::drivers::{e1000, netstack, socket};
+            let gw = netstack::gateway_ip();
+            let gw_valid = gw.0.iter().any(|&b| b != 0);
+            if e1000::is_ready() && gw_valid {
+                if let Ok(fd) = socket::socket(socket::AF_INET, socket::SOCK_DGRAM) {
+                    let payload = [0x5Au8; 512];
+                    let _ = socket::sendto(fd, gw, 9999, &payload); // ARP warmup
+                    let start_ms = crate::monotonic_ms();
+                    let mut sent = 0u64;
+                    let mut fails = 0u32;
+                    while crate::monotonic_ms().wrapping_sub(start_ms) < 200 {
+                        match socket::sendto(fd, gw, 9999, &payload) {
+                            Ok(_) => {
+                                sent += 1;
+                                fails = 0;
+                            }
+                            Err(_) => {
+                                fails += 1;
+                                if fails > 4096 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    socket::close(fd);
+                    let elapsed_ms = crate::monotonic_ms().wrapping_sub(start_ms).max(1);
+                    net_bps = sent
+                        .saturating_mul(payload.len() as u64)
+                        .saturating_mul(1000)
+                        / elapsed_ms;
+                }
+            }
+        }
+        let net_score = score(net_bps, NET_REF);
+
+        // 5) Ses: HDA hazırsa PCM üretim hattını ölçer (sessizlik gönderilir,
+        //    duyulabilir gürültü oluşmaz). HDA yoksa 0 puan.
+        let mut audio_sps = 0u64;
+        if crate::drivers::hda::is_ready() {
+            const AUDIO_SAMPLES: usize = 96_000; // ~1 sn'lik sessiz tampon
+            let pcm = alloc::vec![0i16; AUDIO_SAMPLES];
+            let audio_start = crate::boot::time::read_cpu_cycles();
+            crate::drivers::hda::push_pcm(&pcm);
+            let audio_us = elapsed_us(audio_start).max(1);
+            audio_sps = (AUDIO_SAMPLES as u64).saturating_mul(1_000_000) / audio_us;
+        }
+        let audio_score = score(audio_sps, AUDIO_REF);
+
+        // Bileşen dökümü + tek toplam değer.
         let mut line = TextBuf::new();
-        line.push_str("CPU: 200000 iterations in ");
-        line.push_usize(elapsed as usize);
-        line.push_str(" ms; checksum=0x");
-        line.push_hex64(checksum);
-        self.push_line(line.as_str(), Color::ACCENT_GREEN);
+        line.push_str("BENCH cpu=");
+        line.push_usize(cpu_score as usize);
+        line.push_str(" ram=");
+        line.push_usize(ram_score as usize);
+        line.push_str(" disk=");
+        line.push_usize(disk_score as usize);
+        line.push_str(" net=");
+        line.push_usize(net_score as usize);
+        line.push_str(" audio=");
+        line.push_usize(audio_score as usize);
+        if disk_bps == 0 {
+            line.push_str(" (disk yok)");
+        }
+        if net_bps == 0 {
+            line.push_str(" (net yok)");
+        }
+        if audio_sps == 0 {
+            line.push_str(" (ses yok)");
+        }
+        self.push_line(line.as_str(), Color::TEXT_MAIN);
+
+        let total = (cpu_score + ram_score + disk_score + net_score + audio_score) / 5;
+        let mut score_line = TextBuf::new();
+        score_line.push_str("BENCH-SCORE: ");
+        score_line.push_usize(total as usize);
+        score_line.push_str(" / 1000");
+        self.push_line(score_line.as_str(), Color::ACCENT_GREEN);
+
         let mut memory = TextBuf::new();
         memory.push_str("PMM free: ");
         memory.push_usize((pmm.free_memory_bytes / 1024) as usize);

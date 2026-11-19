@@ -6,8 +6,8 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-177%2C084%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-443%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-168%2C359%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-446%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.

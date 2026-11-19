@@ -4874,10 +4874,24 @@ impl BrowserApp {
                             self.request_state = 0;
                             self.request_deadline = 0;
                             self.tls_request_sent = true;
+                            // HTTP/2 isteği kendi kalıcı bağlantısını
+                            // (h2_conn) kullanır; ALPN el sıkışması için
+                            // açılan ilk TCP/TLS bağlantısı artık gereksiz.
+                            // FIN gönderip kapat — aksi halde sunucu tarafında
+                            // boşta kalan ve tls_session'ı gereksiz canlı
+                            // tutan ikinci bir bağlantı sızıntısı olur.
+                            let _ = crate::drivers::netstack::tcp_close();
                             crate::drivers::netstack::tcp_clear_result();
+                            self.keep_alive_ready = false;
+                            self.tls_session = None;
                             return;
                         }
                         Err(e) => {
+                            // h2 isteği başarısız: el sıkışma bağlantısını da
+                            // kapat (finish_network_error yalnızca bayrakları
+                            // temizler, FIN göndermez).
+                            let _ = crate::drivers::netstack::tcp_close();
+                            self.tls_session = None;
                             self.finish_network_error(crate::gui::ui_text(
                                 "HTTP/2 isteği başarısız.",
                                 "HTTP/2 request failed.",

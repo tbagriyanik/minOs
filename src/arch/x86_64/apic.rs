@@ -27,6 +27,7 @@ pub const SCHEDULER_HZ: u32 = 1000;
 const LAPIC_TIMER_DIVIDE: u32 = 0x3E0;
 const LAPIC_LVT_TIMER: u32 = 0x320;
 const LAPIC_TIMER_INIT_CNT: u32 = 0x380;
+const LAPIC_TIMER_CUR_CNT: u32 = 0x390;
 const LAPIC_EOI: u32 = 0x0B0;
 
 #[inline(always)]
@@ -127,7 +128,44 @@ pub unsafe extern "C" fn apic_timer_entry() {
     );
 }
 
-/// APIC Timer'ı başlatır ve IDT vektör 0x20'ye bağlar (yalnızca BSP çağırmalı).
+/// Local APIC timer saatini TSC'ye karşı ölçer ve [`SCHEDULER_HZ`] için
+/// gereken periyot sayacını döndürür.
+///
+/// LAPIC timer saati sabit değildir: sanal makinelerde ~1 GHz, fiziksel
+/// makinelerde ~100 MHz mertebesinde değişir. `0x100000` gibi sabit bir
+/// değer gerçek donanımda ya çok seyrek (periyot >100 ms → `enable_bsp_idle`
+/// doğrulaması düşer, masaüstü 1 ms busy-wait'e döner ve CPU %100'de kalır)
+/// ya da çok sık (kesme fırtınası) olur. Bu yüzden sayaç TSC ile ölçülür.
+/// Her CPU yalnızca kendi LAPIC kaydını kullanır; eşzamanlı çağrı güvenlidir.
+fn calibrate_initial_count() -> u32 {
+    let tsc_per_us = unsafe { crate::boot::time::TSC_CYCLES_PER_US }.max(1);
+    // Tek atımlık, maskeli modda sayacı başlatıp CUR_CNT azalmasını ölç.
+    lapic_write(LAPIC_TIMER_DIVIDE, 0x03);
+    lapic_write(LAPIC_LVT_TIMER, (1 << 16) | (APIC_TIMER_VECTOR as u32));
+    lapic_write(LAPIC_TIMER_INIT_CNT, u32::MAX);
+
+    let c0 = lapic_read(LAPIC_TIMER_CUR_CNT);
+    let t0 = crate::boot::time::read_cpu_cycles();
+    let window = tsc_per_us.saturating_mul(20_000).max(1);
+    while crate::boot::time::read_cpu_cycles().wrapping_sub(t0) < window {
+        core::hint::spin_loop();
+    }
+    let c1 = lapic_read(LAPIC_TIMER_CUR_CNT);
+    let tsc_delta = crate::boot::time::read_cpu_cycles().wrapping_sub(t0).max(1);
+    let counts = c0.wrapping_sub(c1);
+    if counts < 100 {
+        // Ölçüm başarısız (timer saymıyor): eski varsayılanı koru.
+        return 0x100000;
+    }
+    // 1 periyot = 1/sn Hz. İstenen periyot 1 ms = tsc_per_us * 1000 TSC tick'i.
+    let period_ticks = tsc_per_us.saturating_mul(1_000);
+    let per_ms = (counts as u128).saturating_mul(period_ticks as u128) / tsc_delta as u128;
+    (per_ms.clamp(1, u32::MAX as u128) as u32).max(1)
+}
+
+/// APIC Timer'ı başlatır ve IDT vektör 0x20'ye bağlar.
+/// BSP ve her AP kendi LAPIC'ini kurar; sayaç TSC kalibrasyonuyla
+/// [`SCHEDULER_HZ`] hedefine getirilir.
 pub fn init_timer() {
     // 1. IDT vektörüne timer kapısını kur
     unsafe {
@@ -135,6 +173,8 @@ pub fn init_timer() {
         idt.entries[APIC_TIMER_VECTOR as usize]
             .set_handler_dpl(apic_timer_entry as *const () as usize, 0);
     }
+
+    let initial_count = calibrate_initial_count();
 
     // 2. Local APIC Timer yapılandır:
     // Bölücü: Divide by 16 (0x3)
@@ -145,8 +185,8 @@ pub fn init_timer() {
     let lvt_val = (1 << 17) | (APIC_TIMER_VECTOR as u32);
     lapic_write(LAPIC_LVT_TIMER, lvt_val);
 
-    // Başlangıç sayacı (Initial Count): ~100 Hz veya 10 ms aralık
-    lapic_write(LAPIC_TIMER_INIT_CNT, 0x100000);
+    // Başlangıç sayacı: TSC kalibrasyonuyla ~1 ms periyot.
+    lapic_write(LAPIC_TIMER_INIT_CNT, initial_count);
 }
 
 /// Tüm CPU'ların toplam tik sayısı (tanılama amaçlı).

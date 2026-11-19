@@ -2697,20 +2697,6 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
 // döngü filtresi ve 4:2:0 croma örnekleme.
 // ---------------------------------------------------------------------------
 
-/// VP8 intra tahmin modları (16x16).
-
-/// DCT katsayıları için normalleştirilmiş dönüşüm matrisi (4x4).
-/// VP8'in kullandığı Walsh-Hadamard / DCT hibrit dönüşüm.
-
-/// Cosine lookup table for DCT (0-360 degrees, 4.5 degree steps = 80 entries).
-/// Values are Q10 fixed point (1024 = 1.0).
-
-/// 16x16 ters DCT (basitleştirilmiş).
-
-/// Kuantizasyon aralığı tablosu (VP8 standart).
-
-/// Kuantizasyon adım değerleri (128 adet, VP8 standart).
-
 /// WebP VP8 (kayıplı) kod çözücü — VP8 intra çerçevesinden genişlik/yükseklik
 /// çıkarır ve basit bir yer tutucu görüntü döner. Tam VP8 DCT + motion
 /// compensation implementasyonu ileride eklenecek.

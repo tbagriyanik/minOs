@@ -12,7 +12,7 @@ The README files only summarise the highlights; the full list lives here.
 - **Canvas 2D:** linear/radial gradients (`addColorStop`), `save`/`restore` state stack, `translate`/`scale`/`rotate`/`setTransform` CTM, real scanline polygon `fill()` covering quadratic/cubic Bézier and arc paths (the old bounding-box fill was removed), transform-aware `fillRect`/`strokeRect`/`clearRect`, and `getImageData`/`putImageData`/`drawImage`/`createImageData` plus `rect_clip`/`clear_clip`.
 - **minJs browser APIs:** `XMLHttpRequest` (open/send, readyState 1-4 transitions, `onreadystatechange`/`onload`/`onerror`, `getResponseHeader`, synchronous HTTP + cookie header), `history.pushState`/`replaceState` (history-entry pointer without page reload) and `requestAnimationFrame`/`cancelAnimationFrame` (~16 ms timer). The JS engine now resolves object-reference variables (`__xhr_obj_N`) for member reads/writes and stores function-name handler assignments (`x.onerror = fn`) correctly.
 - **Live-test hygiene:** the `livetest_h3` target is only tried when explicitly provided; optional H3/H2 failures no longer affect the overall result. Live-test parameters were removed from the default `boot/limine.conf` entry.
-- The host test suite contains **443 tests** (443 passed / 0 failed); new `tests/host_canvas_tests.rs` and `browser_canvas`/`browser_svg` host modules were added.
+- The host test suite contains **446 tests** (446 passed / 0 failed); new `tests/host_canvas_tests.rs` and `browser_canvas`/`browser_svg` host modules were added.
 - **P1 memory/process verification:** `brk` grow/shrink, `mmap`/`munmap` bounds and error paths, FD lifecycle, resource-limit inheritance across `fork`, and COW write faults all pass under the QEMU `default` profile (36/36 checks). PMM/VMM/allocator self-tests and the `test_stress_24h.ps1` soak harness exist; repeated 24h runs are ⚠️ not yet reported.
 - **GUI smoke tests:** `gui::screen_layout` centralises geometry and localized copy for boot/loading/welcome/shutdown screens; a `[GUI-SMOKE]` serial marker and host geometry tests were added.
 - **Errors and recovery:** `apps::errors` provides stable codes plus TR/EN title, detail and recovery text; File Manager drop errors and guard-fault toasts now use them.
@@ -28,7 +28,7 @@ The README files only summarise the highlights; the full list lives here.
 - On `RENDER_BUDGET_MS` expiry, half-drawn framebuffer content is no longer visible; the FPS 3D content region is backed up and restored when the render does not complete.
 - `TimeBudget` gained an injectable test clock and deterministic timeout tests.
 - TLS/X.509 chain validation is stricter: validity dates and CA BasicConstraints/pathLen are checked for every non-anchor chain certificate; CA `keyCertSign` and leaf KeyUsage/EKU extensions are enforced when present. Unknown critical extensions are rejected. The test-only validation bypass was removed; valid RSA/ECDSA handshakes and invalid intermediate CA cases are covered.
-- The host test suite contains 443 tests (443 passed / 0 failed).
+- The host test suite contains 446 tests (446 passed / 0 failed).
 - Double-clicking a WAV file plays the selected file directly in Music Player.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.

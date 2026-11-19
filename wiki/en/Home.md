@@ -29,7 +29,7 @@ minOs (Sarman Edition) v2.5.0 is a standalone 64-bit (`x86_64`) operating system
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
 | **Total Raw Rust Lines** | 177,084 lines (`src/` + `tests/` + `build.rs`) |
-| **Unit Tests** | 443 passed / 0 failed |
+| **Unit Tests** | 446 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |

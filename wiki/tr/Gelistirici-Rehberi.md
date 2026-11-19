@@ -24,7 +24,7 @@ minos/
 │   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici,
 │   │                        # memory/ alt modülü (büyük sayfa, sıkıştırma, profilleme)
 │   └── main.rs              # Çekirdek giriş noktası (_start)
-├── tests/                   # Host birim testleri (443 test)
+├── tests/                   # Host birim testleri (446 test)
 ├── boot/                    # Limine bootloader yapılandırması (limine.conf)
 ├── docs/                    # Yerel Markdown dokümanları
 ├── wiki/                    # Wiki sayfaları (bu dizin)
@@ -56,7 +56,7 @@ Kriptografi, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, Canvas 2D, SVG rasteriz
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Test sonuçları: **443 geçti / 0 hata**
+Test sonuçları: **446 geçti / 0 hata**
 
 ---
 
@@ -80,9 +80,9 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 | Ölçüt | Değer |
 | :--- | :--- |
 | **Toplam Rust Kaynak Dosyası** | 223 dosya (`src/` + `tests/` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | 177.084 satır |
+| **Toplam Kod Satırı (ham)** | 177.770 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri** | 443 test (0 hata, %100 başarılı) |
+| **Birim Testleri** | 446 test (0 hata, %100 başarılı) |
 | **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Pencere Yöneticisi |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |

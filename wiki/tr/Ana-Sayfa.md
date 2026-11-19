@@ -28,7 +28,7 @@ minOs (Sarman Edition) v2.5.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.102.0-nightly |
-| **Toplam Kod Satırı (ham)** | 177.084 satır (Rust: `src/` 172.941 + `tests/` 3.933 + `build.rs` 210); boşlukları hariç `src/` 158.907 satır |
+| **Toplam Kod Satırı (ham)** | 177.770 satır (Rust: `src/` + `tests/` + `build.rs`); boşlukları hariç `src/` 158.907 satır |
 | **P0/P1 Tamamlanma** | 13/23 görev tamamlandı (%57) — P0 bellek-kaldırma grubu bitti |
 | **Kritik Düzeltmeler** | Fork/COW delimiter, munmap gerçek sayfa kaldırma + PT/PD/PDPT iadesi, SHARED refcount, ARP table |
 | **Güvenilen Kök CA** | 51 sertifika |

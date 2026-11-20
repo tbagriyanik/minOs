@@ -383,8 +383,81 @@ fn normalize_url_path(url: &str) -> String {
     out
 }
 
+/// `<frameset cols|rows>` boyut listesini piksel değerlerine çevirir.
+/// Biçim: `N` piksel, `N%` toplamın yüzdesi, `N*`/`*` kalan alanın payı.
+/// Örn. `"191,*"` → `[191, toplam-191]`, `"50%,*"` → yarı + kalan.
+fn parse_frame_sizes(spec: &str, total: usize) -> Vec<usize> {
+    let parts: Vec<&str> = spec
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let n = parts.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut sizes = alloc::vec![0usize; n];
+    let mut weights = alloc::vec![0u32; n];
+    let mut weight_sum: u32 = 0;
+    let mut fixed: usize = 0;
+    for (i, part) in parts.iter().enumerate() {
+        let p = part.trim();
+        if let Some(pct) = p.strip_suffix('%') {
+            if let Ok(v) = pct.trim().parse::<usize>() {
+                sizes[i] = total.saturating_mul(v) / 100;
+                fixed += sizes[i];
+                continue;
+            }
+        }
+        if p.ends_with('*') {
+            let num = p.trim_end_matches('*').trim();
+            let w = if num.is_empty() {
+                1
+            } else {
+                num.parse::<u32>().unwrap_or(1)
+            };
+            weights[i] = w;
+            weight_sum += w;
+            continue;
+        }
+        if let Ok(px) = p.parse::<usize>() {
+            sizes[i] = px;
+            fixed += px;
+            continue;
+        }
+        // Tanınmayan belirteç: kalan alanı eşit paylaşan ağırlık say.
+        weights[i] = 1;
+        weight_sum += 1;
+    }
+    let remain = total.saturating_sub(fixed);
+    if weight_sum == 0 {
+        return sizes;
+    }
+    // Son ağırlıklı çerçeve kalan farkı alır; toplam `total`'a eşitlenir.
+    let mut last_weighted = 0usize;
+    let mut distributed = 0usize;
+    for (i, &w) in weights.iter().enumerate() {
+        if w > 0 {
+            last_weighted = i;
+        }
+    }
+    for i in 0..n {
+        if weights[i] == 0 {
+            continue;
+        }
+        let share = if i == last_weighted {
+            remain.saturating_sub(distributed)
+        } else {
+            remain.saturating_mul(weights[i] as usize) / weight_sum as usize
+        };
+        sizes[i] += share;
+        distributed += share;
+    }
+    sizes
+}
+
 /// `%XX` kaçışlarını bayt dizisine çözer (yerel yollar ve data URL'ler için).
-fn percent_decode(input: &str) -> Vec<u8> {
+pub fn percent_decode(input: &str) -> Vec<u8> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0usize;
@@ -762,6 +835,12 @@ pub fn render_html_to_lines(
     iframes: &mut super::iframe::IFrames,
     pending_resources: &mut Vec<String>,
     script_navigation: &mut Option<String>,
+    // Çapa işaretleri: `id` özniteliği (tüm öğeler) ve eski HTML'de
+    // `<a name="...">` için (ad, satır dizini) çiftleri. Ekran-y
+    // koordinatına çağıran taraf çevirir.
+    out_anchors: &mut Vec<(String, usize)>,
+    // <frame> belgeleri: (çerçeve kimliği, çözümlenmiş URL).
+    pending_frames: &mut Vec<(String, String)>,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
     // script etiketleri ise çıktidan çıkarılır. Sayfa URL'si `location`,
@@ -953,6 +1032,14 @@ pub fn render_html_to_lines(
     let mut _flex_wrap: u8 = 0; // 0=nowrap, 1=wrap, 2=wrap-reverse
     let mut flex_justify_content: u8 = 0; // 0=flex-start, 1=flex-end, 2=center, 3=space-between, 4=space-around, 5=space-evenly
     let mut _flex_align_items: u8 = 0; // 0=stretch, 1=flex-start, 2=flex-end, 3=center, 4=baseline
+
+    // <frameset>/<frame> durumu (eski HTML çerçeve düzeni):
+    // cols → yan yana, rows → alt alta; boyutlar açılışta hesaplanır.
+    let mut frameset_cols: Option<String> = None;
+    let mut frameset_rows: Option<String> = None;
+    let mut frameset_frame_idx: usize = 0;
+    let mut frameset_sizes: Vec<usize> = Vec::new();
+    let mut frameset_is_cols: bool = true;
     let mut _flex_align_content: u8 = 0; // 0=stretch, 1=flex-start, 2=flex-end, 3=center, 4=space-between, 5=space-around, 6=space-evenly
     let mut flex_gap: usize = 0;
     let mut flex_items: Vec<(TextSpan, super::types::ElementStyle)> = Vec::new(); // (span, style) çiftleri
@@ -1232,7 +1319,11 @@ pub fn render_html_to_lines(
                 p = end + 1;
                 continue;
             }
-            if !closing && (eq_ascii(name, b"script") || eq_ascii(name, b"style")) {
+            if !closing
+                && (eq_ascii(name, b"script")
+                    || eq_ascii(name, b"style")
+                    || eq_ascii(name, b"noframes"))
+            {
                 // script/style element kardeşi sayılır (nth-child doğruluğu)
                 // ama çerçeve itmez — içeriği atlanır.
                 let s_attrs = &tag_content[name_end..];
@@ -1264,6 +1355,7 @@ pub fn render_html_to_lines(
             let attrs = &tag_content[name_end..];
             let class_attr = extract_attr(attrs, b"class");
             let id_attr = extract_attr(attrs, b"id");
+            let name_attr = extract_attr(attrs, b"name");
             let style_attr = extract_attr(attrs, b"style");
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
@@ -2551,6 +2643,136 @@ pub fn render_html_to_lines(
                             word_buf.push_str(&url);
                         }
                     }
+                } else if eq_ascii(name, b"frameset") {
+                    // <frameset>: eski HTML çerçeve düzeni. cols → çerçeveler
+                    // yan yana, rows → alt alta dizilir; boyutlar açılışta
+                    // piksele çevrilir.
+                    frameset_cols = extract_attr(attrs, b"cols").map(String::from);
+                    frameset_rows = extract_attr(attrs, b"rows").map(String::from);
+                    frameset_is_cols = frameset_cols.is_some();
+                    frameset_frame_idx = 0;
+                    let spec = frameset_cols
+                        .as_deref()
+                        .or(frameset_rows.as_deref())
+                        .unwrap_or("");
+                    let total = if frameset_is_cols { wrap_width_px } else { 400 };
+                    frameset_sizes = parse_frame_sizes(spec, total);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    cur_line_tag = HtmlTagType::Normal;
+                    cur_line_indent.set(0);
+                } else if eq_ascii(name, b"frame") {
+                    // <frame>: yalnızca <frameset> içinde anlamlıdır.
+                    // İçerik `pending_frames` üzerinden asenkron indirilir;
+                    // yer tutucu çerçeve iframe çizim yolunu kullanır.
+                    if frameset_cols.is_some() || frameset_rows.is_some() {
+                        let idx = frameset_frame_idx;
+                        frameset_frame_idx += 1;
+                        let size = frameset_sizes
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(if frameset_is_cols { 200 } else { 180 });
+                        let (frame_w, frame_h) = if frameset_is_cols {
+                            (size.max(40), 400)
+                        } else {
+                            (wrap_width_px.max(120), size.max(40))
+                        };
+                        let frame_id = extract_attr(attrs, b"name")
+                            .or_else(|| extract_attr(attrs, b"id"))
+                            .map(String::from)
+                            .unwrap_or_else(|| {
+                                static FRAME_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                    core::sync::atomic::AtomicUsize::new(0);
+                                let n = FRAME_ID_COUNTER
+                                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                format!("frame_{}", n)
+                            });
+                        let src_url =
+                            extract_attr(attrs, b"src").and_then(|s| resolve_url(s, base_url));
+
+                        let mut frame =
+                            super::iframe::IFrame::new(frame_id.clone(), frame_w, frame_h);
+                        frame.has_border = extract_attr(attrs, b"frameborder")
+                            .map(|v| !v.eq_ignore_ascii_case("0") && !v.eq_ignore_ascii_case("no"))
+                            .unwrap_or(true);
+                        if let Some(resolved) = &src_url {
+                            frame.set_src(resolved.clone());
+                            pending_frames.push((frame_id.clone(), resolved.clone()));
+                        }
+                        iframes.add(frame);
+
+                        // Çerçeve yer tutucusu: satır akışına blok olarak eklenir.
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        let indent = tag_indent(cur_line_tag);
+                        let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
+                        let frame_w_px = frame_w.min(eff_wrap).max(1);
+                        if cur_line_w > 0 && cur_line_w + frame_w_px > eff_wrap {
+                            flush_line(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        cur_line_w += frame_w_px;
+                        cur_line_spans.push(TextSpan {
+                            text: String::new(),
+                            color: current_color,
+                            bg_color: current_bg,
+                            bg_image: current_bg_image.borrow().clone(),
+                            is_link: false,
+                            link_url: String::new(),
+                            is_button: false,
+                            is_image: true,
+                            image_width: frame_w_px,
+                            image_height: frame_h,
+                            image_rgb: None,
+                            image_url: src_url.unwrap_or_default(),
+                            onclick: String::new(),
+                            elem_id: frame_id,
+                            bold: current_bold,
+                            underline: current_underline,
+                        });
+                        // rows düzeninde her çerçeve kendi satırında başlar.
+                        if !frameset_is_cols {
+                            flush_line(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                    }
                 } else if eq_ascii(name, b"iframe") {
                     // <iframe>: İç içe tarama bağlamı
                     let iframe_id =
@@ -3082,6 +3304,17 @@ pub fn render_html_to_lines(
                         cur_line_align = TextAlign::Center;
                     }
                 }
+                // Çapa işaretleri: `id` tüm öğelerde, eski HTML'de `name`
+                // ise `<a name="...">` bağlantı hedefi olarak geçerlidir.
+                // Değer, içeriğin düşeceği satırın dizinidir.
+                let anchor_attr = id_attr.or(if eq_ascii(name, b"a") {
+                    name_attr
+                } else {
+                    None
+                });
+                if let Some(anchor) = anchor_attr {
+                    out_anchors.push((String::from(anchor), out_lines.len()));
+                }
                 // id ataması, elem_id_str son kullanıldıktan sonra yapılır (borrow kuralı).
                 if id_attr.is_some() {
                     active_id = id_attr.map(String::from);
@@ -3184,6 +3417,11 @@ pub fn render_html_to_lines(
                 if eq_ascii(name, b"a") {
                     active_link = None;
                     active_onclick = None;
+                } else if eq_ascii(name, b"frameset") {
+                    frameset_cols = None;
+                    frameset_rows = None;
+                    frameset_sizes.clear();
+                    frameset_frame_idx = 0;
                 } else if eq_ascii(name, b"button") {
                     active_is_button = false;
                     active_onclick = None;
@@ -3769,6 +4007,96 @@ mod tests {
             resolve_url("./banner.gif", Some(base)).as_deref(),
             Some("http://example.com/sub/banner.gif")
         );
+    }
+
+    #[test]
+    fn test_resolve_url_subpages_and_anchors() {
+        // Eski internet tarzı iç içe dizinler: `/eski/` altındaki göreli
+        // bağlantılar aynı dizinde çözülmeli.
+        let base = "https://www.geocities.ws/oldinternet/";
+        assert_eq!(
+            resolve_url("sayfa.html", Some(base)).as_deref(),
+            Some("https://www.geocities.ws/oldinternet/sayfa.html")
+        );
+        assert_eq!(
+            resolve_url("img/logo.gif", Some(base)).as_deref(),
+            Some("https://www.geocities.ws/oldinternet/img/logo.gif")
+        );
+        assert_eq!(
+            resolve_url("../diger/index.html", Some(base)).as_deref(),
+            Some("https://www.geocities.ws/diger/index.html")
+        );
+        assert_eq!(
+            resolve_url("/kök/dosya.txt", Some(base)).as_deref(),
+            Some("https://www.geocities.ws/kök/dosya.txt")
+        );
+        // Sayfa sonunda eğik çizgi yoksa son bölüm dosya sayılır (RFC 3986).
+        let base_file = "https://www.geocities.ws/oldinternet/page.html";
+        assert_eq!(
+            resolve_url("resim.png", Some(base_file)).as_deref(),
+            Some("https://www.geocities.ws/oldinternet/resim.png")
+        );
+        assert_eq!(
+            resolve_url("../ust.html", Some(base_file)).as_deref(),
+            Some("https://www.geocities.ws/ust.html")
+        );
+        // Parça ve sorgu başvuruları temel yolu korur.
+        assert_eq!(
+            resolve_url("#bolum", Some(base)).as_deref(),
+            Some("https://www.geocities.ws/oldinternet/#bolum")
+        );
+        assert_eq!(
+            resolve_url("?sayfa=2", Some(base)).as_deref(),
+            Some("https://www.geocities.ws/oldinternet/?sayfa=2")
+        );
+        assert_eq!(
+            resolve_url("alt.html#kisim", Some(base_file)).as_deref(),
+            Some("https://www.geocities.ws/oldinternet/alt.html#kisim")
+        );
+    }
+
+    #[test]
+    fn test_render_collects_name_and_id_anchors() {
+        let html = b"<html><body><a name=\"tepe\"></a><h1 id=\"bolum1\">Baslik</h1>\
+            <p>Metin icerik</p><a href=\"#tepe\">Yukari</a></body></html>";
+        let mut lines = Vec::new();
+        let mut anchors: Vec<(String, usize)> = Vec::new();
+        let mut prev_styles = BTreeMap::new();
+        let details_state: BTreeMap<String, bool> = BTreeMap::new();
+        let mut canvases = Vec::new();
+        let mut players = super::super::media::MediaPlayers::new();
+        let mut frames = super::super::iframe::IFrames::new();
+        let mut pending = Vec::new();
+        let mut pending_frames = Vec::new();
+        let mut nav = None;
+        let mut bg: Option<Arc<BackgroundImage>> = None;
+        render_html_to_lines(
+            html,
+            400,
+            &mut lines,
+            500,
+            Some("https://ornek.com/dizin/sayfa.html"),
+            0,
+            0,
+            &mut prev_styles,
+            &details_state,
+            None,
+            None,
+            &mut bg,
+            &mut canvases,
+            &mut players,
+            &mut frames,
+            &mut pending,
+            &mut nav,
+            &mut anchors,
+            &mut pending_frames,
+        );
+        assert!(anchors.iter().any(|(n, _)| n == "tepe"));
+        assert!(anchors.iter().any(|(n, _)| n == "bolum1"));
+        // Çapalar satır dizinine işaret etmeli.
+        for (_, line_idx) in &anchors {
+            assert!(*line_idx <= lines.len());
+        }
     }
 
     #[test]

@@ -492,6 +492,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     let mut vscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
 
+    // Yatay kaydirma cubugu surukleme:
+    // (idx, thumb_sol_ofset, thumb_w, track_w, content_w, view_w)
+    let mut hscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
+
     let mut anim_tick: usize = 0;
 
     let mut last_frame_ms = monotonic_ms();
@@ -1222,7 +1226,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         hit_window = Some((idx, gui::ContextKind::FileManager));
                     } else if idx == 7 {
                         if taskmgr_app.active_tab == 0 {
-                            if let Some(row) = taskmgr_app.row_at(mx, my, win.x, win.y, win.width) {
+                            // Görev yöneticisi içeriği kaydırılabildiği için
+                            // isabet testi çizimle aynı ötelenmiş orijini kullanır.
+                            let row_x = win.x.saturating_sub(win.scroll.x);
+                            let row_y = win.y.saturating_sub(win.scroll.y);
+                            if let Some(row) = taskmgr_app.row_at(mx, my, row_x, row_y, win.width) {
                                 taskmgr_app.selected = row;
 
                                 taskmgr_app.focused_control = 4 + row;
@@ -2754,40 +2762,43 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         break;
                     }
 
-                    // Dikey kaydirma cubugu (pencere sag kenari) — tiklama/surukleme.
+                    // Kaydirma cubuklari (sag kenar dikey + alt kenar yatay).
+                    // Cizimle ayni `ScrollbarLayout` kullanildigi icin tutamac
+                    // nerede gorunuyorsa oradan yakalanir.
 
                     {
                         let (ccx, ccy, ccw, cch) = win.content_rect();
 
-                        let c_h = window_content_h(
-                            win.app_id as usize,
-                            wh,
+                        let app_id = win.app_id as usize;
+
+                        let (c_w, c_h) = window_content_size(
+                            app_id,
                             ww,
+                            wh,
+                            win.content_w,
+                            win.content_h,
                             &filemanager_app,
                             &notepad_app,
                             &browser_app,
                         );
 
-                        let view_h = cch;
+                        let lay =
+                            gui::scrollbar::layout((ccx, ccy, ccw, cch), c_w, c_h, win.scroll);
 
-                        if c_h > view_h {
-                            let t = gui::scrollbar::SCROLLBAR_THICKNESS;
+                        let mut handled = false;
 
-                            // Saga tam dayali dikey scrollbar track'i
+                        if let Some(g) = lay.vertical {
+                            let track = g.track;
+                            let hit = (track.0.saturating_sub(4), track.1, track.2 + 4, track.3);
 
-                            let track = (ccx + ccw - t, ccy, t, view_h);
-                            let track_hit = (ccx + ccw.saturating_sub(t + 4), ccy, t + 4, view_h);
-
-                            if gui::in_rect(mx, my, track_hit) {
-                                let g = gui::scrollbar::v_geom(track, c_h, view_h, win.scroll.y);
-
-                                // Tutamaç üzerindeyse tıklanan ofseti koru (zıplama olmadan akıcı sürükleme)
+                            if gui::in_rect(mx, my, hit) {
                                 if gui::in_rect(mx, my, g.thumb) {
+                                    // Tutamac uzerinde: tiklama noktasini koru.
                                     let grab = my.saturating_sub(g.thumb.1);
                                     vscroll_drag =
-                                        Some((idx, grab, g.thumb.3, track.3, c_h, view_h));
+                                        Some((idx, grab, g.thumb.3, track.3, c_h, lay.view_h));
                                 } else {
-                                    // Track üzerinde tıklanan konuma tutamacın merkezini getir
+                                    // Iz uzerinde: tutamac merkezini tiklamaya getir.
                                     let thumb_h = g.thumb.3.max(16);
                                     let click_y = my.saturating_sub(track.1);
                                     let new_top = click_y.saturating_sub(thumb_h / 2);
@@ -2797,24 +2808,82 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     } else {
                                         (new_top as f32 / max_thumb_travel as f32).clamp(0.0, 1.0)
                                     };
-                                    let max_off = c_h.saturating_sub(view_h);
+                                    let max_off = gui::scrollbar::max_offset(c_h, lay.view_h);
                                     let new_scroll_y =
                                         ((ratio * max_off as f32) as usize).min(max_off);
 
                                     if let Some(wm) = compositor.windows[idx].as_mut() {
                                         wm.scroll.y = new_scroll_y;
+                                        let (dx, dy, dw, dh) = wm.content_rect();
+                                        compositor.dirty_tracker.mark_window(
+                                            idx,
+                                            crate::gui::dirty_rect::DirtyRect::new(dx, dy, dw, dh),
+                                        );
                                     }
-                                    if win.app_id as usize == 3 {
+                                    if app_id == 3 {
                                         browser_app.sync_external_scroll(new_scroll_y);
                                     }
 
                                     let grab = (thumb_h / 2).min(thumb_h);
-                                    vscroll_drag = Some((idx, grab, thumb_h, track.3, c_h, view_h));
+                                    vscroll_drag =
+                                        Some((idx, grab, thumb_h, track.3, c_h, lay.view_h));
                                 }
 
                                 compositor.focus_window(idx);
-                                break;
+                                handled = true;
                             }
+                        }
+
+                        if !handled {
+                            if let Some(g) = lay.horizontal {
+                                let track = g.track;
+                                let hit =
+                                    (track.0, track.1.saturating_sub(4), track.2, track.3 + 4);
+
+                                if gui::in_rect(mx, my, hit) {
+                                    if gui::in_rect(mx, my, g.thumb) {
+                                        let grab = mx.saturating_sub(g.thumb.0);
+                                        hscroll_drag =
+                                            Some((idx, grab, g.thumb.2, track.2, c_w, lay.view_w));
+                                    } else {
+                                        let thumb_w = g.thumb.2.max(16);
+                                        let click_x = mx.saturating_sub(track.0);
+                                        let new_left = click_x.saturating_sub(thumb_w / 2);
+                                        let max_thumb_travel = track.2.saturating_sub(thumb_w);
+                                        let ratio = if max_thumb_travel == 0 {
+                                            0.0
+                                        } else {
+                                            (new_left as f32 / max_thumb_travel as f32)
+                                                .clamp(0.0, 1.0)
+                                        };
+                                        let max_off = gui::scrollbar::max_offset(c_w, lay.view_w);
+                                        let new_scroll_x =
+                                            ((ratio * max_off as f32) as usize).min(max_off);
+
+                                        if let Some(wm) = compositor.windows[idx].as_mut() {
+                                            wm.scroll.x = new_scroll_x;
+                                            let (dx, dy, dw, dh) = wm.content_rect();
+                                            compositor.dirty_tracker.mark_window(
+                                                idx,
+                                                crate::gui::dirty_rect::DirtyRect::new(
+                                                    dx, dy, dw, dh,
+                                                ),
+                                            );
+                                        }
+
+                                        let grab = (thumb_w / 2).min(thumb_w);
+                                        hscroll_drag =
+                                            Some((idx, grab, thumb_w, track.2, c_w, lay.view_w));
+                                    }
+
+                                    compositor.focus_window(idx);
+                                    handled = true;
+                                }
+                            }
+                        }
+
+                        if handled {
+                            break;
                         }
                     }
 
@@ -2882,6 +2951,31 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         // Tıklama işleyicileri uygulama kodu çalıştırır; olası
                         // bir bellek hatası bu uygulamaya atfedilir.
                         let _app_context = apps::guard::ContextScope::new(app_id, idx);
+
+                        // Kendi kaydırmasını yapmayan uygulamalarda içerik,
+                        // pencere kaydırma ofseti kadar ötelenerek çizilir.
+                        // İsabet testinin çizimle aynı yere düşmesi için
+                        // uygulamaya aynı ötelenmiş pencere geometrisi verilir.
+                        let (wx, wy, ww, wh) = if app_scrolls_natively(app_id) {
+                            (wx, wy, ww, wh)
+                        } else {
+                            let (c_w, c_h) = window_content_size(
+                                app_id,
+                                ww,
+                                wh,
+                                win.content_w,
+                                win.content_h,
+                                &filemanager_app,
+                                &notepad_app,
+                                &browser_app,
+                            );
+                            (
+                                wx.saturating_sub(win.scroll.x),
+                                wy.saturating_sub(win.scroll.y),
+                                c_w.saturating_add(2).max(ww),
+                                c_h.saturating_add(gui::titlebar_h() + 1).max(wh),
+                            )
+                        };
 
                         match app_id {
                             0 => {
@@ -5021,11 +5115,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             15 => {
                                 // Oyunlar: dama, mayın tarlası ve satranç bölümleri.
                                 if let Some((_, w)) = focused_window_for_app(&compositor, 15) {
+                                    let (ax, ay, aw, ah) = app_layout_rect(15, &w);
                                     let changed = fps_game_app.click(
-                                        mx.saturating_sub(w.x),
-                                        my.saturating_sub(w.y),
-                                        w.width,
-                                        w.height,
+                                        mx.saturating_sub(ax),
+                                        my.saturating_sub(ay),
+                                        aw,
+                                        ah,
                                     );
                                     if changed {
                                         force_render = true;
@@ -6951,22 +7046,24 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                 let (cx, cy, cw, ch) = w.content_rect();
 
-                let c_h = window_content_h(
+                let (c_w, c_h) = window_content_size(
                     app_id,
-                    w.height,
                     w.width,
+                    w.height,
+                    w.content_w,
+                    w.content_h,
                     &filemanager_app,
                     &notepad_app,
                     &browser_app,
                 );
 
-                let c_w = cw;
+                let wheel_lay = gui::scrollbar::layout((cx, cy, cw, ch), c_w, c_h, w.scroll);
+                let max_y = gui::scrollbar::max_offset(c_h, wheel_lay.view_h);
+                let max_x = gui::scrollbar::max_offset(c_w, wheel_lay.view_w);
 
                 let over_content = gui::in_rect(mx, my, (cx, cy, cw, ch));
 
-                if over_content && (c_h > ch || c_w > cw) {
-                    let max_y = c_h.saturating_sub(ch);
-
+                if over_content && (max_y > 0 || max_x > 0) {
                     if app_id == 3 {
                         // Tarayıcı: tekerlek yumuşak kaydırma animasyonunu besler.
                         let current = w.scroll.y.min(max_y);
@@ -6989,8 +7086,19 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         let delta = (scroll_val as isize) * step.max(1) as isize;
 
                         if let Some(wm) = compositor.windows[idx].as_mut() {
-                            wm.scroll.y =
-                                ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                            // Shift + tekerlek yatay kaydırır (içerik genişse).
+                            if keyboard.shift && max_x > 0 {
+                                wm.scroll.x =
+                                    ((wm.scroll.x as isize - delta).max(0) as usize).min(max_x);
+                            } else {
+                                wm.scroll.y =
+                                    ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                            }
+                            let (dx, dy, dw, dh) = wm.content_rect();
+                            compositor.dirty_tracker.mark_window(
+                                idx,
+                                crate::gui::dirty_rect::DirtyRect::new(dx, dy, dw, dh),
+                            );
                         }
                     }
                 }
@@ -7001,7 +7109,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             // Goruntuleyicide tekerle ile yakinlastirma / uzaklastirma.
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
-                let (cx, cy, cw, ch) = image_viewer_canvas_rect(&w);
+                let (ax, ay, aw, ah) = app_layout_rect(4, &w);
+                let mut vw = w;
+                vw.x = ax;
+                vw.y = ay;
+                vw.width = aw;
+                vw.height = ah;
+                let (cx, cy, cw, ch) = image_viewer_canvas_rect(&vw);
 
                 if gui::in_rect(mx, my, (cx, cy, cw, ch)) {
                     if scroll_val > 0 {
@@ -7015,20 +7129,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             // cizim tuvalinde tekerlek yakinlastirmayi ayarlar.
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 12) {
-                if gui::in_rect(mx, my, (w.x, w.y, w.width, w.height)) {
+                let (ax, ay, aw, ah) = app_layout_rect(12, &w);
+                if gui::in_rect(mx, my, (ax, ay, aw, ah)) {
                     viewer3d_app.handle_scroll(scroll_val);
                 }
             }
 
             if let Some((paint_idx, w)) = focused_window_for_app(&compositor, 9) {
                 if let Some(paint) = paint_apps[paint_idx].as_mut() {
+                    let (ax, ay, aw, ah) = app_layout_rect(9, &w);
                     if paint
-                        .to_canvas(
-                            w.width,
-                            w.height,
-                            mx.saturating_sub(w.x),
-                            my.saturating_sub(w.y),
-                        )
+                        .to_canvas(aw, ah, mx.saturating_sub(ax), my.saturating_sub(ay))
                         .is_some()
                     {
                         paint.adjust_zoom(scroll_val);
@@ -7041,7 +7152,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         if mouse.left_button {
             if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
-                let (cx, cy, cw, ch) = image_viewer_canvas_rect(&w);
+                let (ax, ay, aw, ah) = app_layout_rect(4, &w);
+                let mut vw = w;
+                vw.x = ax;
+                vw.y = ay;
+                vw.width = aw;
+                vw.height = ah;
+                let (cx, cy, cw, ch) = image_viewer_canvas_rect(&vw);
 
                 if w.is_focused && gui::in_rect(mx, my, (cx, cy, cw, ch)) {
                     if let Some((last_x, last_y)) = image_drag_last {
@@ -7064,8 +7181,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             if let Some(w) = compositor.windows[1] {
                 if w.is_open && w.is_focused && !w.is_minimized {
+                    // Ayarlar içeriği kaydırılabilir; çizimle aynı orijini kullan.
+                    let ox = w.x.saturating_sub(w.scroll.x);
+                    let oy = w.y.saturating_sub(w.scroll.y);
                     if settings_app.active_tab == 0 {
-                        let track = apps::settings::SystemSettings::volume_track_rect(w.x, w.y);
+                        let track = apps::settings::SystemSettings::volume_track_rect(ox, oy);
 
                         if gui::in_rect(
                             mx,
@@ -7075,8 +7195,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             settings_app.set_volume_from_range(mx, track.0, track.2);
                         }
                     } else if settings_app.active_tab == 1 {
-                        let track =
-                            apps::settings::SystemSettings::night_light_track_rect(w.x, w.y);
+                        let track = apps::settings::SystemSettings::night_light_track_rect(ox, oy);
 
                         if gui::in_rect(
                             mx,
@@ -7096,7 +7215,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 12) {
                 if w.is_focused {
-                    viewer3d_app.handle_mouse_move(mx.saturating_sub(w.x), my.saturating_sub(w.y));
+                    let (ax, ay, _, _) = app_layout_rect(12, &w);
+                    viewer3d_app.handle_mouse_move(mx.saturating_sub(ax), my.saturating_sub(ay));
                 }
             }
 
@@ -7112,7 +7232,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     let paint = paint_apps[paint_idx].as_mut().unwrap();
 
-                    if let Some((cxp, cyp)) = paint.to_canvas(w.width, w.height, mx - w.x, my - w.y)
+                    let (ax, ay, aw, ah) = app_layout_rect(9, &w);
+
+                    if let Some((cxp, cyp)) =
+                        paint.to_canvas(aw, ah, mx.saturating_sub(ax), my.saturating_sub(ay))
                     {
                         paint.paint(cxp, cyp);
                     } else {
@@ -7190,14 +7313,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 5) {
                 if w.is_focused {
-                    if my >= w.y + 156 && my <= w.y + 172 && mx >= w.x + 54 && mx <= w.x + 190 {
-                        musicplayer_app.progress = (((mx - (w.x + 54)) * 100) / 136).min(100);
-                    } else if my >= w.y + 198
-                        && my <= w.y + 214
-                        && mx >= w.x + 150
-                        && mx <= w.x + 240
-                    {
-                        let player_volume = (((mx - (w.x + 150)) * 100) / 90).min(100) as u8;
+                    let ox = w.x.saturating_sub(w.scroll.x);
+                    let oy = w.y.saturating_sub(w.scroll.y);
+                    if my >= oy + 156 && my <= oy + 172 && mx >= ox + 54 && mx <= ox + 190 {
+                        musicplayer_app.progress = (((mx - (ox + 54)) * 100) / 136).min(100);
+                    } else if my >= oy + 198 && my <= oy + 214 && mx >= ox + 150 && mx <= ox + 240 {
+                        let player_volume = (((mx - (ox + 150)) * 100) / 90).min(100) as u8;
                         settings_app.volume = player_volume;
                         settings_app.is_muted = false;
                         musicplayer_app.volume = player_volume as usize;
@@ -7308,6 +7429,37 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
                 if compositor.windows[idx].map(|w| w.app_id as usize) == Some(3) {
                     browser_app.sync_external_scroll(new_off);
+                }
+            } else if let Some((idx, grab, thumb_w, track_w, content_w, view_w)) = hscroll_drag {
+                // Yatay tutamaci fare ile surukle → kaydirma ofseti.
+
+                let track_left = compositor.windows[idx]
+                    .map(|w| w.content_rect().0)
+                    .unwrap_or(0);
+
+                let max_thumb_travel = track_w.saturating_sub(thumb_w);
+
+                let desired_left = mx
+                    .saturating_sub(grab)
+                    .max(track_left)
+                    .min(track_left + max_thumb_travel);
+
+                let ratio = if max_thumb_travel == 0 {
+                    0.0
+                } else {
+                    (desired_left - track_left) as f32 / max_thumb_travel as f32
+                };
+
+                let max_off = gui::scrollbar::max_offset(content_w, view_w);
+                let new_off = ((ratio * max_off as f32) as usize).min(max_off);
+
+                if let Some(wm) = compositor.windows[idx].as_mut() {
+                    wm.scroll.x = new_off;
+                    let (cx, cy, cw, ch) = wm.content_rect();
+                    drag_dirty_rect = Some((cx, cy, cw, ch));
+                    compositor
+                        .dirty_tracker
+                        .mark_window(idx, crate::gui::dirty_rect::DirtyRect::new(cx, cy, cw, ch));
                 }
             } else if let Some(idx) = dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
@@ -7510,6 +7662,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     w.height = nh;
 
                     w.is_maximized = false;
+
+                    // Küçülen pencerede kaydırma ofseti içeriğin dışına taşmasın.
+                    let (c_w, c_h) = window_content_size(
+                        w.app_id as usize,
+                        w.width,
+                        w.height,
+                        w.content_w,
+                        w.content_h,
+                        &filemanager_app,
+                        &notepad_app,
+                        &browser_app,
+                    );
+                    let (_, _, vcw, vch) = w.content_rect();
+                    w.scroll.x = w.scroll.x.min(gui::scrollbar::max_offset(c_w, vcw));
+                    w.scroll.y = w.scroll.y.min(gui::scrollbar::max_offset(c_h, vch));
 
                     let new_box = (
                         w.x.saturating_sub(4),
@@ -7779,6 +7946,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             resize_edge = None;
 
             vscroll_drag = None;
+
+            hscroll_drag = None;
         }
 
         // Alt tusu birakildiginda Alt+Tab penceresini kapat
@@ -8395,6 +8564,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         let is_dragging = dragging_win.is_some()
             || resizing_win.is_some()
             || vscroll_drag.is_some()
+            || hscroll_drag.is_some()
             || notepad_dragging
             || browser_page_dragging
             || terminal_dragging
@@ -9126,8 +9296,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     mouse.left_button,
                     mouse.right_button,
                     mouse.middle_button,
-                    w.x,
-                    w.y,
+                    w.x.saturating_sub(w.scroll.x),
+                    w.y.saturating_sub(w.scroll.y),
                 );
             }
         }
@@ -9149,15 +9319,23 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         }
 
         // Tarayıcı: yeni sayfa yüklendiğinde kaydırmayı başa al.
+        // Adreste `#parça` varsa ilgili çapanın konumuna kaydır.
         let browser_scroll_reset = browser_app.scroll_reset;
         if browser_app.scroll_reset {
             browser_app.scroll_reset = false;
             browser_app.scroll_animating = false;
             browser_app.scroll_target = 0;
-            if let Some((idx, _)) = focused_window_for_app(&compositor, 3) {
+            if let Some((idx, w)) = focused_window_for_app(&compositor, 3) {
                 if let Some(wm) = compositor.windows[idx].as_mut() {
                     wm.scroll.y = 0;
                 }
+                if let Some(y) = browser_app.pending_anchor_y.take() {
+                    let view_h = w.content_rect().3;
+                    let max_y = browser_app.content_height().saturating_sub(view_h);
+                    browser_app.scroll_to(0, y, max_y, monotonic_ms());
+                }
+            } else {
+                browser_app.pending_anchor_y = None;
             }
         }
 

@@ -105,6 +105,8 @@ impl IFrame {
             &mut iframes,
             &mut Vec::new(),
             &mut None,
+            &mut Vec::new(),
+            &mut Vec::new(),
         );
 
         // Extract title from first heading line if available

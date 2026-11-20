@@ -4,7 +4,9 @@
 use crate::apps;
 use crate::boot::cpu::{cpu_logical_count, cpu_vendor};
 use crate::boot::time::read_cpu_cycles;
-use crate::desktop::helpers::{desktop_item_rect, desktop_item_visible, window_content_h};
+use crate::desktop::helpers::{
+    app_scrolls_natively, desktop_item_rect, desktop_item_visible, window_content_size,
+};
 use crate::drivers;
 use crate::gui;
 
@@ -255,33 +257,76 @@ pub fn render_full_frame(
             // biterse kapsam önceki bağlama döner.
             let _app_context = apps::guard::ContextScope::new(app_id, idx);
 
-            let content_h = window_content_h(app_id, win.height, win.width, fm, np, br);
+            let (content_w, content_h) = window_content_size(
+                app_id,
+                win.width,
+                win.height,
+                win.content_w,
+                win.content_h,
+                fm,
+                np,
+                br,
+            );
 
-            let content_w = cw;
+            // Kendi kaydırmasını yapan uygulamalar ofseti içeride uygular.
+            // Diğerleri için içerik, pencere kaydırma ofseti kadar ötelenerek
+            // çizilir; böylece her pencere kaydırılabilir olur.
+            let native_scroll = app_scrolls_natively(app_id);
 
-            let want_v = content_h > ch;
+            // Kaydırma çubuğu var/yok kararı yalnızca içerik boyutuna bağlıdır.
+            // Görünür alan, diğer eksendeki çubuğun kalınlığı kadar küçülür;
+            // ofset sınırı da bu daralmış alana göre hesaplanmalıdır.
+            let sb = crate::gui::scrollbar::SCROLLBAR_THICKNESS;
+            let want_v = content_h > ch && ch > 0;
+            let want_h = content_w > cw && cw > 0;
+            let view_w = cw.saturating_sub(if want_v { sb } else { 0 });
+            let view_h = ch.saturating_sub(if want_h { sb } else { 0 });
 
-            let want_h = content_w > cw;
+            let max_sx = crate::gui::scrollbar::max_offset(content_w, view_w);
+            let max_sy = crate::gui::scrollbar::max_offset(content_h, view_h);
 
-            let v_gutter = if want_v {
-                crate::gui::scrollbar::SCROLLBAR_THICKNESS
+            let (sx, sy) = if native_scroll {
+                (0, 0)
             } else {
-                0
+                (win.scroll.x.min(max_sx), win.scroll.y.min(max_sy))
             };
 
-            let h_gutter = if want_h {
-                crate::gui::scrollbar::SCROLLBAR_THICKNESS
+            let layout_w = content_w.saturating_add(2).max(win.width);
+            let layout_h = content_h
+                .saturating_add(gui::titlebar_h() + 1)
+                .max(win.height);
+
+            let (rx, ry, rw, rh) = if native_scroll {
+                (win.x, win.y, win.width, win.height)
             } else {
-                0
+                (
+                    win.x.saturating_sub(sx),
+                    win.y.saturating_sub(sy),
+                    layout_w,
+                    layout_h,
+                )
             };
+
+            let layout_scroll = if native_scroll {
+                win.scroll
+            } else {
+                crate::gui::scrollbar::ScrollState { x: sx, y: sy }
+            };
+
+            let scroll_layout = crate::gui::scrollbar::layout(
+                (cx, cy, cw, ch),
+                content_w,
+                content_h,
+                layout_scroll,
+            );
 
             // Icerik alani (kaydirma cubuklari kadar daraltilmis).
 
             let content_area = (
                 cx,
                 cy,
-                cw.saturating_sub(v_gutter),
-                ch.saturating_sub(h_gutter),
+                scroll_layout.view_w.max(1),
+                scroll_layout.view_h.max(1),
             );
 
             fb.set_clip(
@@ -295,22 +340,14 @@ pub fn render_full_frame(
             let render_start = read_cpu_cycles();
 
             match app_id {
-                0 => fm.render_content(
-                    fb,
-                    win.x,
-                    win.y,
-                    win.width,
-                    win.height,
-                    &win.scroll,
-                    kbd.ctrl,
-                ),
+                0 => fm.render_content(fb, rx, ry, rw, rh, &win.scroll, kbd.ctrl),
 
                 1 => st.render_content(
                     fb,
-                    win.x,
-                    win.y,
-                    win.width,
-                    win.height,
+                    rx,
+                    ry,
+                    rw,
+                    rh,
                     kbd.layout,
                     now,
                     total_ram_bytes,
@@ -342,61 +379,55 @@ pub fn render_full_frame(
                     },
                 ),
 
-                2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
+                2 => np.render_content(fb, rx, ry, rw, rh, tick, &win.scroll),
 
-                3 => br.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
+                3 => br.render_content(fb, rx, ry, rw, rh, &win.scroll),
 
-                4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
+                4 => iv.render_content(fb, rx, ry, rw, rh),
 
-                5 => mp.render_content(fb, win.x, win.y, win.width, win.height, tick),
+                5 => mp.render_content(fb, rx, ry, rw, rh, tick),
 
-                6 => vp.render_content(fb, win.x, win.y, win.width, win.height, tick),
+                6 => vp.render_content(fb, rx, ry, rw, rh, tick),
 
-                7 => tm.render_content(fb, win.x, win.y, win.width, win.height),
+                7 => tm.render_content(fb, rx, ry, rw, rh),
 
-                8 => calc.render_content(fb, win.x, win.y, win.width, win.height),
+                8 => calc.render_content(fb, rx, ry, rw, rh),
 
                 9 => {
                     if let Some(app) = paint[idx].as_ref() {
-                        app.render_content(fb, win.x, win.y, win.width, win.height)
+                        app.render_content(fb, rx, ry, rw, rh)
                     }
                 }
 
-                10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
+                10 => term.render_content(fb, rx, ry, rw, rh, win.is_focused),
 
-                11 => inst.render_content(fb, win.x, win.y, win.width, win.height),
+                11 => inst.render_content(fb, rx, ry, rw, rh),
 
-                12 => v3d.render_content(fb, win.x, win.y, win.width, win.height),
+                12 => v3d.render_content(fb, rx, ry, rw, rh),
 
-                13 => pkg.render_content(fb, win.x, win.y, win.width, win.height),
+                13 => pkg.render_content(fb, rx, ry, rw, rh),
 
                 14 => apps::controlpanel::render_content(
                     fb,
-                    win.x,
-                    win.y,
-                    win.width,
-                    win.height,
+                    rx,
+                    ry,
+                    rw,
+                    rh,
                     now,
                     total_ram_bytes,
                     used_ram_bytes,
                     kbd.layout,
                 ),
 
-                15 => fps.render_content(fb, win.x, win.y, win.width, win.height),
+                15 => fps.render_content(fb, rx, ry, rw, rh),
 
                 16 => {
                     // FPS 3D raycasting render'ı QEMU/VM gibi yavaş ortamlarda
                     // Duvar raycast'inin ortasında kesilmesi yarım duvar
                     // bırakabildiği için 3D sahneye geniş bir bütçe verilir.
                     let fps3d_budget: u64 = 160;
-                    let render_completed = fps_3d.render_content_with_budget(
-                        fb,
-                        win.x,
-                        win.y,
-                        win.width,
-                        win.height,
-                        fps3d_budget,
-                    );
+                    let render_completed =
+                        fps_3d.render_content_with_budget(fb, rx, ry, rw, rh, fps3d_budget);
                     if render_completed {
                         let frame_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
                         fps_3d.record_completed_frame(frame_ms);
@@ -408,14 +439,7 @@ pub fn render_full_frame(
                     // şekilde 80 ms bütçe kullanılır (yavaş sanal ortamlarda
                     // yarım kare, boş ekrandan iyidir).
                     let city_budget: u64 = 80;
-                    city.render_content_with_budget(
-                        fb,
-                        win.x,
-                        win.y,
-                        win.width,
-                        win.height,
-                        city_budget,
-                    );
+                    city.render_content_with_budget(fb, rx, ry, rw, rh, city_budget);
                 }
 
                 _ => {}
@@ -456,34 +480,12 @@ pub fn render_full_frame(
 
             fb.reset_clip();
 
-            let sb = crate::gui::scrollbar::SCROLLBAR_THICKNESS;
-
-            if want_v {
-                let v_h = ch.saturating_sub(if want_h { sb } else { 0 });
-
-                if v_h > 0 {
-                    // Saga tam dayali dikey kaydirma cubugu
-
-                    let track = (cx + cw - sb, cy, sb, v_h);
-
-                    let g = crate::gui::scrollbar::v_geom(track, content_h, v_h, win.scroll.y);
-
-                    crate::gui::scrollbar::draw_vertical(fb, &g);
-                }
+            // Çizim ve isabet testi aynı `ScrollbarLayout` üzerinden yapılır.
+            if let Some(g) = scroll_layout.vertical {
+                crate::gui::scrollbar::draw_vertical(fb, &g);
             }
-
-            if want_h {
-                let h_w = cw.saturating_sub(if want_v { sb } else { 0 });
-
-                if h_w > 0 {
-                    // Alta tam dayali yatay kaydirma cubugu
-
-                    let track = (cx, cy + ch - sb, h_w, sb);
-
-                    let g = crate::gui::scrollbar::h_geom(track, content_w, h_w, win.scroll.x);
-
-                    crate::gui::scrollbar::draw_horizontal(fb, &g);
-                }
+            if let Some(g) = scroll_layout.horizontal {
+                crate::gui::scrollbar::draw_horizontal(fb, &g);
             }
         }
     }

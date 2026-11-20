@@ -319,20 +319,67 @@ pub fn focused_window_for_app(
     }
 }
 
-/// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.
-/// Kaydırma çubuğunun gerekip gerekmediğini ve tutamaç boyutunu belirlemek için
-/// hem çizim hem de tıklama kod yollarında ortak kullanılır.
-pub fn window_content_h(
+/// İçeriğini kendi çizen (kaydırma ofsetini `render_content` içinde uygulayan)
+/// uygulamalar. Bu uygulamalarda pencere kaydırması ayrıca uygulanmaz; aksi
+/// halde içerik iki kez kaydırılır.
+#[inline(always)]
+pub fn app_scrolls_natively(app_id: usize) -> bool {
+    matches!(app_id, 0 | 2 | 3)
+}
+
+/// Bir uygulamanın **çizimde kullanılan** pencere dikdörtgenini döndürür.
+///
+/// Kendi kaydırmasını yapan uygulamalarda gerçek pencere dikdörtgeni; diğer
+/// uygulamalarda ise kaydırma ofseti kadar ötelenmiş ve doğal (tam) boyuta
+/// genişletilmiş dikdörtgen döner. Fare etkileşimleri bu dikdörtgenle
+/// eşleştirilmelidir; aksi halde kaydırılmış içerikte tıklama noktaları
+/// kayar.
+#[inline]
+pub fn app_layout_rect(app_id: usize, win: &gui::Window) -> (usize, usize, usize, usize) {
+    if app_scrolls_natively(app_id) {
+        (win.x, win.y, win.width, win.height)
+    } else {
+        (
+            win.x.saturating_sub(win.scroll.x),
+            win.y.saturating_sub(win.scroll.y),
+            win.content_w.saturating_add(2).max(win.width),
+            win.content_h
+                .saturating_add(gui::titlebar_h() + 1)
+                .max(win.height),
+        )
+    }
+}
+
+/// Bir pencerenin kaydırılabilir içerik boyutunu **içerik alanı** biriminde
+/// (başlık çubuğu hariç) döndürür.
+///
+/// - Kendi kaydırmasını yapan uygulamalarda gerçek içerik ölçümü kullanılır.
+/// - Diğer uygulamalarda pencere ilk açıldığındaki doğal boyut (`natural_w`,
+///   `natural_h`) alt sınır kabul edilir. Pencere bu boyutun altına
+///   küçültüldüğünde içerik kaydırılabilir hale gelir.
+///
+/// Dönen değer her zaman görünür alandan küçük değildir; çağıran taraf
+/// `max_offset` ile karşılaştırarak kaydırma çubuğu gerekip gerekmediğine
+/// karar verir.
+pub fn window_content_size(
     app_id: usize,
-    _win_h: usize,
     win_w: usize,
+    win_h: usize,
+    natural_w: usize,
+    natural_h: usize,
     fm: &apps::filemanager::FileManagerApp,
     np: &apps::notepad::NotepadApp,
     br: &apps::browser::BrowserApp,
-) -> usize {
-    match app_id {
+) -> (usize, usize) {
+    let view_w = win_w.saturating_sub(2);
+    let view_h = win_h.saturating_sub(gui::titlebar_h() + 1);
+
+    let (need_w, need_h) = match app_id {
         // Dosya Yöneticisi: geçerli görünümün (liste/ızgara) içerik yüksekliği.
-        0 => apps::filemanager::list_top() + fm.content_height(win_w) + 30,
+        0 => {
+            let full_h = apps::filemanager::list_top() + fm.content_height(win_w) + 30;
+            (view_w, full_h.saturating_sub(gui::titlebar_h()))
+        }
         // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
         // Satır yüksekliği ve karakter genişliği font ölçeğine duyarlı olmalı.
         2 => {
@@ -341,16 +388,42 @@ pub fn window_content_h(
             let text_w = win_w.saturating_sub(gui::sp(12) + gui::sp(32) + gui::sp(16));
             let wrap_cols = (text_w / char_w.max(1)).max(1);
             let (lines, _) = np.text_extent(wrap_cols);
-            lines * line_h + gui::sp(58) + gui::sp(22)
+            let full_h = lines * line_h + gui::sp(58) + gui::sp(22);
+            (view_w, full_h.saturating_sub(gui::titlebar_h()))
         }
         // Web Tarayıcısı: yalnızca HTML/lik geçmiş içeriği kaydırılabilir.
-        3 => br.content_height(),
+        3 => (view_w, br.content_height()),
         // Görev Yöneticisi: başlık + süreç satırları + bellek grafiği + durum.
-        7 => 275,
-        // Diğer uygulamalar sabit düzenlidir: kaydırma gerekmez, içerik pencereye
-        // kırpılır (clip). `0` döndürmek "kaydırma yok" anlamına gelir.
-        _ => 0,
-    }
+        7 => (view_w, 275),
+        // Diğer uygulamalar: doğal (ilk açılış) boyut alt sınırı.
+        _ => (natural_w.max(view_w), natural_h.max(view_h)),
+    };
+
+    (need_w.max(view_w), need_h.max(view_h))
+}
+
+/// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.
+/// Eski çağrı noktaları için geriye dönük sarmalayıcı.
+pub fn window_content_h(
+    app_id: usize,
+    win_h: usize,
+    win_w: usize,
+    fm: &apps::filemanager::FileManagerApp,
+    np: &apps::notepad::NotepadApp,
+    br: &apps::browser::BrowserApp,
+) -> usize {
+    let view_h = win_h.saturating_sub(gui::titlebar_h() + 1);
+    let (_, need_h) = window_content_size(
+        app_id,
+        win_w,
+        win_h,
+        win_w.saturating_sub(2),
+        view_h,
+        fm,
+        np,
+        br,
+    );
+    need_h
 }
 
 /// Defter imlecini her zaman görünür kılacak dikey kaydırmayı uygular.

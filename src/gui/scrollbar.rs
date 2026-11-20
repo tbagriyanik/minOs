@@ -29,6 +29,100 @@ impl ScrollState {
     }
 }
 
+/// Bir pencere için hesaplanmış kaydırma çubuğu düzeni.
+///
+/// Çizim ve isabet testi aynı düzeni kullandığı için tutamaç her zaman
+/// görünen konumla birebir eşleşir.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ScrollbarLayout {
+    /// Dikey çubuk (taşma yoksa `None`).
+    pub vertical: Option<ScrollbarGeom>,
+    /// Yatay çubuk (taşma yoksa `None`).
+    pub horizontal: Option<ScrollbarGeom>,
+    /// Kaydırma çubukları düşüldükten sonra kalan görünür genişlik.
+    pub view_w: usize,
+    /// Kaydırma çubukları düşüldükten sonra kalan görünür yükseklik.
+    pub view_h: usize,
+}
+
+impl ScrollbarLayout {
+    /// Dikey çubuğun iz dikdörtgeni (yoksa sıfır boyutlu).
+    pub fn v_track(&self) -> (usize, usize, usize, usize) {
+        self.vertical.map(|g| g.track).unwrap_or((0, 0, 0, 0))
+    }
+
+    /// Yatay çubuğun iz dikdörtgeni (yoksa sıfır boyutlu).
+    pub fn h_track(&self) -> (usize, usize, usize, usize) {
+        self.horizontal.map(|g| g.track).unwrap_or((0, 0, 0, 0))
+    }
+}
+
+/// İçerik alanı ve içerik boyutuna göre iki eksenin kaydırma düzenini üretir.
+///
+/// `content_rect` pencerenin içerik alanıdır (başlık çubuğu hariç).
+/// `content_w`/`content_h` kaydırılabilir toplam içerik boyutudur.
+/// `scroll` mevcut ofsetlerdir; tutamaç konumları buradan hesaplanır.
+pub fn layout(
+    content_rect: (usize, usize, usize, usize),
+    content_w: usize,
+    content_h: usize,
+    scroll: ScrollState,
+) -> ScrollbarLayout {
+    let (cx, cy, cw, ch) = content_rect;
+    let want_v = content_h > ch && ch > 0;
+    let want_h = content_w > cw && cw > 0;
+
+    let view_h = ch.saturating_sub(if want_h { SCROLLBAR_THICKNESS } else { 0 });
+    let view_w = cw.saturating_sub(if want_v { SCROLLBAR_THICKNESS } else { 0 });
+
+    let vertical = if want_v && view_h > 0 {
+        let track = (
+            cx + cw.saturating_sub(SCROLLBAR_THICKNESS),
+            cy,
+            SCROLLBAR_THICKNESS,
+            view_h,
+        );
+        Some(v_geom(track, content_h, view_h, scroll.y))
+    } else {
+        None
+    };
+
+    let horizontal = if want_h && view_w > 0 {
+        let track = (
+            cx,
+            cy + ch.saturating_sub(SCROLLBAR_THICKNESS),
+            view_w,
+            SCROLLBAR_THICKNESS,
+        );
+        Some(h_geom(track, content_w, view_w, scroll.x))
+    } else {
+        None
+    };
+
+    ScrollbarLayout {
+        vertical,
+        horizontal,
+        view_w,
+        view_h,
+    }
+}
+
+/// Bir eksende kaydırma ofsetinin üst sınırını döndürür.
+#[inline(always)]
+pub fn max_offset(content: usize, view: usize) -> usize {
+    content.saturating_sub(view)
+}
+
+/// Tıklanan noktayı iz üzerindeki orana (0..=1) çevirir.
+#[inline(always)]
+pub fn ratio_at(pos: usize, track_start: usize, track_len: usize) -> f32 {
+    if track_len == 0 {
+        return 0.0;
+    }
+    let local = pos.saturating_sub(track_start).min(track_len) as f32;
+    (local / track_len as f32).clamp(0.0, 1.0)
+}
+
 /// Bir kaydırma çubuğu ekseni için geometri (iz + tutamaç).
 #[derive(Copy, Clone, Debug)]
 pub struct ScrollbarGeom {

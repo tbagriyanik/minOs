@@ -2,7 +2,7 @@
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-20 11:48:24 UTC |
+| Zaman | 2026-11-20 12:11:52 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |

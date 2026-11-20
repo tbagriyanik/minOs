@@ -204,8 +204,8 @@ impl Window {
             restore: None,
             z: 0,
             scroll: scrollbar::ScrollState::new(),
-            content_w: width,
-            content_h: height.saturating_sub(titlebar_h()),
+            content_w: width.saturating_sub(2),
+            content_h: height.saturating_sub(titlebar_h() + 1),
             theme_override: None,
         }
     }

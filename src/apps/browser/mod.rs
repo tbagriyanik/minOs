@@ -52,7 +52,10 @@ use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
 
 use css::{match_css_style, parse_css};
-use html::{decode_bytes_to_string, eq_ascii, extract_attr, find_bytes, render_html_to_lines};
+use html::{
+    decode_bytes_to_string, eq_ascii, extract_attr, find_bytes, percent_decode,
+    render_html_to_lines,
+};
 
 extern crate alloc;
 
@@ -838,6 +841,13 @@ pub struct BrowserApp {
     pub page_rerender_requested: bool,
     /// Yeni sayfa yüklendiğinde kaydırmayı başa al.
     pub scroll_reset: bool,
+    /// Çapa adı → belge-içi y koordinatı (içerik başlangıcı 0).
+    /// `id` öznitelikleri ve eski HTML'de `<a name="...">` için dolar.
+    pub anchor_positions: BTreeMap<String, usize>,
+    /// Adresteki `#parça` — sayfa yüklenince ilgili çapaya kaydırılır.
+    pending_anchor_name: Option<String>,
+    /// Yükleme sonrası uygulanacak hazır çapa ofseti (event_loop tüketir).
+    pub pending_anchor_y: Option<usize>,
     pub request_pending: bool,
     pub request_host: [u8; 128],
     pub request_host_len: usize,
@@ -866,6 +876,22 @@ pub struct BrowserApp {
     /// Aktif ağ isteği bir alt kaynak (img/CSS) için mi yapılıyor?
     /// Bu durumda gelen yanıt belge olarak değil, kaynak olarak işlenir.
     request_is_resource: bool,
+    /// <frameset>/<frame> belgeleri: (çerçeve kimliği, çözümlenmiş URL).
+    /// Kaynak kuyruğu tükendikten sonra ana durum makinesi üzerinden
+    /// tek tek getirilir.
+    pub pending_frames: Vec<(String, String)>,
+    /// Şu an getirilen çerçevenin kimliği.
+    current_frame_id: String,
+    /// Aktif ağ isteği bir <frame> belgesi için mi yapılıyor?
+    request_is_frame: bool,
+    /// Çerçeve belge önbelleği: URL → HTML gövdesi (başarısızlıkta boş
+    /// vektör; yeniden çizimlerde aynı URL tekrar istenmez).
+    frame_cache: BTreeMap<String, Vec<u8>>,
+    /// Alt isteklerdeki HTTP yönlendirmeleri: (orijinal URL, son URL).
+    /// Yönlendirilen kaynak/çerçeve için önbellek her iki anahtarla da
+    /// doldurulur; aksi halde yeniden çizimde orijinal URL sonsuz
+    /// döngüyle tekrar indirilir.
+    redirect_aliases: Vec<(String, String)>,
     pub redirect_count: usize,
     pub is_https: bool,
     pub is_post: bool,
@@ -1191,6 +1217,9 @@ impl BrowserApp {
             details_state: BTreeMap::new(),
             page_rerender_requested: false,
             scroll_reset: true,
+            anchor_positions: BTreeMap::new(),
+            pending_anchor_name: None,
+            pending_anchor_y: None,
             request_pending: false,
             request_host: [0; 128],
             request_host_len: 0,
@@ -1207,6 +1236,11 @@ impl BrowserApp {
             resource_fetch_state: 0,
             current_resource_url: String::new(),
             request_is_resource: false,
+            pending_frames: Vec::new(),
+            current_frame_id: String::new(),
+            request_is_frame: false,
+            frame_cache: BTreeMap::new(),
+            redirect_aliases: Vec::new(),
             redirect_count: 0,
             is_https: false,
             is_post: false,
@@ -1759,16 +1793,56 @@ impl BrowserApp {
         // `#section`). Tıklama tarafında ham href'i doğrudan navigate etmek
         // yerine mevcut sayfanın URL'sine göre çöz.
         clicked_url.and_then(|raw| {
-            if raw.starts_with("#")
+            let current = core::str::from_utf8(&self.url[..self.url_len]).ok()?;
+            let resolved = if raw.starts_with("#")
                 || raw.starts_with("/")
                 || (!raw.contains("://") && !raw.starts_with("data:"))
             {
-                let current = core::str::from_utf8(&self.url[..self.url_len]).ok()?;
                 crate::apps::browser::html::resolve_url(&raw, Some(current))
             } else {
                 Some(raw)
+            }?;
+            // Aynı belge içi `#parça` bağlantıları: sayfayı yeniden yüklemek
+            // yerine ilgili `id`/`name` çapasına kaydır.
+            let (res_base, res_frag) = match resolved.find('#') {
+                Some(i) => (&resolved[..i], Some(&resolved[i + 1..])),
+                None => (resolved.as_str(), None),
+            };
+            let cur_base = current.split('#').next().unwrap_or(current);
+            if res_base == cur_base {
+                if let Some(frag) = res_frag {
+                    if !frag.is_empty() {
+                        self.scroll_to_anchor(frag);
+                    }
+                    // Adres çubuğu parçayı göstersin (yeniden yükleme yok).
+                    self.set_url(resolved.as_bytes());
+                    return None;
+                }
             }
+            Some(resolved)
         })
+    }
+
+    /// `#parça` hedefinin (`id` özniteliği veya eski HTML'de `<a name>`)
+    /// belge-içi y konumuna yumuşak kaydırır. Çapa bulunamazsa `false`.
+    pub fn scroll_to_anchor(&mut self, name: &str) -> bool {
+        let decoded =
+            String::from_utf8(percent_decode(name)).unwrap_or_else(|_| String::from(name));
+        let y = self
+            .anchor_positions
+            .get(decoded.as_str())
+            .or_else(|| self.anchor_positions.get(name))
+            .copied();
+        match y {
+            Some(y) => {
+                self.scroll_anim_from = self.scroll_target;
+                self.scroll_target = y;
+                self.scroll_anim_start = crate::boot::time::main_monotonic_ms() as u64;
+                self.scroll_animating = true;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Resim üzerine tıklandıysa önbellek yolunu döndürür (çift tıklama ile görüntüleme için).
@@ -2414,6 +2488,8 @@ impl BrowserApp {
         let mut pending_resources: Vec<String> = Vec::new();
         let mut script_nav: Option<String> = None;
         let mut page_bg_image = None;
+        let mut anchor_marks: Vec<(String, usize)> = Vec::new();
+        let mut pending_frames: Vec<(String, String)> = Vec::new();
         render_html_to_lines(
             &preprocessed_html,
             wrap_width_px,
@@ -2432,18 +2508,80 @@ impl BrowserApp {
             &mut self.iframes,
             &mut pending_resources,
             &mut script_nav,
+            &mut anchor_marks,
+            &mut pending_frames,
         );
+        // Çerçeve belgeleri: önbellekte olanlar ve aynı URL'yi paylaşan
+        // tekrarlar elenir; her benzersiz URL bir kez getirilir.
+        {
+            let mut seen: Vec<String> = Vec::new();
+            pending_frames.retain(|(_, url)| {
+                if self.frame_cache.contains_key(url) || seen.iter().any(|u| u == url) {
+                    return false;
+                }
+                seen.push(url.clone());
+                true
+            });
+        }
+        self.pending_frames = pending_frames;
+        // Önbellekteki çerçeve içeriklerini hemen yerleştir; ağ beklenmez.
+        for frame in self.iframes.frames.iter_mut() {
+            if frame.src.is_empty() {
+                continue;
+            }
+            if let Some(html) = self.frame_cache.get(frame.src.as_str()) {
+                let html = html.clone();
+                let w = frame.width.max(80);
+                frame.load_content(&html, w, 400);
+            }
+        }
+        // Çapa konumları: satır dizinini belge-y koordinatına çevir.
+        // İlk satır `12` (+ JS uyarısı varsa `28`) ofsetiyle başlar; her
+        // satır kendi `line_h` yüksekliği kadar ilerler (çizim döngüsüyle
+        // aynı yükseklik hesabı).
+        self.anchor_positions.clear();
+        {
+            let mut marks = anchor_marks.into_iter().peekable();
+            let mut y = 12 + if self.js_alert.is_some() { 28 } else { 0 };
+            for (line_idx, line) in self.page_lines.iter().enumerate() {
+                while marks.peek().is_some_and(|(_, mi)| *mi == line_idx) {
+                    let (name, _) = marks.next().unwrap();
+                    self.anchor_positions.entry(name).or_insert(y);
+                }
+                let line_h = match line.tag {
+                    HtmlTagType::Heading1 => 26,
+                    HtmlTagType::Heading2 => 22,
+                    HtmlTagType::Heading3 => 20,
+                    _ => 18,
+                };
+                y += line_h;
+            }
+            // Sayfa sonuna denk gelen çapalar (satır sınırı ötesi) için kalanlar.
+            for (name, _) in marks {
+                self.anchor_positions.entry(name).or_insert(y);
+            }
+        }
+        // Adresteki `#parça` varsa yükleme bitince ilgili çapaya kaydır.
+        if let Some(frag) = self.pending_anchor_name.take() {
+            let decoded = String::from_utf8(percent_decode(&frag)).unwrap_or_else(|_| frag.clone());
+            self.pending_anchor_y = self
+                .anchor_positions
+                .get(decoded.as_str())
+                .or_else(|| self.anchor_positions.get(frag.as_str()))
+                .copied();
+        }
         // Betik kaynaklı gezinme istekleri (location.assign, history.back...).
         if let Some(nav) = script_nav {
             self.handle_script_navigation(&nav);
         }
         self.page_bg_image = page_bg_image;
         self.pending_resources = pending_resources;
-        self.resource_fetch_state = if self.pending_resources.is_empty() {
-            0
-        } else {
-            1
-        };
+        self.resource_fetch_state =
+            if self.pending_resources.is_empty() && self.pending_frames.is_empty() {
+                0
+            } else {
+                1
+            };
         self.current_resource_url.clear();
 
         // İş bütçesine dayalı CPU rahatlatma ipucu: sayfa düzenlemesi bu karede
@@ -3834,6 +3972,9 @@ impl BrowserApp {
             }
         }
 
+        // Yönlendirme takma adları varsa önbelleği orijinal URL'lere de yay.
+        self.propagate_image_cache();
+
         // Getirilen kaynağı kuyruktan çıkar (artık önbellekte).
         self.pending_resources.retain(|u| u != &url);
 
@@ -3858,11 +3999,12 @@ impl BrowserApp {
         self.reset_response_buffer();
         self.finish_response_connection(keep_alive_ok);
 
-        self.resource_fetch_state = if self.pending_resources.is_empty() {
-            0
-        } else {
-            1
-        };
+        self.resource_fetch_state =
+            if self.pending_resources.is_empty() && self.pending_frames.is_empty() {
+                0
+            } else {
+                1
+            };
         self.load_progress = 100;
         self.status = crate::gui::ui_text("Sayfa yüklendi.", "Page loaded.");
     }
@@ -3951,6 +4093,11 @@ impl BrowserApp {
         // sayfa veya eski sayfanın resimleri kullanılır.
         self.original_html.clear();
         self.image_cache.clear();
+        self.frame_cache.clear();
+        self.pending_frames.clear();
+        self.current_frame_id.clear();
+        self.request_is_frame = false;
+        self.redirect_aliases.clear();
         self.page_bg_image = None;
         let mut input = [0u8; 128];
         input[..self.url_len].copy_from_slice(&self.url[..self.url_len]);
@@ -3968,6 +4115,10 @@ impl BrowserApp {
             normalized[..normalized_len].copy_from_slice(&entered.as_bytes()[..normalized_len]);
         }
         let value = core::str::from_utf8(&normalized[..normalized_len]).unwrap_or("");
+        // `#parça` geri kalanı: sayfa yüklenince ilgili `id`/`name` çapasına
+        // kaydırılır (tarayıcılardaki gibi; istek yoluna girmez).
+        self.pending_anchor_name = value.find('#').map(|i| String::from(&value[i + 1..]));
+        self.pending_anchor_y = None;
         {
             let mut s: heapless::String<160> = heapless::String::new();
             let _ = write!(s, "[NAV] url={}", value);
@@ -4046,8 +4197,12 @@ impl BrowserApp {
                 self.request_state = 0;
                 self.resource_fetch_state = 0;
                 self.request_is_resource = false;
+                self.request_is_frame = false;
                 self.pending_resources.clear();
+                self.pending_frames.clear();
+                self.redirect_aliases.clear();
                 self.current_resource_url.clear();
+                self.current_frame_id.clear();
                 self.request_pending = true;
                 self.animation_start_ms = crate::boot::time::main_monotonic_ms();
                 self.transition_start_ms = crate::boot::time::main_monotonic_ms();
@@ -4288,6 +4443,7 @@ impl BrowserApp {
             // gibi diğer istemciler devralabilsin).
             crate::drivers::netstack::tcp_release(1);
             self.start_next_resource();
+            self.start_next_frame();
         }
 
         if !self.request_pending {
@@ -4317,6 +4473,9 @@ impl BrowserApp {
             // içeriği temizlenmez, yüklenmiş kısmı ekranda kalır.
             if self.request_is_resource {
                 self.fail_resource_request();
+            }
+            if self.request_is_frame {
+                self.fail_frame_request();
             }
             // TLS hata detaylarını logla
             if let Some(ref tls) = self.tls_session {
@@ -4936,6 +5095,11 @@ impl BrowserApp {
                                 self.finish_resource_request(body, vfs, false);
                                 return;
                             }
+                            // <frame> belgesi: iç içe içerik olarak işlenir.
+                            if self.request_is_frame {
+                                self.finish_frame_request(body, vfs, false);
+                                return;
+                            }
 
                             // HTML gövdesini render et
                             self.load_html(body, 600, 256, None);
@@ -5163,6 +5327,56 @@ impl BrowserApp {
                                         self.request_port,
                                         current_path,
                                     );
+                                    if self.request_is_resource || self.request_is_frame {
+                                        // Alt istek (kaynak/çerçeve) yönlendirmesi:
+                                        // sayfa gezinmez; kuyruktaki girdi yeni
+                                        // adresle değiştirilir ve istek yeniden
+                                        // kurulur. Adres çubuğu değişmez.
+                                        if target.len() <= 512 {
+                                            // Orijinal → son adres eşlemesini
+                                            // kaydet; önbellek iki anahtarla da
+                                            // doldurulacak.
+                                            let orig = self.current_resource_url.clone();
+                                            if !orig.is_empty() && orig != target {
+                                                self.redirect_aliases.retain(|(o, _)| o != &orig);
+                                                self.redirect_aliases.push((orig, target.clone()));
+                                            }
+                                            if self.request_is_frame {
+                                                if !self.pending_frames.is_empty() {
+                                                    self.pending_frames[0].1 = target.clone();
+                                                }
+                                            } else if let Some(pos) = self
+                                                .pending_resources
+                                                .iter()
+                                                .position(|u| u == &self.current_resource_url)
+                                            {
+                                                self.pending_resources[pos] = target.clone();
+                                            }
+                                            self.redirect_count += 1;
+                                            crate::drivers::netstack::tcp_close();
+                                            crate::drivers::netstack::tcp_clear_result();
+                                            self.response_len = 0;
+                                            self.expected_response_len = 0;
+                                            self.response_data.clear();
+                                            self.response_data.resize(RESPONSE_BUF_MIN, 0);
+                                            self.tls_app_data.clear();
+                                            self.tls_session = None;
+                                            self.tls_pending_request.clear();
+                                            self.tls_request_sent = false;
+                                            self.tls13_finished_sent = false;
+                                            self.revocation_checked = false;
+                                            self.request_pending = false;
+                                            self.request_state = 0;
+                                            self.request_deadline = 0;
+                                            self.resource_fetch_state = 1;
+                                            return;
+                                        }
+                                        self.finish_network_error(crate::gui::ui_text(
+                                            "Yönlendirme adresi çok uzun.",
+                                            "Redirect URL is too long.",
+                                        ));
+                                        return;
+                                    }
                                     if target.len() <= self.url.len() {
                                         self.set_url(target.as_bytes());
                                         self.request_pending = false;
@@ -5263,6 +5477,12 @@ impl BrowserApp {
                         if self.request_is_resource {
                             let keep_alive = self.response_allows_keep_alive(status_line, headers);
                             self.finish_resource_request(&body_bytes, vfs, keep_alive);
+                            return;
+                        }
+                        // <frame> belgesi: iç içe içerik olarak işlenir.
+                        if self.request_is_frame {
+                            let keep_alive = self.response_allows_keep_alive(status_line, headers);
+                            self.finish_frame_request(&body_bytes, vfs, keep_alive);
                             return;
                         }
 
@@ -5473,6 +5693,7 @@ impl BrowserApp {
         // işlenir (belge olarak değil).
         if !self.request_pending {
             self.start_next_resource();
+            self.start_next_frame();
         }
     }
 
@@ -5547,13 +5768,193 @@ impl BrowserApp {
             None => {
                 // Desteklenmeyen kaynak adresi: kuyruktan düşür.
                 self.pending_resources.remove(0);
-                self.resource_fetch_state = if self.pending_resources.is_empty() {
-                    0
-                } else {
-                    1
-                };
+                self.resource_fetch_state =
+                    if self.pending_resources.is_empty() && self.pending_frames.is_empty() {
+                        0
+                    } else {
+                        1
+                    };
             }
         }
+    }
+
+    /// Sıradaki <frame> belgesini getirmek için isteği başlatır.
+    ///
+    /// Kaynak getirmeyle aynı DNS/TCP/TLS/keep-alive hattını kullanır;
+    /// yanıt `request_is_frame` bayrağıyla belge-içerik olarak işlenir.
+    fn start_next_frame(&mut self) {
+        if self.request_pending || self.pending_frames.is_empty() {
+            return;
+        }
+        let (frame_id, url) = self.pending_frames[0].clone();
+        match split_resource_url(&url) {
+            Some((is_https, host, port, path)) => {
+                let host_len = host.len().min(128);
+                let path_len = path.len().min(256);
+                let mut host_buf = [0u8; 128];
+                host_buf[..host_len].copy_from_slice(&host.as_bytes()[..host_len]);
+                let mut path_buf = [0u8; 256];
+                path_buf[..path_len].copy_from_slice(&path.as_bytes()[..path_len]);
+                self.current_frame_id = frame_id;
+                self.current_resource_url = url;
+                self.request_is_frame = true;
+                self.request_is_resource = false;
+                self.is_https = is_https;
+                self.is_post = false;
+                self.post_body.clear();
+                self.request_host = host_buf;
+                self.request_host_len = host_len;
+                self.request_path = path_buf;
+                self.request_path_len = path_len;
+                self.request_port = port;
+
+                // Keep-alive: aynı kaynak için açık bağlantı varsa yeniden kullan.
+                if self.keep_alive_matches(is_https, port, &host_buf[..host_len])
+                    && crate::drivers::netstack::tcp_claim(1)
+                {
+                    self.request_state = 2;
+                    self.request_pending = true;
+                    self.request_deadline = 0;
+                    self.resource_fetch_state = 2;
+                    self.load_progress = 40;
+                    self.status =
+                        crate::gui::ui_text("Çerçeve getiriliyor...", "Fetching frame...");
+                    self.reset_response_buffer();
+                    self.tls_app_data.clear();
+                    self.revocation_checked = true;
+                    self.tls13_finished_sent = true;
+                    let req_buf = self.build_request();
+                    if self.is_https {
+                        self.tls_pending_request = req_buf;
+                        self.tls_request_sent = false;
+                    } else {
+                        let _ = crate::drivers::netstack::tcp_send(&req_buf);
+                    }
+                    return;
+                }
+
+                self.request_state = 0;
+                self.request_pending = true;
+                self.request_deadline = 0;
+                self.resource_fetch_state = 2;
+                self.load_progress = 10;
+                self.status = crate::gui::ui_text("Çerçeve getiriliyor...", "Fetching frame...");
+                self.reset_response_buffer();
+            }
+            None => {
+                // Desteklenmeyen çerçeve adresi: kuyruktan düşür.
+                self.pending_frames.remove(0);
+                self.resource_fetch_state =
+                    if self.pending_frames.is_empty() && self.pending_resources.is_empty() {
+                        0
+                    } else {
+                        1
+                    };
+            }
+        }
+    }
+
+    /// <frame> belgesi yanıtını işler: gövdeyi önbelleğe alır, sayfayı
+    /// yeniden çizerek çerçeveyi yüklenmiş içerikle gösterir.
+    fn finish_frame_request(
+        &mut self,
+        body: &[u8],
+        vfs: &mut VirtualFileSystem,
+        keep_alive_ok: bool,
+    ) {
+        let url = self.current_resource_url.clone();
+        self.frame_cache.insert(url, body.to_vec());
+        self.propagate_frame_cache();
+        crate::serial_print("[FRAME] icerik yuklendi: ");
+        crate::serial_print(&self.current_frame_id);
+        crate::serial_print(" ");
+        crate::serial::print_dec(body.len() as u64);
+        crate::serial_print(" bayt\n");
+
+        // Bağlantı durumunu temizle (keep-alive kaynağı korunur).
+        self.request_pending = false;
+        self.request_state = 0;
+        self.request_deadline = 0;
+        self.request_is_frame = false;
+        self.current_frame_id.clear();
+        self.tls_app_data.clear();
+        self.tls_pending_request.clear();
+        self.tls_request_sent = false;
+        self.revocation_checked = false;
+        self.reset_response_buffer();
+        self.finish_response_connection(keep_alive_ok);
+
+        // Yeniden çizim: load_html önbellekten çerçeve içeriğini yükler ve
+        // sıradaki bekleyen çerçeveyi kuyruğa alır.
+        let saved_scroll = self.scroll_target;
+        let html = self.original_html.clone();
+        self.load_html(&html, 600, 256, Some(vfs));
+        self.scroll_target = saved_scroll;
+        self.scroll_reset = false;
+        self.load_progress = 100;
+    }
+
+    /// Yönlendirme takma adlarını izleyerek `frame_cache` girdisini
+    /// orijinal URL'lere de yayar (zincirleme yönlendirmeler dahil).
+    fn propagate_frame_cache(&mut self) {
+        for _ in 0..=self.redirect_aliases.len() {
+            let mut added = false;
+            for i in 0..self.redirect_aliases.len() {
+                let (orig, fin) = self.redirect_aliases[i].clone();
+                if !self.frame_cache.contains_key(&orig) {
+                    if let Some(data) = self.frame_cache.get(&fin).cloned() {
+                        self.frame_cache.insert(orig, data);
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+    }
+
+    /// `image_cache` için `propagate_frame_cache` karşılığı.
+    fn propagate_image_cache(&mut self) {
+        for _ in 0..=self.redirect_aliases.len() {
+            let mut added = false;
+            for i in 0..self.redirect_aliases.len() {
+                let (orig, fin) = self.redirect_aliases[i].clone();
+                if !self.image_cache.contains_key(&orig) {
+                    if let Some(data) = self.image_cache.get(&fin).cloned() {
+                        self.image_cache.insert(orig, data);
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+    }
+
+    /// Başarısız olan çerçeve isteğini kuyruğa düşürür; URL boş gövdeyle
+    /// önbelleğe yazılır ki yeniden çizimlerde tekrar denenmesin.
+    fn fail_frame_request(&mut self) {
+        if !self.request_is_frame {
+            return;
+        }
+        let url = self.current_resource_url.clone();
+        if !url.is_empty() {
+            self.frame_cache.insert(url.clone(), Vec::new());
+            // Başarısız çerçeve kuyruktan düşer; aksi halde aynı URL
+            // sonsuz döngüyle tekrar istenir.
+            self.pending_frames.retain(|(_, u)| u != &url);
+        }
+        self.propagate_frame_cache();
+        self.request_is_frame = false;
+        self.current_frame_id.clear();
+        self.resource_fetch_state =
+            if self.pending_frames.is_empty() && self.pending_resources.is_empty() {
+                0
+            } else {
+                1
+            };
     }
 
     fn finish_http_response(&mut self) {
@@ -5583,6 +5984,15 @@ impl BrowserApp {
             crate::drivers::netstack::tcp_clear_result();
             return;
         }
+        if self.request_is_frame {
+            self.fail_frame_request();
+            self.request_pending = false;
+            self.request_state = 0;
+            self.request_deadline = 0;
+            self.load_progress = 100;
+            crate::drivers::netstack::tcp_clear_result();
+            return;
+        }
         self.request_pending = false;
         self.page_loaded = false;
         self.load_progress = 0;
@@ -5602,13 +6012,15 @@ impl BrowserApp {
         // Başarısız kaynak "0x0" işaretiyle önbelleğe yazılır; sonraki yeniden
         // çizimlerde aynı URL sonsuz döngüyle tekrar istenmez.
         self.image_cache.insert(url, (0, 0, Vec::new()));
+        self.propagate_image_cache();
         self.request_is_resource = false;
         self.current_resource_url.clear();
-        self.resource_fetch_state = if self.pending_resources.is_empty() {
-            0
-        } else {
-            1
-        };
+        self.resource_fetch_state =
+            if self.pending_resources.is_empty() && self.pending_frames.is_empty() {
+                0
+            } else {
+                1
+            };
     }
 
     /// Ertelenmiş ağ hata mesajlarını hata günlüğüne aktarır.

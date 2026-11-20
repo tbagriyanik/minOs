@@ -91,6 +91,11 @@ Masaüstü kullanımı, MinShell komutları ve kısayol referansı.
 - **Medya Tuşları:** Ses açma, kısma, susturma, oynat/duraklat, önceki/sonraki parça.
 - **Yenileme (`F5`):** Odaklı uygulamanın içeriğini tazeler.
 - **Video Oynatıcı:** `Oynat/Durdur` animasyonu ve zaman çizelgesini duraklatır/devam ettirir; `Durdur` başa sarar.
+- **Yumuşak Kaydırma:** Fare tekerleği tüm uygulamalarda (tarayıcı kendi sistemini kullanır) kısa bir ease-out animasyonuyla kaydırır; kaydırma çubuğu tıklaması/sürüklemesi animasyonu anında iptal eder.
+- **Açılış Animasyonları:** Pencereler, Başlat Menüsü, sağ tık menüleri, Alt+Tab geçiş penceresi ve takvim/ses açılır pencereleri kısa kayma animasyonuyla belirir; toast bildirimler sağdan kayarak girer/çıkar.
+- **İpuçları (Tooltip):** Görev çubuğu ve sistem tepsisindeki öğelerin üzerine ~0,7 sn bekleyince açıklama balonu gösterilir.
+- **Arayüz Animasyonları Anahtarı:** Sistem Ayarları > Ekran sekmesindeki **Arayüz animasyonları** kapatıldığında tüm hareket animasyonları (açılışlar, toast kayması ve yumuşak kaydırma dahil) anında tamamlanır.
+- **Saydam Pencereler:** Sistem Ayarları > Ekran sekmesindeki **Saydam pencereler** açıkken pencere gövdesi yarı saydam olur; altındaki masaüstü ve pencereler görünür. (Uygulama içerik zeminleri opak kalır.)
 
 ---
 

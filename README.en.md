@@ -6,8 +6,8 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-169%2C116%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-454%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-180%2C656%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-456%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
@@ -17,7 +17,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Frozen-app monitoring now runs independently of the main loop, and the FPS 3D app reports real frame-rate measurements.
 - The FPS game has start and result menus; basic form controls support Tab navigation, Enter confirmation and Esc cancellation, including the Welcome screen.
 - Incomplete frames are no longer displayed when the render budget expires.
-- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 454 tests.
+- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 456 tests.
 - The web browser is now a modern browser: HTTP/1.1 + TLS 1.3 gained HTTP/2 and HTTP/3 (QUIC); HTML5 gained inline SVG rasterization plus `<details>`/`<dialog>`/`<template>`/`<picture>` support; CSS3 gained context-aware selectors (`:nth-child`, `[attr=]`, `:is()`/`:not()`, sibling/ancestor combinators); Canvas 2D gained gradients, transforms, Bézier/arc paths, `save`/`restore` and `getImageData`/`putImageData`; minJs gained `XMLHttpRequest`, `history.pushState` and `requestAnimationFrame`.
 - Browser CSS3 `display` (flex/grid/block/inline/inline-block) and `overflow` rules are now applied correctly; a multi-CPU scheduler bug where a CPU skipped its own ready task and idled has been fixed.
 - Deterministic host tests were added for `TimeBudget` and `OperationGuard`.
@@ -25,6 +25,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Settings includes three additional desktop images.
 - `munmap` now performs real page teardown: realized frames are dropped from the resource ledger and returned to the PMM, and emptied page-table frames (PT/PD/PDPT) are reclaimed; middle splits are rejected without removing any mapping when the region table is full. A shared-frame reference leak on process exit and fork-failure paths was also fixed.
 - Keyboard and mouse now work in default QEMU runs: `run.ps1` now attaches `qemu-xhci + usb-kbd + usb-mouse` (USB HID) by default. QEMU 11's default `pc` machine had the i8042 controller but no PS/2 keyboard/mouse device attached, so previous releases never received desktop input events; this is fixed.
+- The desktop UI was polished and accelerated end-to-end: smooth mouse-wheel scrolling in every app; short open animations for windows, the start menu, context menus, the Alt+Tab switcher and the calendar/volume popups; tooltip balloons on the taskbar and tray; slide animations for toast notifications; and a glyph cache for text rendering. System Settings > Display gained **Interface animations** (disables all motion, including smooth scrolling) and **Transparent windows** toggles.
 
 See the [full changelog](docs/CHANGELOG.en.md) for details.
 

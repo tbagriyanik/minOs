@@ -979,6 +979,20 @@ pub const BOOKMARKS: &[Bookmark] = &[
         description: "CSS, DOM ve JavaScript etkileşim testi.",
         description_en: "CSS, DOM and JavaScript interaction test.",
     },
+    Bookmark {
+        title: "The Old Net",
+        title_en: "The Old Net",
+        url: "https://theoldnet.com/",
+        description: "Retro web arşivi: eski GeoCities ve 90'lar interneti.",
+        description_en: "Retro web archive: old GeoCities and 90s internet.",
+    },
+    Bookmark {
+        title: "GeoCities",
+        title_en: "GeoCities",
+        url: "https://www.geocities.ws/oldternet",
+        description: "Klasik GeoCities sayfalarının yeniden yaşatılmış hali.",
+        description_en: "Revived classic GeoCities pages.",
+    },
 ];
 
 #[cfg(test)]

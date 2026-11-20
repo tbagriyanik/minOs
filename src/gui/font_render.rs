@@ -13,6 +13,7 @@
 //! testlerinde (`tests/host_tests.rs`) kullanılabilir.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // Atlas (`font_atlas.rs`) `build.rs` tarafından Cargo'nun `OUT_DIR` dizinine
 // yazılır. Host testleri (`test_host.ps1`) `rustc`'yi doğrudan çağırdığı için
@@ -39,12 +40,47 @@ fn data(face: Face) -> (&'static [GlyphRecord], &'static [u8], f32, f32) {
     }
 }
 
+/// Doğrudan eşlemeli glyph önbelleği: her karakter için tekrarlanan
+/// binary search'ü atlar. `draw`/`text_width` kare başına binlerce
+/// karakter işlediğinden sıcak yolda belirgin kazanç sağlar.
+/// Değer kodlaması: 0 = boş yuva, `u32::MAX` = "glif yok", diğer = indeks.
+const GLYPH_CACHE_SIZE: usize = 256;
+static GLYPH_CACHE_KEY: [AtomicU32; GLYPH_CACHE_SIZE] =
+    [const { AtomicU32::new(0) }; GLYPH_CACHE_SIZE];
+static GLYPH_CACHE_VAL: [AtomicU32; GLYPH_CACHE_SIZE] =
+    [const { AtomicU32::new(0) }; GLYPH_CACHE_SIZE];
+
 fn glyph(face: Face, character: char) -> Option<&'static GlyphRecord> {
     let (glyphs, _, _, _) = data(face);
-    glyphs
-        .binary_search_by_key(&(character as u32), |record| record.codepoint)
-        .ok()
-        .map(|index| &glyphs[index])
+    let cp = character as u32;
+    let face_bit = match face {
+        Face::Inria => 0u32,
+        Face::Geist => 1u32,
+    };
+    let key = (cp << 1) | face_bit;
+    let slot = ((cp as usize) ^ (face_bit as usize)) & (GLYPH_CACHE_SIZE - 1);
+
+    if GLYPH_CACHE_KEY[slot].load(Ordering::Relaxed) == key {
+        let cached = GLYPH_CACHE_VAL[slot].load(Ordering::Relaxed);
+        return if cached == u32::MAX {
+            None
+        } else {
+            Some(&glyphs[cached as usize])
+        };
+    }
+
+    let found = glyphs
+        .binary_search_by_key(&cp, |record| record.codepoint)
+        .ok();
+    // Önce değer, sonra anahtar yazılır: anahtar "geçerli" etiketi
+    // olduğundan eşzamanlı okumada eski anahtar ıskalama üretir,
+    // asla yanlış kayıt döndürmez.
+    GLYPH_CACHE_VAL[slot].store(
+        found.map(|i| i as u32).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    GLYPH_CACHE_KEY[slot].store(key, Ordering::Relaxed);
+    found.map(|index| &glyphs[index])
 }
 
 /// Yedek fontların (tier > 0) adları; `tier` indeksi bu listeye 1 tabanlı
@@ -389,37 +425,23 @@ fn ceil_positive(value: f32) -> usize {
 }
 
 pub fn text_width(face: Face, text: &str, size: f32) -> usize {
-    let (glyphs, _, _, _) = data(face);
     let factor = size / 14.0;
     let mut width = 0.0f32;
     for line in text.split('\n') {
         let mut line_width = 0.0f32;
         // RTL yoksa tahsisatsız hızlı yol; aksi halde görsel sıra gerekir.
         // Fast path without allocation when no RTL; visual order otherwise.
+        // `glyph()` sonucu doğrudan advance'i verir; ikinci bir arama gerekmez.
         if line.chars().any(is_rtl) {
             for character in visual_order(line) {
-                let codepoint = if glyph(face, character).is_some() {
-                    character as u32
-                } else {
-                    b'?' as u32
-                };
-                if let Ok(index) =
-                    glyphs.binary_search_by_key(&codepoint, |record| record.codepoint)
-                {
-                    line_width += glyphs[index].advance * factor;
+                if let Some(record) = glyph(face, character).or_else(|| glyph(face, '?')) {
+                    line_width += record.advance * factor;
                 }
             }
         } else {
             for character in line.chars() {
-                let codepoint = if glyph(face, character).is_some() {
-                    character as u32
-                } else {
-                    b'?' as u32
-                };
-                if let Ok(index) =
-                    glyphs.binary_search_by_key(&codepoint, |record| record.codepoint)
-                {
-                    line_width += glyphs[index].advance * factor;
+                if let Some(record) = glyph(face, character).or_else(|| glyph(face, '?')) {
+                    line_width += record.advance * factor;
                 }
             }
         }

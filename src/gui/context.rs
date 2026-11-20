@@ -202,7 +202,18 @@ impl MinGuiCompositor {
     }
 
     pub fn render_context_menu(&self, fb: &mut Framebuffer) {
-        let (menu_x, menu_y, menu_w, menu_h) = self.context_menu_geom(fb.width, fb.height);
+        let (menu_x, mut menu_y, menu_w, menu_h) = self.context_menu_geom(fb.width, fb.height);
+
+        // Açılış animasyonu: menü tıklanan noktadan yukarı doğru
+        // kayarak oturur (azaltılmış harekette anında çizilir).
+        if !crate::gui::anim::reduced_motion() {
+            let age = crate::monotonic_ms().wrapping_sub(self.context_menu_open_ms);
+            if age < crate::gui::window::OPEN_ANIM_MS {
+                let t = age as f32 / crate::gui::window::OPEN_ANIM_MS as f32;
+                menu_y = menu_y
+                    .saturating_add(((1.0 - crate::gui::anim::ease_out_quad(t)) * 8.0) as usize);
+            }
+        }
 
         fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);

@@ -1933,7 +1933,7 @@ pub fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
                         while y < h {
                             let mut x = 0usize;
                             while x < w {
-                                if pixel_idx + 2 < decompressed.len() {
+                                if pixel_idx < decompressed.len() {
                                     let ci = decompressed[pixel_idx] as usize;
                                     if ci * 3 + 2 < color_table.len() {
                                         let base = (y * w + x) * 3;
@@ -1943,7 +1943,7 @@ pub fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
                                     }
                                     pixel_idx += 1;
                                 }
-                                x += step;
+                                x += 1;
                             }
                             y += step;
                         }
@@ -2043,7 +2043,8 @@ fn lzw_decompress(data: &[u8], min_code_size: usize) -> Option<Vec<u8>> {
         let in_code = code;
 
         if code >= next_code {
-            // Special case: code not yet in table
+            // Özel durum: kod henüz tabloda yok. Dize,
+            // string(old_code) + ilk karakter(string(old_code)) olur.
             let mut stack: Vec<u8> = Vec::new();
             let mut c = old_code?;
             stack.push(suffix[c]);
@@ -2052,6 +2053,9 @@ fn lzw_decompress(data: &[u8], min_code_size: usize) -> Option<Vec<u8>> {
                 stack.push(suffix[c]);
             }
             for &b in stack.iter().rev() {
+                out.push(b);
+            }
+            if let Some(&b) = stack.last() {
                 out.push(b);
             }
             if next_code < 4096 {
@@ -2072,7 +2076,7 @@ fn lzw_decompress(data: &[u8], min_code_size: usize) -> Option<Vec<u8>> {
             }
             if next_code < 4096 && old_code.is_some() {
                 prefix[next_code] = Some(old_code?);
-                suffix[next_code] = *stack.first()?;
+                suffix[next_code] = *stack.last()?;
                 next_code += 1;
             }
         }

@@ -48,6 +48,10 @@ pub mod browser_svg;
 #[path = "../src/apps/browser/canvas.rs"]
 pub mod browser_canvas;
 
+// PNG/JPEG/GIF/WebP/BMP/SVG kod çözücüleri (saf alloc, host'ta test edilebilir).
+#[path = "../src/apps/imgdecode.rs"]
+pub mod imgdecode;
+
 #[path = "../src/apps/calc_core.rs"]
 pub mod calc_core;
 
@@ -181,6 +185,16 @@ pub mod apps {
             (NO_APP, NO_WINDOW, false)
         }
     }
+    // imgdecode.rs SVG için `crate::apps::browser::svg::render_svg` çağırır;
+    // host testlerinde SVG çözümü devre dışı bırakılır.
+    pub mod browser {
+        pub mod svg {
+            pub fn render_svg(_src: &[u8]) -> Option<(usize, usize, alloc::vec::Vec<u8>)> {
+                None
+            }
+        }
+    }
+
     // canvas.rs üçgen/arc için viewer3d'nin saf matematik yardımcılarını
     // kullanır; host testinde aynı Taylor yaklaşımlarını sağlar.
     pub mod viewer3d {
@@ -560,6 +574,10 @@ mod host_perf_tests;
 #[cfg(test)]
 #[path = "host_input_tests.rs"]
 mod host_input_tests;
+
+#[cfg(test)]
+#[path = "host_imgdecode_tests.rs"]
+mod host_imgdecode_tests;
 
 #[path = "host_canvas_tests.rs"]
 mod host_canvas_tests;

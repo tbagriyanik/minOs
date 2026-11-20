@@ -37,6 +37,17 @@ pub fn next_char_boundary(buf: &[u8], pos: usize, len: usize) -> usize {
     i
 }
 
+/// Metin imlecinin (caret) bu karede görünür olup olmayacağı.
+///
+/// Tüm metin girişlerinde ortak yanıp sönme fazı: `tick` kare sayacı
+/// ~30 karede bir durum değiştirir (60 Hz'de ~0.5 sn, 30 Hz boşta
+/// karelerde ~1 sn). İmleç çizimi bu fonksiyona bağlanmalıdır; aksi
+/// halde her alan kendi periyodunu kullanır ve davranış tutarsızlaşır.
+#[inline(always)]
+pub fn caret_visible(tick: usize) -> bool {
+    (tick / 30) % 2 == 0
+}
+
 /// `limit` bir karakter sinirina denk gelecek sekilde kirpilmis uzunluk.
 pub fn truncate_to_boundary(buf: &[u8], limit: usize) -> usize {
     let mut take = limit.min(buf.len());

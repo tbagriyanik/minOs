@@ -102,11 +102,16 @@ impl MinGuiCompositor {
         is_muted: bool,
         english: bool,
         ethernet_available: bool,
+        tick: usize,
     ) {
         let l = Self::tray_layout(fb.width, fb.height);
         let tb_y = l.tb_y;
         let mx = mouse.x as usize;
         let my = mouse.y as usize;
+
+        // Tooltip hover raporu kare başına sıfırlanır; aşağıdaki hover
+        // hesapları bu karede görülen öğeleri yeniden bildirir.
+        self.tooltip_frame_begin();
 
         // Görev Çubuğu Zemin (gradyan)
         fb.draw_vgradient(
@@ -124,17 +129,32 @@ impl MinGuiCompositor {
         // Böylece yalnızca metnin renk değiştirmesi yerine tıklanabilir alanın
         // tamamı görünür olur; açık takvim ve ses panelinin sahibi de belli olur.
         let tray_items = [
-            (l.kbd, false),
-            (l.network, false),
-            (l.volume, self.is_volume_popup_open),
-            (l.minimize_all, false),
-            (l.clock, self.is_calendar_open),
+            (l.kbd, false, ui_text("Klavye düzeni", "Keyboard layout")),
+            (l.network, false, ui_text("Ağ durumu", "Network status")),
+            (
+                l.volume,
+                self.is_volume_popup_open,
+                ui_text("Ses düzeyi", "Volume"),
+            ),
+            (
+                l.minimize_all,
+                false,
+                ui_text("Tüm pencereleri küçült", "Minimize all windows"),
+            ),
+            (
+                l.clock,
+                self.is_calendar_open,
+                ui_text("Tarih ve saat", "Date and time"),
+            ),
         ];
-        for (rect, panel_open) in tray_items {
+        for (rect, panel_open, tip) in tray_items {
             if rect.2 == 0 {
                 continue;
             }
             let hovered = in_rect(mx, my, rect);
+            if hovered {
+                self.tooltip_offer(rect, tip);
+            }
             if !hovered && !panel_open {
                 continue;
             }
@@ -152,6 +172,9 @@ impl MinGuiCompositor {
 
         // Başlat Menüsü Butonu
         let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
+        if start_hover {
+            self.tooltip_offer(l.start, ui_text("Başlat menüsü", "Start menu"));
+        }
         let start_bg = Color::ACCENT_BLUE;
         Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
         // Kedi ikonu + "minOs" metni buton içinde yatay olarak ortalanır;
@@ -521,7 +544,7 @@ impl MinGuiCompositor {
 
         // Başlat Menüsü
         if self.is_start_menu_open {
-            self.render_start_menu(fb, tb_y, english, mx, my);
+            self.render_start_menu(fb, tb_y, english, mx, my, tick);
         }
         // Bağlam Menüsü
         if self.is_context_menu_open {
@@ -542,6 +565,9 @@ impl MinGuiCompositor {
 
         // Görev Çubuğu Üzerinde Toast Bildirimleri (Hafif Gölgeli Modern Kartlar)
         self.render_toasts(fb, tb_y, mx, my);
+
+        // Hover ipuçları (imleçten önce, en üst katman)
+        self.draw_tooltip(fb);
 
         // Donanım Fare İmleci
         self.draw_mouse_cursor(fb, mx, my, mouse.left_button);

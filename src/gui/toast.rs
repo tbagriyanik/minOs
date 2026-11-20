@@ -21,6 +21,8 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub created_ms: u64,
     pub duration_ms: u64,
+    /// Çıkış animasyonu başlangıcı; 0 = hâlâ aktif.
+    pub exit_ms: u64,
 }
 
 impl ToastNotification {
@@ -33,6 +35,7 @@ impl ToastNotification {
             kind: ToastKind::Info,
             created_ms: 0,
             duration_ms: 0,
+            exit_ms: 0,
         }
     }
 }
@@ -75,10 +78,21 @@ impl MinGuiCompositor {
     }
 
     /// Süresi dolan bildirimleri temizler.
+    /// Bildirim giriş/çıkış animasyonlarının milisaniye cinsinden süreleri.
+    pub const TOAST_SLIDE_IN_MS: u64 = 160;
+    pub const TOAST_SLIDE_OUT_MS: u64 = 140;
+
+    /// Süresi dolan bildirimleri çıkış animasyonuna alır; animasyon da
+    /// bitince slotu boşaltır.
     pub fn update_toasts(&mut self, now_ms: u64) {
         for slot in &mut self.toasts {
             if let Some(t) = slot {
-                if now_ms.saturating_sub(t.created_ms) >= t.duration_ms {
+                if t.exit_ms == 0 && now_ms.saturating_sub(t.created_ms) >= t.duration_ms {
+                    // Süre doldu: hemen silme, sağa kayarak çık.
+                    t.exit_ms = now_ms;
+                } else if t.exit_ms != 0
+                    && now_ms.saturating_sub(t.exit_ms) >= Self::TOAST_SLIDE_OUT_MS
+                {
                     *slot = None;
                 }
             }
@@ -134,9 +148,30 @@ impl MinGuiCompositor {
         let toast_margin = sp(10);
         let mut current_bottom = tb_y.saturating_sub(toast_margin);
         let toast_x = fb.width.saturating_sub(toast_w + toast_margin);
+        let now_ms = crate::monotonic_ms();
+        let slide_span = (toast_w + toast_margin) as f32;
+        let motion_ok = !crate::gui::anim::reduced_motion();
 
         for t in self.toasts.iter().flatten() {
             {
+                // Giriş: sağdan sola ease-out kayma; çıkış: sağa ease-in-out.
+                // Azaltılmış harekette kayma atlanır; yaşam döngüsü aynı kalır.
+                let slide_px = if !motion_ok {
+                    0
+                } else if t.exit_ms != 0 {
+                    let p = crate::gui::anim::progress(
+                        now_ms.wrapping_sub(t.exit_ms),
+                        Self::TOAST_SLIDE_OUT_MS,
+                    );
+                    (crate::gui::anim::ease_in_out_quad(p) * slide_span) as usize
+                } else {
+                    let p = crate::gui::anim::progress(
+                        now_ms.wrapping_sub(t.created_ms),
+                        Self::TOAST_SLIDE_IN_MS,
+                    );
+                    ((1.0 - crate::gui::anim::ease_out_quad(p)) * slide_span) as usize
+                };
+                let toast_x = toast_x + slide_px;
                 let toast_y = current_bottom.saturating_sub(toast_h);
 
                 // 1. Yumuşak Gölgelendirme

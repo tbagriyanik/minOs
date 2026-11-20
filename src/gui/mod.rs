@@ -1,3 +1,4 @@
+pub mod anim;
 pub mod clipboard;
 pub mod context;
 pub mod desktop;
@@ -8,7 +9,6 @@ pub mod font_render;
 pub mod frame;
 pub mod icons;
 pub mod overlay;
-pub mod renderer;
 pub mod screen_layout;
 pub mod screens;
 pub mod scrollbar;
@@ -20,6 +20,7 @@ pub mod textedit;
 pub mod theme;
 pub mod timefmt;
 pub mod toast;
+pub mod tooltip;
 pub mod tray;
 pub mod user_lib;
 pub mod wallpaper;
@@ -126,6 +127,17 @@ pub fn set_ui_language_english(value: bool) {
 pub fn ui_english() -> bool {
     UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed)
 }
+
+/// Saydam pencere tercihi: açıkken pencere gövdesi yarı saydam çizilir
+/// ve altındaki masaüstü/duvar kağıdı görünür.
+static TRANSPARENT_WINDOWS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+pub fn set_transparent_windows(value: bool) {
+    TRANSPARENT_WINDOWS.store(value, core::sync::atomic::Ordering::Relaxed);
+}
+pub fn transparent_windows() -> bool {
+    TRANSPARENT_WINDOWS.load(core::sync::atomic::Ordering::Relaxed)
+}
 pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str {
     if ui_english() {
         en
@@ -147,6 +159,9 @@ pub struct MinGuiCompositor {
     pub windows: [Option<Window>; MAX_WINDOWS],
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
+    /// Başlat menüsünün son açılış anı (monotonic ms); açılış
+    /// animasyonunun ilerlemesi buradan hesaplanır. 0 = animasyonsuz.
+    pub start_menu_open_ms: u64,
     /// Kirli rectangle takibi: sadece değişen bölgeler yeniden çizilir.
     pub dirty_tracker: crate::gui::dirty_rect::GlobalDirtyTracker,
     /// Şu anda etkin sanal masaüstü (0..MAX_WORKSPACES).
@@ -165,6 +180,13 @@ pub struct MinGuiCompositor {
     pub is_context_menu_open: bool,
     pub is_context_submenu_open: bool,
     pub is_alt_tab_open: bool,
+    /// Bağlam menüsü ve Alt+Tab katmanının son açılış anı (monotonic ms);
+    /// açılış kayma animasyonunun ilerlemesi buradan hesaplanır.
+    pub context_menu_open_ms: u64,
+    pub alt_tab_open_ms: u64,
+    /// Tepsi açılır pencerelerinin (takvim, ses) son açılış anları.
+    pub calendar_open_ms: u64,
+    pub volume_popup_open_ms: u64,
     pub is_calendar_open: bool,
     pub is_volume_popup_open: bool,
     pub context_menu_x: usize,
@@ -177,6 +199,9 @@ pub struct MinGuiCompositor {
     /// Takvimde gösterilen ay/yıl (saatten bağımsız gezinilebilir).
     pub cal_year: u16,
     pub cal_month: u8,
+    /// Hover ipuçları (tooltip) durumu; `Cell` ile iç değişkenlik
+    /// sağlanır çünkü render katmanı `&self` ile çalışır.
+    pub tooltip: core::cell::Cell<tooltip::TooltipState>,
     /// Sistem kapatma onayı bekleniyor mu? (Yanlış tetiklenmeyi önler.)
     pub confirm_shutdown: bool,
     pub confirm_restart: bool,
@@ -201,6 +226,7 @@ impl MinGuiCompositor {
             windows: [None; MAX_WINDOWS],
             active_window_idx: None,
             is_start_menu_open: true,
+            start_menu_open_ms: 0,
             active_start_group: 0,
             selected_start_item: 0,
             start_menu_focus_submenu: false,
@@ -215,6 +241,10 @@ impl MinGuiCompositor {
             is_context_menu_open: false,
             is_context_submenu_open: false,
             is_alt_tab_open: false,
+            context_menu_open_ms: 0,
+            alt_tab_open_ms: 0,
+            calendar_open_ms: 0,
+            volume_popup_open_ms: 0,
             is_calendar_open: false,
             is_volume_popup_open: false,
             context_menu_x: 0,
@@ -224,6 +254,7 @@ impl MinGuiCompositor {
             context_window: None,
             cal_year: 2026,
             cal_month: 1,
+            tooltip: core::cell::Cell::new(tooltip::TooltipState::empty()),
             confirm_shutdown: false,
             confirm_restart: false,
             toasts: [None, None, None, None],

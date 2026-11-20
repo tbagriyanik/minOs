@@ -29,6 +29,97 @@ impl ScrollState {
     }
 }
 
+/// Yumuşak kaydırma animasyonu süresi (ms); tarayıcının yerleşik
+/// kaydırmasıyla aynı his için kullanılır.
+pub const SCROLL_ANIM_MS: u64 = 150;
+
+/// Fare tekerleği gibi "hedefe git" tarzı kaydırmalar için kısa süreli
+/// ease-out interpolasyonu durumu.
+///
+/// Sürükleme ve doğrudan atama gibi anlık etkileşimlerde animasyon
+/// `cancel` ile iptal edilmeli; aksi halde eski hedefe doğru "kayma"
+/// kullanıcı girdisiyle çakışır.
+#[derive(Copy, Clone, Debug)]
+pub struct ScrollAnim {
+    from: ScrollState,
+    to: ScrollState,
+    start_ms: u64,
+    active: bool,
+}
+
+impl ScrollAnim {
+    /// Animasyonsuz (boş) durum.
+    pub const fn idle() -> Self {
+        Self {
+            from: ScrollState::new(),
+            to: ScrollState::new(),
+            start_ms: 0,
+            active: false,
+        }
+    }
+
+    /// Animasyon sürüyor mu?
+    #[inline(always)]
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Süren animasyonu iptal eder; mevcut ofset korunur.
+    #[inline(always)]
+    pub fn cancel(&mut self) {
+        self.active = false;
+    }
+
+    /// `current` ofsetinden `target`'a (sınırlara kısıtlanmış) animasyon
+    /// başlatır. Hedef ile mevcut ofset aynıysa animasyon başlatılmaz.
+    pub fn start(
+        &mut self,
+        current: ScrollState,
+        mut target: ScrollState,
+        max_x: usize,
+        max_y: usize,
+        now_ms: u64,
+    ) {
+        target.clamp(max_x, max_y);
+        if target.x == current.x && target.y == current.y {
+            self.active = false;
+            return;
+        }
+        self.from = current;
+        self.to = target;
+        self.start_ms = now_ms;
+        self.active = true;
+    }
+
+    /// Kare adımı: animasyon aktifse bu karenin ofsetini döndürür.
+    ///
+    /// Dönen ofset `max_x`/`max_y`'ye kısıtlanır; animasyon bitince
+    /// kesin hedef döner ve durum kapatılır. Aktif değilse `None`.
+    pub fn step(&mut self, now_ms: u64, max_x: usize, max_y: usize) -> Option<ScrollState> {
+        if !self.active {
+            return None;
+        }
+        let to = ScrollState {
+            x: self.to.x.min(max_x),
+            y: self.to.y.min(max_y),
+        };
+        let elapsed = now_ms.wrapping_sub(self.start_ms);
+        if elapsed >= SCROLL_ANIM_MS {
+            self.active = false;
+            return Some(to);
+        }
+        let progress = crate::gui::anim::progress(elapsed, SCROLL_ANIM_MS);
+        // ease-out quad: hızlı başlar, yumuşak durur (tarayıcı ile aynı).
+        let eased = crate::gui::anim::ease_out_quad(progress);
+        let fx = self.from.x as f32;
+        let fy = self.from.y as f32;
+        Some(ScrollState {
+            x: (fx + (to.x as f32 - fx) * eased) as usize,
+            y: (fy + (to.y as f32 - fy) * eased) as usize,
+        })
+    }
+}
+
 /// Bir pencere için hesaplanmış kaydırma çubuğu düzeni.
 ///
 /// Çizim ve isabet testi aynı düzeni kullandığı için tutamaç her zaman

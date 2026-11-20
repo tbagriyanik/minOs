@@ -423,6 +423,12 @@ pub struct SystemSettings {
     pub mouse_speed: u8,
     pub double_click_ms: u16,
     pub reverse_scroll: bool,
+    /// Dekoratif arayüz animasyonlarını kapatır (açılış/kayma geçişleri
+    /// anında tamamlanır). Erişilebilirlik tercihi.
+    pub reduced_motion: bool,
+    /// Pencere gövdesini yarı saydam yapar; masaüstü/mürekkep arkadan
+    /// görünür. Açıkken sürükleme saydamlığı da artar.
+    pub transparent_windows: bool,
     pub screen_res: (usize, usize),
     pub display_res: (usize, usize),
     pub zoom: u8,
@@ -493,6 +499,8 @@ impl SystemSettings {
             mouse_speed: 5,
             double_click_ms: 300,
             reverse_scroll: false,
+            reduced_motion: false,
+            transparent_windows: false,
             screen_res: (1280, 720),
             display_res: (1280, 720),
             zoom: 100,
@@ -570,6 +578,8 @@ impl SystemSettings {
                     }
                 }
                 "reverse_scroll" => self.reverse_scroll = val == "1",
+                "reduced_motion" => self.reduced_motion = val == "1",
+                "transparent_windows" => self.transparent_windows = val == "1",
                 "muted" => self.is_muted = val == "1",
                 "night" => self.night_light = val == "1",
                 "night_level" => {
@@ -784,6 +794,24 @@ impl SystemSettings {
         (
             x + CONTENT_X + 170,
             y + sp(UI_TOP_Y + 9 * UI_ROW_STEP),
+            sp(140),
+            sp(UI_BTN_H),
+        )
+    }
+    /// Ekran sekmesi: animasyon anahtarı (Satır 11).
+    pub fn anim_toggle_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
+        (
+            x + CONTENT_X + 170,
+            y + sp(UI_TOP_Y + 11 * UI_ROW_STEP),
+            sp(140),
+            sp(UI_BTN_H),
+        )
+    }
+    /// Ekran sekmesi: saydam pencere anahtarı (Satır 12).
+    pub fn transparent_windows_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
+        (
+            x + CONTENT_X + 170,
+            y + sp(UI_TOP_Y + 12 * UI_ROW_STEP),
             sp(140),
             sp(UI_BTN_H),
         )
@@ -1537,6 +1565,18 @@ impl SystemSettings {
             &mut cfg,
             &mut n,
             if self.reverse_scroll { b"1" } else { b"0" },
+        );
+        put(&mut cfg, &mut n, b";reduced_motion=");
+        put(
+            &mut cfg,
+            &mut n,
+            if self.reduced_motion { b"1" } else { b"0" },
+        );
+        put(&mut cfg, &mut n, b";transparent_windows=");
+        put(
+            &mut cfg,
+            &mut n,
+            if self.transparent_windows { b"1" } else { b"0" },
         );
         put(&mut cfg, &mut n, b";muted=");
         put(&mut cfg, &mut n, if self.is_muted { b"1" } else { b"0" });
@@ -2422,6 +2462,60 @@ impl SystemSettings {
                         fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::BORDER);
                     }
                 }
+
+                // --- Animasyonlar (Satır 11) ---
+                MinGuiCompositor::draw_string(
+                    fb,
+                    win_x + CONTENT_X,
+                    win_y + sp(UI_TOP_Y + 11 * UI_ROW_STEP + UI_LABEL_OFFSET),
+                    crate::gui::ui_text("Arayüz animasyonları:", "Interface animations:"),
+                    Color::TEXT_MAIN,
+                );
+                let at = Self::anim_toggle_rect(win_x, win_y);
+                MinGuiCompositor::draw_button(
+                    fb,
+                    at,
+                    if self.reduced_motion {
+                        Color::ACCENT_GREEN
+                    } else {
+                        Color::TITLE_BAR
+                    },
+                    match (self.reduced_motion, self.language.is_english()) {
+                        (true, true) => "Off",
+                        (false, true) => "On",
+                        (true, false) => "Kapalı",
+                        (false, false) => "Açık",
+                    },
+                    Color::TEXT_MAIN,
+                    false,
+                );
+
+                // --- Saydam Pencereler (Satır 12) ---
+                MinGuiCompositor::draw_string(
+                    fb,
+                    win_x + CONTENT_X,
+                    win_y + sp(UI_TOP_Y + 12 * UI_ROW_STEP + UI_LABEL_OFFSET),
+                    crate::gui::ui_text("Saydam pencereler:", "Transparent windows:"),
+                    Color::TEXT_MAIN,
+                );
+                let tw = Self::transparent_windows_rect(win_x, win_y);
+                MinGuiCompositor::draw_button(
+                    fb,
+                    tw,
+                    if self.transparent_windows {
+                        Color::ACCENT_GREEN
+                    } else {
+                        Color::TITLE_BAR
+                    },
+                    match (self.transparent_windows, self.language.is_english()) {
+                        (true, true) => "On",
+                        (false, true) => "Off",
+                        (true, false) => "Açık",
+                        (false, false) => "Kapalı",
+                    },
+                    Color::TEXT_MAIN,
+                    false,
+                );
             }
             2 => {
                 let mut driver = TextBuf::new();

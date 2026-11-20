@@ -195,6 +195,21 @@ pub fn render_full_frame(
                 continue;
             }
 
+            // Açılış animasyonu: pencere OPEN_ANIM_MS boyunca
+            // OPEN_RISE_PX kadar yukarı kayarak yerine oturur.
+            // Ofset yalnızca çizimde uygulanır; durum (win.x/y) değişmez.
+            let mut win = win;
+            if win.open_ms != 0 && !gui::anim::reduced_motion() {
+                let age = crate::monotonic_ms().wrapping_sub(win.open_ms);
+                if age < gui::window::OPEN_ANIM_MS {
+                    let t = age as f32 / gui::window::OPEN_ANIM_MS as f32;
+                    let eased = gui::anim::ease_out_quad(t);
+                    win.y = win.y.saturating_add(
+                        ((1.0 - eased) * gui::window::OPEN_RISE_PX as f32) as usize,
+                    );
+                }
+            }
+
             // Off-screen pencereleri tamamen atla (cizim maliyeti yok).
 
             if win.x >= fb.width
@@ -245,6 +260,22 @@ pub fn render_full_frame(
             // Icerik alanini pencere cercevesine kirp (tasma onleme).
 
             let (cx, cy, cw, ch) = win.content_rect();
+
+            // Kirli bolge yalnizca cerceve/baslik cubuguyle kesisiyorsa
+            // (orn. baslik cubugu hover'i) icerik render'ini atla:
+            // uygulama cizimi en pahali kisimdir ve degismedi.
+            let content_needs_render = match dirty_rect {
+                Some((dx, dy, dw, dh)) => {
+                    dx < cx.saturating_add(cw)
+                        && cx < dx.saturating_add(dw)
+                        && dy < cy.saturating_add(ch)
+                        && cy < dy.saturating_add(dh)
+                }
+                None => true,
+            };
+            if !content_needs_render {
+                continue;
+            }
 
             fb.set_clip(cx, cy, cw, ch);
 
@@ -520,6 +551,7 @@ pub fn render_full_frame(
         st.is_muted,
         st.language.is_english(),
         drivers::e1000::is_ready(),
+        tick,
     );
 
     if fm.drag_active {
@@ -806,7 +838,7 @@ pub fn render_full_frame(
 
         let cur_x = bx + 6 + gui::MinGuiCompositor::text_width(input_text, 1);
 
-        if (tick / 20) % 2 == 0 {
+        if crate::gui::textedit::caret_visible(tick) {
             fb.draw_rect(cur_x, by + 4, 2, 16, gui::Color::ACCENT_YELLOW);
         }
 

@@ -1830,7 +1830,7 @@ impl NotepadApp {
                 Color::TEXT_MAIN,
                 (f_box_x + 4, f_box_y, input_w - 8, f_box_h),
             );
-            if find_foc && (tick / 20) % 2 == 0 {
+            if find_foc && crate::gui::textedit::caret_visible(tick) {
                 let tw = MinGuiCompositor::terminal_text_width(self.find_str())
                     .min(input_w.saturating_sub(10));
                 fb.draw_rect(f_box_x + 4 + tw, f_box_y + 3, 2, 14, Color::ACCENT_YELLOW);
@@ -1892,7 +1892,7 @@ impl NotepadApp {
                     Color::TEXT_MAIN,
                     (r_box_x + 4, r_box_y, input_w - 8, f_box_h),
                 );
-                if rep_foc && (tick / 20) % 2 == 0 {
+                if rep_foc && crate::gui::textedit::caret_visible(tick) {
                     let tw = MinGuiCompositor::terminal_text_width(self.replace_str())
                         .min(input_w.saturating_sub(10));
                     fb.draw_rect(r_box_x + 4 + tw, r_box_y + 3, 2, 14, Color::ACCENT_YELLOW);
@@ -2014,7 +2014,10 @@ impl NotepadApp {
         // Yanıp Sönen İmleç (Blinking Cursor) — imleç görünür aralıktaysa çiz
         if let Some((cx, cy)) = cursor_screen {
             let cur_h = line_h().saturating_sub(4).max(8);
-            if (tick / 20) % 2 == 0 && cy >= area_y && cy + cur_h <= area_y + area_h {
+            if crate::gui::textedit::caret_visible(tick)
+                && cy >= area_y
+                && cy + cur_h <= area_y + area_h
+            {
                 if self.overwrite {
                     fb.draw_rect(cx, cy, char_w(), cur_h, Color::ACCENT_YELLOW);
                     if self.cursor < self.len && self.buffer[self.cursor] != '\n' {

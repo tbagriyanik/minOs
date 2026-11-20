@@ -169,13 +169,13 @@ if (-not $mkisofs -and (Test-Path "tools\mkisofs.exe")) { $mkisofs = (Get-Item "
 # Limine'nin fiziksel USB/UEFI ile uyumlu hybrid ISO tarifi xorriso kullanir.
 # Ancak Windows ortaminda Cygwin/xorriso DLL relocation hatasi verirse oscdimg'e duser.
 if ($xorriso) {
-    try {
-        & $xorriso --version 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "xorriso calistirilamadi; oscdimg alternatifine geciliyor."
-            $xorriso = $null
-        }
-    } catch {
+    # NOT: dogrudan `& $xorriso --version` calistirmak tehlikelidir —
+    # PowerShell 5.1'de ErrorActionPreference=Stop iken native komutlarin
+    # stderr ciktisi terminating RemoteException uretir ve probe her
+    # seferinde basarisiz sayilir (oscdimg'e dusulurdu). cmd /c uzerinden
+    # calistirip cikis kodunu LASTEXITCODE'dan almak guvenlidir.
+    & cmd /c "`"$xorriso`" --version >nul 2>&1"
+    if ($LASTEXITCODE -ne 0) {
         Write-Warning "xorriso calistirilamadi; oscdimg alternatifine geciliyor."
         $xorriso = $null
     }
@@ -225,9 +225,20 @@ if ($oscdimg) {
     if (Test-Path "$OutputDir\boot\limine\limine-uefi-cd.bin") {
         # Limine'nin UEFI El Torito imajini kullan. BOOTX64.EFI dosyasi
         # aramak yerine UEFI boot imaji dogrudan ISO'ya eklenmelidir.
-        & $xorriso -as mkisofs -R -r -J -hfsplus -apm-block-size 2048 -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
+        # xorriso ilerleme bilgisini stderr'e yazar; EAP=Stop altinda
+        # PowerShell 5.1 bunu terminating hataya cevirir — gecici olarak
+        # Continue'e alinir.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            # HFS+ eklenmez: yalnizca macOS icin gereklidir ve ISO boyutunu
+            # ~2.4 MB sisirir. ISO9660+Joliet+Rock Ridge yeterlidir.
+            & $xorriso -as mkisofs -R -r -J -apm-block-size 2048 -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
     } else {
-        & $xorriso -as mkisofs -R -r -J -hfsplus -apm-block-size 2048 -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
+        & $xorriso -as mkisofs -R -r -J -apm-block-size 2048 -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
     }
 
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IsoName)) {

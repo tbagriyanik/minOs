@@ -113,8 +113,23 @@ impl MinGuiCompositor {
         (x, y, w, h)
     }
 
+    /// Tepsi açılır penceresi kayma ofseti: açılışın ilk
+    /// OPEN_ANIM_MS'sinde öğe 8 px aşağıdan yerine oturur.
+    fn popup_rise(&self, open_ms: u64) -> usize {
+        if crate::gui::anim::reduced_motion() {
+            return 0;
+        }
+        let age = crate::monotonic_ms().wrapping_sub(open_ms);
+        if age >= crate::gui::window::OPEN_ANIM_MS {
+            return 0;
+        }
+        let t = age as f32 / crate::gui::window::OPEN_ANIM_MS as f32;
+        ((1.0 - crate::gui::anim::ease_out_quad(t)) * 8.0) as usize
+    }
+
     pub fn render_calendar(&self, fb: &mut Framebuffer, now: &DateTime, layout: &TrayLayout) {
         let (x, y, w, h) = Self::calendar_rect(fb.width, layout);
+        let y = y.saturating_add(self.popup_rise(self.calendar_open_ms));
 
         fb.draw_shadow(x, y, w, h, Color::SHADOW);
         fb.draw_rect(x, y, w, h, Color::TASKBAR_BG);
@@ -248,7 +263,10 @@ impl MinGuiCompositor {
         volume: u8,
         is_muted: bool,
     ) {
-        let panel = self.volume_slider_rect(layout);
+        let mut panel = self.volume_slider_rect(layout);
+        panel.1 = panel
+            .1
+            .saturating_add(self.popup_rise(self.volume_popup_open_ms));
         let (x, y, w, h) = panel;
 
         fb.draw_shadow(x, y, w, h, Color::SHADOW);

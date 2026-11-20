@@ -384,6 +384,8 @@ pub fn apply_user_settings(
     crate::gui::wallpaper::apply(settings.wallpaper, settings.wall_color);
     mouse.speed = settings.mouse_speed;
     mouse.reverse_scroll = settings.reverse_scroll;
+    crate::gui::anim::set_reduced_motion(settings.reduced_motion);
+    crate::gui::set_transparent_windows(settings.transparent_windows);
     keyboard.layout = settings.keyboard_layout;
     // Otomatik gundus/gece temasini uygula (ayar/etkin); pasifse manuel tema.
     crate::gui::theme::set_auto_theme(settings.auto_theme);

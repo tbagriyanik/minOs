@@ -386,6 +386,16 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Başlat menüsünün açılış animasyonu süresi (ms); görev çubuğundan
+    /// yukarı doğru kısa bir kayma ile belirir.
+    pub const START_MENU_OPEN_MS: u64 = 140;
+
+    /// Menü açıldığında çağrılır; açılış animasyonunun başlangıç anını
+    /// işaretler. Kapanışta sıfırlamaya gerek yoktur (ilerleme zaten 1'dir).
+    pub fn mark_start_menu_open(&mut self, now_ms: u64) {
+        self.start_menu_open_ms = now_ms;
+    }
+
     pub fn clear_start_search(&mut self) {
         self.start_search_len = 0;
         self.start_search.fill(0);
@@ -461,8 +471,22 @@ impl MinGuiCompositor {
         english: bool,
         mx: usize,
         my: usize,
+        tick: usize,
     ) {
         let (menu_x, menu_y, menu_w, menu_h) = Self::start_menu_rect(tb_y);
+
+        // Açılış animasyonu: menü görev çubuğundan yukarı doğru kısa bir
+        // kayma ile belirir. `menu_y` gölgelendiği için alt menü ve arama
+        // sonuçları da aynı ofsetle çizilir; hit-test geometrisi değişmez.
+        let open_age = crate::monotonic_ms().wrapping_sub(self.start_menu_open_ms);
+        let open_p = crate::gui::anim::progress(open_age, Self::START_MENU_OPEN_MS);
+        let rise = if crate::gui::anim::reduced_motion() {
+            0
+        } else {
+            ((1.0 - crate::gui::anim::ease_out_quad(open_p)) * sp(28) as f32) as usize
+        };
+        let menu_y = menu_y + rise;
+
         fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
         fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
@@ -595,7 +619,10 @@ impl MinGuiCompositor {
                     search_clip,
                 );
             }
-            if self.start_search_focused && self.start_search_selection.is_none() {
+            if self.start_search_focused
+                && self.start_search_selection.is_none()
+                && crate::gui::textedit::caret_visible(tick)
+            {
                 let prefix = core::str::from_utf8(
                     &visible[..self.start_search_cursor.min(self.start_search_len)],
                 )

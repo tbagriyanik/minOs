@@ -937,6 +937,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         mouse.reverse_scroll = settings_app.reverse_scroll;
 
+        gui::anim::set_reduced_motion(settings_app.reduced_motion);
+        gui::set_transparent_windows(settings_app.transparent_windows);
+
         let mut input_update =
             drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
 
@@ -1121,6 +1124,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             force_render = true;
         }
 
+        // Giriş/çıkış animasyonundaki toast'lar için sağ üst bölgeyi her
+        // karede kirli işaretle; animasyon kendi kendine ilerlesin.
+        let toast_animating = compositor.toasts.iter().flatten().any(|t| {
+            t.exit_ms != 0
+                || clock_now_ms.wrapping_sub(t.created_ms)
+                    < gui::MinGuiCompositor::TOAST_SLIDE_IN_MS
+        });
+        if toast_animating {
+            let region = gui::sp(320);
+            compositor.dirty_tracker.track(
+                0,
+                crate::gui::dirty_rect::DirtyRect::new(
+                    width.saturating_sub(region),
+                    tb_y.saturating_sub(region),
+                    region,
+                    region,
+                ),
+            );
+        }
+
         // Ses cihazini ayarlarla senkronla
 
         audio_dev.set_volume(settings_app.volume);
@@ -1139,6 +1162,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             compositor.close_start_menu();
 
             compositor.is_context_menu_open = true;
+
+            compositor.context_menu_open_ms = monotonic_ms();
 
             compositor.is_context_submenu_open = false;
 
@@ -2388,6 +2413,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         compositor.active_start_group = 0;
 
                         compositor.clear_start_search();
+
+                        compositor.mark_start_menu_open(monotonic_ms());
                     } else {
                         compositor.close_start_menu();
                     }
@@ -2400,6 +2427,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         compositor.cal_year = now.year;
 
                         compositor.cal_month = now.month;
+
+                        compositor.calendar_open_ms = monotonic_ms();
                     }
 
                     consumed = true;
@@ -2429,6 +2458,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     consumed = true;
                 } else if l.volume.2 > 0 && gui::in_rect(mx, my, l.volume) {
                     compositor.is_volume_popup_open = !compositor.is_volume_popup_open;
+
+                    if compositor.is_volume_popup_open {
+                        compositor.volume_popup_open_ms = monotonic_ms();
+                    }
 
                     consumed = true;
                 } else if l.network.2 > 0 && gui::in_rect(mx, my, l.network) {
@@ -2813,6 +2846,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         ((ratio * max_off as f32) as usize).min(max_off);
 
                                     if let Some(wm) = compositor.windows[idx].as_mut() {
+                                        wm.scroll_anim.cancel();
                                         wm.scroll.y = new_scroll_y;
                                         let (dx, dy, dw, dh) = wm.content_rect();
                                         compositor.dirty_tracker.mark_window(
@@ -2861,6 +2895,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             ((ratio * max_off as f32) as usize).min(max_off);
 
                                         if let Some(wm) = compositor.windows[idx].as_mut() {
+                                            wm.scroll_anim.cancel();
                                             wm.scroll.x = new_scroll_x;
                                             let (dx, dy, dw, dh) = wm.content_rect();
                                             compositor.dirty_tracker.mark_window(
@@ -3708,6 +3743,44 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                     "Background changed.",
                                                 );
                                             }
+                                        }
+
+                                        // Animasyon anahtarı (Ekran sekmesi, Satır 11).
+                                        if gui::in_rect(
+                                            mx,
+                                            my,
+                                            apps::settings::SystemSettings::anim_toggle_rect(
+                                                wx, wy,
+                                            ),
+                                        ) {
+                                            settings_app.reduced_motion =
+                                                !settings_app.reduced_motion;
+                                            gui::anim::set_reduced_motion(
+                                                settings_app.reduced_motion,
+                                            );
+                                            settings_app.status_msg = gui::ui_text(
+                                                "Animasyon tercihi kaydedildi.",
+                                                "Animation preference saved.",
+                                            );
+                                        }
+
+                                        // Saydam pencere anahtarı (Satır 12).
+                                        if gui::in_rect(
+                                            mx,
+                                            my,
+                                            apps::settings::SystemSettings::transparent_windows_rect(
+                                                wx, wy,
+                                            ),
+                                        ) {
+                                            settings_app.transparent_windows =
+                                                !settings_app.transparent_windows;
+                                            gui::set_transparent_windows(
+                                                settings_app.transparent_windows,
+                                            );
+                                            settings_app.status_msg = gui::ui_text(
+                                                "Saydam pencere tercihi kaydedildi.",
+                                                "Transparent window preference saved.",
+                                            );
                                         }
                                     } // tema else kapatma
                                 }
@@ -5161,6 +5234,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         compositor.active_start_group = 0;
 
                         compositor.clear_start_search();
+
+                        compositor.mark_start_menu_open(monotonic_ms());
                     } else {
                         compositor.close_start_menu();
                     }
@@ -5200,6 +5275,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         compositor.active_start_group = 4;
 
+                        compositor.mark_start_menu_open(monotonic_ms());
+
                         compositor.selected_start_item = 0;
 
                         compositor.confirm_shutdown = false;
@@ -5216,6 +5293,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                 drivers::keyboard::KeyAction::CycleWindowFocus => {
                     compositor.is_alt_tab_open = true;
+
+                    compositor.alt_tab_open_ms = monotonic_ms();
 
                     compositor.cycle_focus(keyboard.shift);
                 }
@@ -7087,18 +7166,40 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         if let Some(wm) = compositor.windows[idx].as_mut() {
                             // Shift + tekerlek yatay kaydırır (içerik genişse).
+                            // Tekerlek "hedefe git" tarzı bir girdidir: ani
+                            // sıçrama yerine kısa ease-out animasyonu uygulanır
+                            // (tarayıcı hariç — kendi kaydırma sistemini kullanır).
+                            let mut target = wm.scroll;
                             if keyboard.shift && max_x > 0 {
-                                wm.scroll.x =
-                                    ((wm.scroll.x as isize - delta).max(0) as usize).min(max_x);
+                                target.x = ((target.x as isize - delta).max(0) as usize).min(max_x);
                             } else {
-                                wm.scroll.y =
-                                    ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                                target.y = ((target.y as isize - delta).max(0) as usize).min(max_y);
+                            }
+                            // Azaltılmış harekette yumuşak kaydırma da
+                            // anında tamamlanır; hareket animasyonu sayılmaz.
+                            if gui::anim::reduced_motion() {
+                                wm.scroll = target;
+                            } else {
+                                wm.scroll_anim.start(
+                                    wm.scroll,
+                                    target,
+                                    max_x,
+                                    max_y,
+                                    monotonic_ms(),
+                                );
+                                // Animasyon hedefi mevcut ofsetle aynıysa ilk
+                                // adımda kapanır; yine de ofseti garantiye al.
+                                if !wm.scroll_anim.is_active() {
+                                    wm.scroll = target;
+                                }
                             }
                             let (dx, dy, dw, dh) = wm.content_rect();
-                            compositor.dirty_tracker.mark_window(
-                                idx,
-                                crate::gui::dirty_rect::DirtyRect::new(dx, dy, dw, dh),
-                            );
+                            // `track` global listeye de işler → tekerlek
+                            // karesi tam ekran yerine içerik bölgesiyle
+                            // sınırlı kalır.
+                            compositor
+                                .dirty_tracker
+                                .track(idx, crate::gui::dirty_rect::DirtyRect::new(dx, dy, dw, dh));
                         }
                     }
                 }
@@ -7418,6 +7519,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let new_off = ((ratio * max_off as f32) as usize).min(max_off);
 
                 if let Some(wm) = compositor.windows[idx].as_mut() {
+                    wm.scroll_anim.cancel();
                     wm.scroll.y = new_off;
                     let (cx, cy, cw, ch) = wm.content_rect();
                     drag_dirty_rect = Some((cx, cy, cw, ch));
@@ -7454,6 +7556,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let new_off = ((ratio * max_off as f32) as usize).min(max_off);
 
                 if let Some(wm) = compositor.windows[idx].as_mut() {
+                    wm.scroll_anim.cancel();
                     wm.scroll.x = new_off;
                     let (cx, cy, cw, ch) = wm.content_rect();
                     drag_dirty_rect = Some((cx, cy, cw, ch));
@@ -7675,6 +7778,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         &browser_app,
                     );
                     let (_, _, vcw, vch) = w.content_rect();
+                    w.scroll_anim.cancel();
                     w.scroll.x = w.scroll.x.min(gui::scrollbar::max_offset(c_w, vcw));
                     w.scroll.y = w.scroll.y.min(gui::scrollbar::max_offset(c_h, vch));
 
@@ -8537,6 +8641,54 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
+        // Görev çubuğu hover geri bildirimi: imleç şerit üzerinde hareket
+        // ederken veya şeritten çıkarken şeridi kirli işaretle. Aksi halde
+        // düğme/tepsi vurguları bir sonraki tesadüfi kareye kadar güncellenmez
+        // (düz imleç hareketi yalnızca imleç dikdörtgenini yeniden çizer).
+        if mouse_moved {
+            let strip_top = height.saturating_sub(gui::taskbar_h());
+            let was_in_strip = (last_mouse_y as usize) >= strip_top;
+            let in_strip = (mouse.y as usize) >= strip_top;
+            if was_in_strip || in_strip {
+                compositor.dirty_tracker.track(
+                    0,
+                    crate::gui::dirty_rect::DirtyRect::new(0, strip_top, width, gui::taskbar_h()),
+                );
+            }
+
+            // Başlık çubuğu hover'i: imleç en üst pencerede başlık
+            // şeridindeyken (veya şeritten çıkarken) yalnızca o şeridi kirli
+            // işaretle. `frame::render_full_frame` kirli bölge içerikle
+            // kesişmediğinde uygulama render'ını atlar; böylece hover
+            // geri bildirimi içeriği yeniden çizdirmeden çalışır.
+            let (order, order_count) = compositor.draw_order();
+            for k in (0..order_count).rev() {
+                let idx = order[k];
+                let Some(w) = compositor.windows[idx] else {
+                    continue;
+                };
+                if !w.is_open
+                    || w.is_minimized
+                    || w.workspace != compositor.active_workspace
+                    || !gui::in_rect(mx, my, (w.x, w.y, w.width, w.height))
+                {
+                    continue;
+                }
+                let tb_rect = (w.x, w.y, w.width, gui::titlebar_h());
+                let was_in_tb = gui::in_rect(last_mouse_x as usize, last_mouse_y as usize, tb_rect);
+                let in_tb = gui::in_rect(mx, my, tb_rect);
+                if was_in_tb || in_tb {
+                    compositor.dirty_tracker.track(
+                        idx,
+                        crate::gui::dirty_rect::DirtyRect::new(
+                            tb_rect.0, tb_rect.1, tb_rect.2, tb_rect.3,
+                        ),
+                    );
+                }
+                break;
+            }
+        }
+
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
         // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
         // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
@@ -9357,10 +9509,112 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         }
         let browser_scrolling = browser_scroll_step || browser_app.scroll_animating;
 
+        // Genel yumuşak kaydırma: tekerlekle başlatılan "hedefe git"
+        // animasyonlarını kare hızında ilerlet. Tarayıcı (app 3) kendi
+        // scroll_to/scroll_anim_step mekanizmasını kullandığı için hariç.
+        let mut generic_scrolling = false;
+        if timer_tick_fired {
+            let now_ms = monotonic_ms();
+            for (idx, slot) in compositor.windows.iter_mut().enumerate() {
+                let Some(wm) = slot.as_mut() else {
+                    continue;
+                };
+                if !wm.scroll_anim.is_active()
+                    || !wm.is_open
+                    || wm.is_minimized
+                    || wm.workspace != compositor.active_workspace
+                    || wm.app_id == 3
+                {
+                    continue;
+                }
+                let app_id = wm.app_id as usize;
+                let (win_w, win_h, rep_w, rep_h) =
+                    (wm.width, wm.height, wm.content_w, wm.content_h);
+                let (content_w, content_h) = window_content_size(
+                    app_id,
+                    win_w,
+                    win_h,
+                    rep_w,
+                    rep_h,
+                    &filemanager_app,
+                    &notepad_app,
+                    &browser_app,
+                );
+                let (_, _, cw, ch) = wm.content_rect();
+                let sb = gui::scrollbar::SCROLLBAR_THICKNESS;
+                let want_v = content_h > ch && ch > 0;
+                let want_h = content_w > cw && cw > 0;
+                let view_w = cw.saturating_sub(if want_v { sb } else { 0 });
+                let view_h = ch.saturating_sub(if want_h { sb } else { 0 });
+                let max_x = gui::scrollbar::max_offset(content_w, view_w);
+                let max_y = gui::scrollbar::max_offset(content_h, view_h);
+                if let Some(s) = wm.scroll_anim.step(now_ms, max_x, max_y) {
+                    wm.scroll = s;
+                    let (dx, dy, dw, dh) = wm.content_rect();
+                    generic_scrolling = true;
+                    // `track` hem global listeye (bounding → kısmi redraw)
+                    // hem de pencere render listesine işler.
+                    compositor
+                        .dirty_tracker
+                        .track(idx, crate::gui::dirty_rect::DirtyRect::new(dx, dy, dw, dh));
+                }
+            }
+        }
+
+        // Tooltip durumu: hover raporu (son render'dan) ile onaylı adayı
+        // mutabık kılar; gecikmesi dolan ipucu görünür olur ve ilgili bölge
+        // kirli işaretlenir (bir sonraki karede çizilir).
+        compositor.tooltip_tick(monotonic_ms(), width, height);
+
+        // Yeni açılan pencereleri açılış animasyonu için tek seferde damgala.
+        // Kayıt yolu (Window::new, is_open=true atamaları) dokunulmaz;
+        // olay döngüsü her turda eksik damgayı tamamlar.
+        {
+            let now = monotonic_ms();
+            for w in compositor.windows.iter_mut().flatten() {
+                if w.is_open && w.open_ms == 0 {
+                    w.open_ms = now;
+                }
+            }
+        }
+
+        // Başlat menüsü açılış animasyonu sürerken kareleri zorla.
+        let start_menu_animating = compositor.is_start_menu_open
+            && monotonic_ms().wrapping_sub(compositor.start_menu_open_ms)
+                < gui::MinGuiCompositor::START_MENU_OPEN_MS;
+
+        // Pencere açılış animasyonu sürerken kareleri zorla.
+        let window_open_animating = !gui::anim::reduced_motion()
+            && compositor.windows.iter().any(|slot| {
+                slot.is_some_and(|w| {
+                    w.is_open
+                        && w.open_ms != 0
+                        && monotonic_ms().wrapping_sub(w.open_ms) < gui::window::OPEN_ANIM_MS
+                })
+            });
+
+        // Bağlam menüsü, Alt+Tab ve tepsi açılır pencereleri açılış
+        // animasyonları sürerken kareleri zorla.
+        let popup_anim_ms = crate::gui::window::OPEN_ANIM_MS;
+        let overlay_animating = !gui::anim::reduced_motion()
+            && ((compositor.is_context_menu_open
+                && monotonic_ms().wrapping_sub(compositor.context_menu_open_ms) < popup_anim_ms)
+                || (compositor.is_alt_tab_open
+                    && monotonic_ms().wrapping_sub(compositor.alt_tab_open_ms) < popup_anim_ms)
+                || (compositor.is_calendar_open
+                    && monotonic_ms().wrapping_sub(compositor.calendar_open_ms) < popup_anim_ms)
+                || (compositor.is_volume_popup_open
+                    && monotonic_ms().wrapping_sub(compositor.volume_popup_open_ms)
+                        < popup_anim_ms));
+
         let full_redraw = input_update.keyboard
             || buttons_changed
             || scroll_val != 0
             || browser_scrolling
+            || generic_scrolling
+            || start_menu_animating
+            || window_open_animating
+            || overlay_animating
             || browser_scroll_reset
             || force_render
             || busy_dirty

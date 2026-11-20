@@ -91,6 +91,11 @@ Desktop usage, MinShell commands and shortcut reference.
 - **Media Keys:** Volume up, volume down, mute, play/pause, previous/next track.
 - **Refresh (`F5`):** Refreshes focused application content.
 - **Video Player:** `Play/Pause` toggles animation and timeline; `Stop` resets to beginning.
+- **Smooth Scrolling:** The mouse wheel scrolls every app (the browser keeps its own system) with a short ease-out animation; scrollbar clicks/drags cancel the animation instantly.
+- **Open Animations:** Windows, the Start menu, right-click menus, the Alt+Tab switcher and the calendar/volume popups appear with a short slide; toasts slide in/out from the right.
+- **Tooltips:** Hovering taskbar and system-tray items for ~0.7 s shows a description balloon.
+- **Interface Animations Toggle:** Turning off **Interface animations** in System Settings > Display completes all motion instantly — open animations, toast slides and smooth scrolling included.
+- **Transparent Windows:** With **Transparent windows** enabled in System Settings > Display, window bodies become semi-transparent so the desktop and windows below show through. (Application content backgrounds stay opaque.)
 
 ---
 

@@ -47,6 +47,9 @@ pub const TITLEBAR_BASE: usize = 24;
 pub const TASKBAR_BASE: usize = 36;
 /// Maximum number of concurrent windows supported by the compositor.
 pub const MAX_WINDOWS: usize = 32;
+/// Pencere açılış animasyonunun süresi (ms) ve yukarı kayma miktarı (px).
+pub const OPEN_ANIM_MS: u64 = 140;
+pub const OPEN_RISE_PX: usize = 22;
 
 /// Returns the current title bar height scaled by the active font zoom level.
 ///
@@ -140,6 +143,12 @@ pub struct Window {
     pub content_w: usize,
     /// Last reported content height (for vertical scrollbar).
     pub content_h: usize,
+    /// İçerik kaydırma durumu (tekerlek gibi "hedefe git" girdileri için
+    /// kısa ease-out animasyonu; sürükleme animasyonu iptal eder).
+    pub scroll_anim: scrollbar::ScrollAnim,
+    /// Pencerenin açıldığı an (monotonic ms); 0 = açılış animasyonu
+    /// henüz damgalanmadı. Olay döngüsü açık pencereleri tek seferde damgalar.
+    pub open_ms: u64,
     /// Uygulama/pencere bazlı tema override'u; `None` global temayı miras alır.
     pub theme_override: Option<theme::ThemeId>,
 }
@@ -206,6 +215,8 @@ impl Window {
             scroll: scrollbar::ScrollState::new(),
             content_w: width.saturating_sub(2),
             content_h: height.saturating_sub(titlebar_h() + 1),
+            scroll_anim: scrollbar::ScrollAnim::idle(),
+            open_ms: 0,
             theme_override: None,
         }
     }
@@ -743,7 +754,20 @@ impl MinGuiCompositor {
             && my >= win.y
             && mx < win.x + win.width
             && my < win.y + titlebar_h();
-        let bg_alpha: u8 = if dragging { 160 } else { 232 };
+        // Saydam pencere tercihi: gövde ~%45 opaklığa düşer, altındaki
+        // masaüstü belirgin şekilde görünür. Sürüklemede daha da şeffaf.
+        let transparent = crate::gui::transparent_windows();
+        let bg_alpha: u8 = if transparent {
+            if dragging {
+                100
+            } else {
+                140
+            }
+        } else if dragging {
+            160
+        } else {
+            232
+        };
         fb.draw_rounded_rect_alpha(
             win.x,
             win.y,

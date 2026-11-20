@@ -6156,6 +6156,11 @@ impl BrowserApp {
             return None;
         }
         let target = self.scroll_target.min(max_y);
+        // Azaltılmış harekette kaydırma animasyonu atlanır: hedefe anında gidilir.
+        if crate::gui::anim::reduced_motion() {
+            self.scroll_animating = false;
+            return Some(target);
+        }
         const DURATION_MS: u64 = 150;
         let elapsed = now_ms.wrapping_sub(self.scroll_anim_start);
         if elapsed >= DURATION_MS {

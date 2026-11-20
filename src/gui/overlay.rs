@@ -22,7 +22,17 @@ impl MinGuiCompositor {
         let grid_h = rows * 66;
         let box_h = (40 + grid_h + 58).min(fb.height.saturating_sub(24)).max(1);
         let box_x = fb.width.saturating_sub(box_w) / 2;
-        let box_y = fb.height.saturating_sub(box_h) / 2;
+        let mut box_y = fb.height.saturating_sub(box_h) / 2;
+
+        // Açılış animasyonu: geçiş penceresi alttan hafifçe yükselir.
+        if !crate::gui::anim::reduced_motion() {
+            let age = crate::monotonic_ms().wrapping_sub(self.alt_tab_open_ms);
+            if age < crate::gui::window::OPEN_ANIM_MS {
+                let t = age as f32 / crate::gui::window::OPEN_ANIM_MS as f32;
+                box_y = box_y
+                    .saturating_add(((1.0 - crate::gui::anim::ease_out_quad(t)) * 10.0) as usize);
+            }
+        }
 
         fb.draw_shadow(box_x, box_y, box_w, box_h, Color::SHADOW);
         fb.draw_rect(box_x, box_y, box_w, box_h, Color::TASKBAR_BG);

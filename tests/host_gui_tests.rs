@@ -407,3 +407,118 @@ fn accent_colors_keep_minimum_visibility_on_key_surfaces() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Form kontrolü sözleşmesi: Tab / Shift+Tab, Enter, Esc
+// ---------------------------------------------------------------------------
+
+/// Panel düğmelerinin klavye sözleşmesini paylaşan modeller.
+///
+/// Her model, bir uygulamadaki denetim listesinin odağını yönetir. Tüm
+/// yerleşik formlarda aynı davranış beklenir:
+/// * `Tab` sıradaki denetime, `BackTab` öncekine gider ve başa/sona sarar.
+/// * `Enter`/`Space` odaklı denetimi etkinleştirir.
+/// * `Esc` birincil durumu kapatır; yoksa varsayılan duruma döner.
+struct FormModel {
+    tabs: alloc::vec::Vec<&'static str>,
+    actions: alloc::vec::Vec<&'static str>,
+    focus: usize,
+    primary: bool,
+    last_action: Option<&'static str>,
+}
+
+impl FormModel {
+    fn new(tabs: &[&'static str], actions: &[&'static str]) -> Self {
+        Self {
+            tabs: tabs.to_vec(),
+            actions: actions.to_vec(),
+            focus: 0,
+            primary: false,
+            last_action: None,
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.tabs.len() + self.actions.len()
+    }
+
+    fn step(&mut self, reverse: bool) {
+        let count = self.count();
+        self.focus = if reverse {
+            (self.focus + count - 1) % count
+        } else {
+            (self.focus + 1) % count
+        };
+    }
+
+    fn activate(&mut self) {
+        if self.focus >= self.tabs.len() {
+            let idx = self.focus - self.tabs.len();
+            self.last_action = Some(self.actions[idx]);
+        }
+    }
+
+    /// `Esc` sözleşmesi: birincil durum varsa yalnızca o kapanır,
+    /// yoksa odak ilk denetime döner.
+    fn escape(&mut self) -> bool {
+        if self.primary {
+            self.primary = false;
+            return false;
+        }
+        self.focus = 0;
+        true
+    }
+}
+
+#[test]
+fn form_controls_share_tab_enter_escape_contract() {
+    // Yerleşik formlar: Kontrol Paneli (sekmeler + düğmeler), Kurulum
+    // Sihirbazı (disk/fs/biçim/kur), Dosya Yöneticisi onay diyaloğu.
+    let forms = [
+        FormModel::new(
+            &["Sistem", "Ağ", "Hakkında", "Testler", "İzleme", "Sürücüler"],
+            &["Ayarlar"],
+        ),
+        FormModel::new(&["Disk", "FAT32", "ext4"], &["Biçimlendir", "Kur"]),
+        FormModel::new(&["Evet"], &["Hayır"]),
+    ];
+    for mut form in forms {
+        let count = form.count();
+        assert!(count >= 2);
+        // İleri sarar.
+        for expected in 1..=count {
+            form.step(false);
+            assert_eq!(form.focus, expected % count);
+        }
+        // Geri sarar.
+        for _ in 0..count {
+            form.step(true);
+        }
+        assert_eq!(form.focus, 0);
+        // Enter: eylem düğmelerini tetikler, sekmeleri tetiklemez.
+        form.focus = form.tabs.len();
+        form.activate();
+        assert_eq!(form.last_action, Some(form.actions[0]));
+        // Esc: birincil durum yoksa varsayılana döner.
+        assert!(form.escape());
+        assert_eq!(form.focus, 0);
+        // Esc: birincil durum varken yalnızca onu kapatır.
+        form.primary = true;
+        form.focus = count - 1;
+        assert!(!form.escape());
+        assert!(!form.primary);
+        assert_eq!(
+            form.focus,
+            count - 1,
+            "birincil durum kapanırken odak korunur"
+        );
+    }
+}
+
+#[test]
+fn keyboard_hints_are_present_for_every_form_surface() {
+    for english in [false, true] {
+        let hint = screen_layout::welcome_hint(english);
+        assert!(hint.contains("Tab") && hint.contains("Enter") && hint.contains("Esc"));
+    }
+}

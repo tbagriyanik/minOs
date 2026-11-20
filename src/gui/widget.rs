@@ -767,6 +767,11 @@ impl Widget for Button {
                 Color::ACCENT_GREEN,
             );
         }
+
+        // Klavye odaklı durum: Tab ile gezinildiğinde sarı odak halkası.
+        if ctx.is_focused(self.id) {
+            MinGuiCompositor::draw_focus_ring(fb, r.0, r.1, r.2, r.3);
+        }
     }
 
     fn measure(&self, _cross_extent: usize, axis: Axis) -> usize {

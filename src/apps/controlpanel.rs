@@ -15,6 +15,9 @@ use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 /// Sekme sayısı: Sistem, Ağ, Hakkında, Testler, İzleme, Sürücüler.
 pub const TAB_COUNT: usize = 6;
 
+/// İzleme (kullanım) ekranının ölçüm/karar katmanı.
+use crate::apps::monitor;
+
 /// Sistem izleme ekranının kendi render süresi (µs). Kullanım ekranının
 /// kendisini yavaşlattığını ölçmek için kullanılır.
 static MONITOR_RENDER_US: AtomicU64 = AtomicU64::new(0);
@@ -31,6 +34,10 @@ static REFRESHED_AT_MS: AtomicU64 = AtomicU64::new(0);
 /// TAB_COUNT+1 "Ağ Testi" (yalnız Ağ sekmesi), "Performans Testi" (yalnız Testler
 /// sekmesi) veya "Yeniden Tara" (yalnız Sürücüler sekmesi).
 static FOCUSED_CONTROL: AtomicUsize = AtomicUsize::new(0);
+/// "Ayarlar" düğmesinin Enter karşılığı.
+pub const ACTION_SETTINGS: usize = TAB_COUNT;
+/// Etkin sekmeye özgü ikincil eylem (Ağ/Sürücüler "A/Y", Testler "P").
+pub const ACTION_EXTRA: usize = TAB_COUNT + 1;
 /// 0: bos, 1: yanit bekleniyor, 2: basarili, 3: basarisiz.
 static NET_TEST_STATE: AtomicUsize = AtomicUsize::new(0);
 static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
@@ -40,9 +47,38 @@ static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
 use crate::apps::perfbench::{self, PerfRates};
 
 // Sistem izleme için çekirdek tanılama ve bellek profili erişimi.
-use crate::apps::memory::{get_history, history_len, render_sparkline_ascii};
+use crate::apps::memory;
 use crate::kernel::diag;
 use crate::kernel::heap::profile as heap_profile;
+
+/// Sürücü başlatma + İzleme ekranının toplam maliyet bütçesi (µs).
+/// Kare bütçesi 16 ms; bu ekranın payı 4 ms tutulur.
+pub const DRIVER_INIT_BUDGET_US: u64 = 4_000;
+
+/// `diag::DriverInitTiming` → `monitor::DriverTiming` dönüşümü.
+fn timing_row(t: &diag::DriverInitTiming) -> monitor::DriverTiming {
+    monitor::DriverTiming {
+        name: t.name,
+        us: t.duration_us,
+        ok: t.ok,
+    }
+}
+
+/// Süreyi "1.2 ms" / "850 µs" biçiminde yazar.
+fn push_ms(buf: &mut TextBuf, us: u64) {
+    if us >= 1_000 {
+        let (ms, frac) = monitor::split_ms(us);
+        buf.push_usize(ms as usize);
+        if frac > 0 {
+            buf.push_str(".");
+            buf.push_usize(frac as usize);
+        }
+        buf.push_str(" ms");
+    } else {
+        buf.push_usize(us as usize);
+        buf.push_str(" µs");
+    }
+}
 
 /// Performans testinin aşamaları.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -389,27 +425,50 @@ pub fn active_tab() -> usize {
 pub fn select_tab(tab: usize) {
     if tab < TAB_COUNT {
         ACTIVE_TAB.store(tab, Ordering::Relaxed);
+        normalize_focus();
+    }
+}
+
+/// Etkin sekmede ikincil eylem düğmesi (Ağ Testi / Performans / Yeniden Tara)
+/// var mı?
+fn has_extra_action() -> bool {
+    matches!(active_tab(), 1 | 3 | 5)
+}
+
+/// Odağın geçerli sekmede görünen bir denetimi göstermesini sağlar.
+fn normalize_focus() {
+    if FOCUSED_CONTROL.load(Ordering::Relaxed) > TAB_COUNT && !has_extra_action() {
+        FOCUSED_CONTROL.store(TAB_COUNT, Ordering::Relaxed);
     }
 }
 
 /// Odaklı denetim sayısı; yalnızca etkin sekmede görünen düğmeler sayılır.
 ///
-/// Sekmeler 0..TAB_COUNT, ardından "Yenile" düğmesi (TAB_COUNT) ve en
-/// sonda etkin sekmeye özgü tek düğme (TAB_COUNT+1). Ağ sekmesinde bu
-/// düğme "Ağ Testi", Testler sekmesinde "Performans Testi" olur.
+/// Sekmeler 0..TAB_COUNT, ardından "Ayarlar" düğmesi (TAB_COUNT) ve en
+/// sonda etkin sekmeye özgü tek düğme (TAB_COUNT+1).
 fn focusable_count() -> usize {
-    TAB_COUNT
-        + 1
-        + usize::from(active_tab() == 1)
-        + usize::from(active_tab() == 3)
-        + usize::from(active_tab() == 5)
+    TAB_COUNT + 1 + usize::from(has_extra_action())
 }
 
 /// Odaklı denetim indeksini döndürür.
 pub fn focused_control() -> usize {
-    FOCUSED_CONTROL
-        .load(Ordering::Relaxed)
-        .min(focusable_count().saturating_sub(1))
+    let cur = FOCUSED_CONTROL.load(Ordering::Relaxed);
+    if cur > TAB_COUNT && !has_extra_action() {
+        return TAB_COUNT;
+    }
+    cur.min(focusable_count().saturating_sub(1))
+}
+
+/// Odak bir eylem düğmesinde mi (sekmede değil)?
+pub fn focus_on_action() -> bool {
+    focused_control() >= TAB_COUNT
+}
+
+/// Odağı verilen sekmeye taşır (Tab çubuğu tıklaması).
+pub fn focus_tab(tab: usize) {
+    if tab < TAB_COUNT {
+        FOCUSED_CONTROL.store(tab, Ordering::Relaxed);
+    }
 }
 
 /// Tab / Shift+Tab ile odaklı denetime geçer.
@@ -451,22 +510,23 @@ pub fn focused_rect(
     if f < TAB_COUNT {
         return Some(tab_rect(win_x, win_y, win_w, f));
     }
-    if f == TAB_COUNT {
+    if f == ACTION_SETTINGS {
         return Some(refresh_btn_rect(win_x, win_y, win_w, win_h));
     }
-    if f == TAB_COUNT + 1 && active_tab() == 1 {
+    if f == ACTION_EXTRA && active_tab() == 1 {
         return Some(net_test_btn_rect(win_x, win_y, win_w, win_h));
     }
-    if f == TAB_COUNT + 1 && active_tab() == 3 {
+    if f == ACTION_EXTRA && active_tab() == 3 {
         return Some(perf_btn_rect(win_x, win_y, win_w, win_h));
     }
-    if f == TAB_COUNT + 1 && active_tab() == 5 {
+    if f == ACTION_EXTRA && active_tab() == 5 {
         return Some(rescan_btn_rect(win_x, win_y, win_w, win_h));
     }
     None
 }
 
 /// Odaklı denetimin Enter ile tetiklediği eylem.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CpAction {
     None,
     OpenSettings,
@@ -482,19 +542,69 @@ pub fn activate_focused() -> CpAction {
         select_tab(f);
         return CpAction::None;
     }
-    if f == TAB_COUNT {
+    if f == ACTION_SETTINGS {
         return CpAction::OpenSettings;
     }
-    if f == TAB_COUNT + 1 && active_tab() == 1 {
+    if f == ACTION_EXTRA && active_tab() == 1 {
         return CpAction::NetTest;
     }
-    if f == TAB_COUNT + 1 && active_tab() == 3 {
+    if f == ACTION_EXTRA && active_tab() == 3 {
         return CpAction::PerfTest;
     }
-    if f == TAB_COUNT + 1 && active_tab() == 5 {
+    if f == ACTION_EXTRA && active_tab() == 5 {
         return CpAction::RescanDrivers;
     }
     CpAction::None
+}
+
+/// Panelin standart klavye tuşları.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CpKey {
+    Tab,
+    BackTab,
+    Enter,
+    Space,
+    Escape,
+}
+
+/// Tuş olayı sonucu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CpKeyResult {
+    /// Tuş panel tarafından tüketilmedi (ana döngü işlemeye devam eder).
+    Ignored,
+    /// Odak/sekme değişti; yeniden çizim gerekir.
+    Redraw,
+    /// Enter/Space → ana eylem (ana döngü tarafından yürütülür).
+    Action(CpAction),
+}
+
+/// Kontrol Paneli'nin standart klavye sözleşmesi:
+///
+/// * `Tab` / `Shift+Tab` → odağı sıradaki denetime taşır (başa döner).
+/// * `Enter` / `Space` → odaklı denetimi etkinleştirir.
+/// * `Esc` → birincil durum varsa (`primary_present`) yalnızca onu kapatır ve
+///   `Ignored` döner; aksi halde panel varsayılanına döner (Sekme 0,
+///   odak "Ayarlar" düğmesi).
+pub fn handle_key(key: CpKey, primary_present: bool) -> CpKeyResult {
+    match key {
+        CpKey::Tab => {
+            focus_next_control(false);
+            CpKeyResult::Redraw
+        }
+        CpKey::BackTab => {
+            focus_next_control(true);
+            CpKeyResult::Redraw
+        }
+        CpKey::Enter | CpKey::Space => CpKeyResult::Action(activate_focused()),
+        CpKey::Escape => {
+            if primary_present {
+                return CpKeyResult::Ignored;
+            }
+            select_tab(0);
+            FOCUSED_CONTROL.store(ACTION_SETTINGS, Ordering::Relaxed);
+            CpKeyResult::Redraw
+        }
+    }
 }
 
 /// Pencere kapatıldığında sekmeyi başa alır.
@@ -503,6 +613,107 @@ pub fn reset() {
     FOCUSED_CONTROL.store(0, Ordering::Relaxed);
     NET_TEST_STATE.store(0, Ordering::Relaxed);
     REFRESHED_AT_MS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Panel durumu global olduğu için testler sıralı çalıştırılır.
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn tab_and_focus_state_machine() {
+        let _g = lock();
+        reset();
+        assert_eq!(active_tab(), 0);
+        assert_eq!(focused_control(), 0);
+        // Tab: sekmeler → Ayarlar düğmesi → sekmeye döner (Sistem'de ekstra eylem yok).
+        for _ in 0..TAB_COUNT {
+            assert_eq!(handle_key(CpKey::Tab, false), CpKeyResult::Redraw);
+        }
+        assert_eq!(focused_control(), ACTION_SETTINGS);
+        assert!(focus_on_action());
+        match handle_key(CpKey::Enter, false) {
+            CpKeyResult::Action(CpAction::OpenSettings) => {}
+            _ => panic!("Enter, Ayarlar düğmesini etkinleştirmeli"),
+        }
+        assert_eq!(handle_key(CpKey::Tab, false), CpKeyResult::Redraw);
+        assert_eq!(focused_control(), 0, "odak başa dönmeli");
+        // Shift+Tab geriye sarar.
+        handle_key(CpKey::BackTab, false);
+        assert_eq!(focused_control(), ACTION_SETTINGS);
+    }
+
+    #[test]
+    fn extra_action_only_on_supported_tabs() {
+        let _g = lock();
+        reset();
+        // Sistem: odak Ayarlar'a alındığında Tab listesinde ekstra yok.
+        handle_key(CpKey::Tab, false);
+        assert_eq!(focused_control(), ACTION_SETTINGS);
+        handle_key(CpKey::Tab, false);
+        assert_eq!(focused_control(), 0);
+
+        // Ağ sekmesi: Ayarlar → Ağ Testi → sekme başı.
+        select_tab(1);
+        focus_tab(ACTION_SETTINGS);
+        handle_key(CpKey::Tab, false);
+        assert_eq!(focused_control(), ACTION_EXTRA);
+        match activate_focused() {
+            CpAction::NetTest => {}
+            _ => panic!("Ağ Testi bekleniyordu"),
+        }
+        // Testler: Performans testi.
+        select_tab(3);
+        focus_tab(ACTION_SETTINGS);
+        handle_key(CpKey::Tab, false);
+        assert!(matches!(activate_focused(), CpAction::PerfTest));
+        // Sürücüler: Yeniden tara.
+        select_tab(5);
+        focus_tab(ACTION_SETTINGS);
+        handle_key(CpKey::Tab, false);
+        assert!(matches!(activate_focused(), CpAction::RescanDrivers));
+
+        // Ekstra eylemi olmayan sekmeye geçince odak Ayarlar'a döner.
+        focus_tab(ACTION_EXTRA);
+        select_tab(2);
+        assert_eq!(focused_control(), ACTION_SETTINGS);
+    }
+
+    #[test]
+    fn escape_closes_primary_or_resets_panel() {
+        let _g = lock();
+        reset();
+        select_tab(3);
+        focus_tab(ACTION_EXTRA);
+        // Birincil durum (onay/overlay) varsa Esc panelin kendi durumunu bozmaz.
+        assert_eq!(handle_key(CpKey::Escape, true), CpKeyResult::Ignored);
+        assert_eq!(active_tab(), 3);
+        // Birincil durum yoksa panel varsayılanına döner.
+        assert_eq!(handle_key(CpKey::Escape, false), CpKeyResult::Redraw);
+        assert_eq!(active_tab(), 0);
+        assert_eq!(focused_control(), ACTION_SETTINGS);
+    }
+
+    #[test]
+    fn enter_on_tab_selects_it() {
+        let _g = lock();
+        reset();
+        focus_tab(5);
+        assert_eq!(
+            handle_key(CpKey::Enter, false),
+            CpKeyResult::Action(CpAction::None)
+        );
+        assert_eq!(active_tab(), 5);
+        assert_eq!(
+            handle_key(CpKey::Space, false),
+            CpKeyResult::Action(CpAction::None)
+        );
+    }
 }
 
 /// Panel verilerini yeniler (canli degerler bir sonraki cizimde okunur).
@@ -1513,8 +1724,9 @@ pub fn render_content(
             }
         }
         4 => {
-            // İzleme (Monitoring) sekmesi: sistem genelinin canlı özeti.
-            let render_start = crate::monotonic_ms();
+            // İzleme (kullanım) sekmesi: bellek baskısı, son 30 saniye
+            // grafiği, sürücü başlatma süreleri ve bu ekranın render maliyeti.
+            let render_start_us = now_us();
 
             y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Bellek", "Memory"));
 
@@ -1526,23 +1738,34 @@ pub fn render_content(
             } else {
                 0
             };
-            let under_pressure = free_pct < 10;
+            let pressure = monitor::pressure_level(
+                total_ram_bytes,
+                total_ram_bytes.saturating_sub(used_ram_bytes),
+            );
+            let under_pressure = pressure.is_pressured();
 
-            // Bellek baskısı uyarısı.
+            // Bellek baskısı uyarısı (seviyeye göre renk ve metin).
             if under_pressure {
-                let warn = crate::gui::ui_text(
-                    "UYARI: Bellek baskısı! Boş RAM %10'ın altına düştü.",
-                    "WARNING: Memory pressure! Free RAM below 10%.",
-                );
-                fb.draw_rect(left, y, row_w, sp(20), Color::ACCENT_RED);
-                MinGuiCompositor::draw_string(
+                let (title, body) = monitor::pressure_message(pressure, crate::gui::ui_english());
+                let (bg, fg) = if pressure == monitor::PressureLevel::Critical {
+                    (Color::ACCENT_RED, Color::WHITE)
+                } else {
+                    (Color::ACCENT_YELLOW, Color::BLACK)
+                };
+                fb.draw_rect(left, y, row_w, sp(22), bg);
+                let mut warn = TextBuf::new();
+                warn.push_str(title);
+                warn.push_str(": ");
+                warn.push_str(body);
+                MinGuiCompositor::draw_string_clipped(
                     fb,
                     left + sp(8),
-                    y + (sp(20).saturating_sub(MinGuiCompositor::text_height())) / 2,
-                    warn,
-                    Color::WHITE,
+                    y + (sp(22).saturating_sub(MinGuiCompositor::text_height())) / 2,
+                    warn.as_str(),
+                    fg,
+                    (left, y, row_w, sp(22)),
                 );
-                y += sp(20) + sp(6);
+                y += sp(22) + sp(6);
             }
 
             let mut ram = TextBuf::new();
@@ -1660,7 +1883,7 @@ pub fn render_content(
             );
             y += step;
 
-            // Sürücü başlatma süreleri.
+            // Sürücü başlatma süreleri (en yavaştan hızlıya).
             y = draw_section(
                 fb,
                 left,
@@ -1668,8 +1891,8 @@ pub fn render_content(
                 row_w,
                 crate::gui::ui_text("Sürücü Başlatma", "Driver Init"),
             );
-            let timings = diag::driver_init_timings();
-            if timings.is_empty() {
+            let raw_timings = diag::driver_init_timings();
+            if raw_timings.is_empty() {
                 draw_row(
                     fb,
                     left,
@@ -1681,12 +1904,54 @@ pub fn render_content(
                 );
                 y += step;
             } else {
-                for t in timings.iter() {
+                let mut rows: alloc::vec::Vec<monitor::DriverTiming> =
+                    raw_timings.iter().map(timing_row).collect();
+                let summary = monitor::timing_summary(&rows, DRIVER_INIT_BUDGET_US);
+
+                // Özet satırı: toplam süre, en yavaş sürücü ve bütçe oranı.
+                let mut sum_txt = TextBuf::new();
+                sum_txt.push_str(crate::gui::ui_text("Toplam: ", "Total: "));
+                push_ms(&mut sum_txt, summary.total_us);
+                sum_txt.push_str(crate::gui::ui_text(" • En yavaş: ", " • Slowest: "));
+                sum_txt.push_str(if summary.slowest.is_empty() {
+                    "-"
+                } else {
+                    summary.slowest
+                });
+                sum_txt.push_str(" ");
+                push_ms(&mut sum_txt, summary.slowest_us);
+                sum_txt.push_str(" ");
+                let mut aux = TextBuf::new();
+                aux.push_usize(summary.budget_pct);
+                aux.push_str("% ");
+                aux.push_str(crate::gui::ui_text("bütçe", "of budget"));
+                sum_txt.push_str(aux.as_str());
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    "",
+                    sum_txt.as_str(),
+                    if summary.failed > 0 {
+                        Color::ACCENT_RED
+                    } else if summary.budget_pct > 100 {
+                        Color::ACCENT_YELLOW
+                    } else {
+                        Color::TEXT_MUTED
+                    },
+                );
+                y += step;
+
+                rows = monitor::sort_slowest_first(&rows);
+                for t in rows.iter() {
                     let mut t_txt = TextBuf::new();
                     t_txt.push_str(t.name);
                     t_txt.push_str(": ");
-                    t_txt.push_usize(t.duration_us as usize);
-                    t_txt.push_str(" µs");
+                    push_ms(&mut t_txt, t.us);
+                    t_txt.push_str(" (");
+                    t_txt.push_usize(t.us as usize);
+                    t_txt.push_str(" µs)");
                     if !t.ok {
                         t_txt.push_str(" ");
                         t_txt.push_str(crate::gui::ui_text("BAŞARISIZ", "FAILED"));
@@ -1716,8 +1981,8 @@ pub fn render_content(
                 row_w,
                 crate::gui::ui_text("Kullanım Geçmişi (30s)", "Usage History (30s)"),
             );
-            let hist_len = history_len();
-            if hist_len == 0 {
+            let hist = monitor::history();
+            if hist.len == 0 {
                 draw_row(
                     fb,
                     left,
@@ -1729,16 +1994,28 @@ pub fn render_content(
                 );
                 y += step;
             } else {
-                let mut mem_vals = [0usize; crate::apps::memory::HISTORY_CAPACITY];
-                let mut cpu_vals = [0usize; crate::apps::memory::HISTORY_CAPACITY];
-                let count = get_history(&mut mem_vals, &mut cpu_vals);
+                let count = hist.len;
+                let mut spark = [0u8; memory::HISTORY_CAPACITY];
 
-                let mut max_mem = 0usize;
-                for &val in &mem_vals[..count] {
-                    max_mem = max_mem.max(val);
-                }
-                let mut spark = [0u8; crate::apps::memory::HISTORY_CAPACITY];
-                let n = render_sparkline_ascii(&mem_vals[..count], max_mem, &mut spark);
+                // RAM ölçeği: kullanım dar bir bantta dalgalanıyorsa
+                // (ör. 128–130 MB) tabanı düşür; düz çizgi çizilmesin.
+                let max_mem = monitor::history_max(hist.mem());
+                let min_mem = hist.mem().iter().copied().min().unwrap_or(0);
+                let baseline = if max_mem.saturating_sub(min_mem) * 4 < max_mem {
+                    min_mem.saturating_mul(9) / 10
+                } else {
+                    0
+                };
+                let shifted: alloc::vec::Vec<usize> = hist
+                    .mem()
+                    .iter()
+                    .map(|&v| v.saturating_sub(baseline))
+                    .collect();
+                let n = memory::render_sparkline_ascii(
+                    &shifted,
+                    max_mem.saturating_sub(baseline),
+                    &mut spark,
+                );
                 let spark_str = core::str::from_utf8(&spark[..n]).unwrap_or("");
                 draw_row(
                     fb,
@@ -1751,11 +2028,8 @@ pub fn render_content(
                 );
                 y += step;
 
-                let mut max_cpu = 0usize;
-                for &val in &cpu_vals[..count] {
-                    max_cpu = max_cpu.max(val);
-                }
-                let n = render_sparkline_ascii(&cpu_vals[..count], max_cpu.max(1), &mut spark);
+                let max_cpu = monitor::history_max(hist.cpu());
+                let n = memory::render_sparkline_ascii(hist.cpu(), max_cpu.max(1), &mut spark);
                 let spark_str = core::str::from_utf8(&spark[..n]).unwrap_or("");
                 draw_row(
                     fb,
@@ -1767,19 +2041,54 @@ pub fn render_content(
                     Color::ACCENT_GREEN,
                 );
                 y += step;
+
+                // Özet: örnek sayısı ve tepe değerler.
+                let mut foot = TextBuf::new();
+                foot.push_usize(count);
+                foot.push_str(" ");
+                foot.push_str(crate::gui::ui_text(
+                    "örnek • RAM tepe ",
+                    "samples • RAM peak ",
+                ));
+                foot.push_usize(max_mem);
+                foot.push_str(" MB ");
+                let mut cpu_peak = TextBuf::new();
+                cpu_peak.push_str(crate::gui::ui_text("CPU tepe %", "CPU peak %"));
+                cpu_peak.push_usize(monitor::clamp_pct(max_cpu));
+                foot.push_str(cpu_peak.as_str());
+                draw_row(fb, left, y, row_w, "", foot.as_str(), Color::TEXT_MUTED);
+                y += step;
             }
 
-            // İzleme ekranının kendi render süresi (sistemi yavaşlatmadığını ölçer).
-            let render_us = (crate::monotonic_ms().saturating_sub(render_start)) * 1000;
+            // İzleme ekranının kendi render maliyeti (kare bütçesine oran).
+            let render_us = now_us().saturating_sub(render_start_us);
             MONITOR_RENDER_US.store(render_us, Ordering::Relaxed);
+            monitor::record_render(render_us, DRIVER_INIT_BUDGET_US);
             let mut perf_txt = TextBuf::new();
             perf_txt.push_str(crate::gui::ui_text(
-                "Bu ekranın render süresi:",
-                "This screen's render time:",
+                "Bu ekranın render süresi: ",
+                "This screen's render time: ",
             ));
             perf_txt.push_usize(render_us as usize);
-            perf_txt.push_str(" µs");
-            draw_row(fb, left, y, row_w, "", perf_txt.as_str(), Color::TEXT_MUTED);
+            perf_txt.push_str(" µs ");
+            let mut aux = TextBuf::new();
+            aux.push_usize(monitor::render_budget_pct());
+            aux.push_str("% ");
+            aux.push_str(crate::gui::ui_text("bütçe", "budget"));
+            perf_txt.push_str(aux.as_str());
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                "",
+                perf_txt.as_str(),
+                if monitor::render_budget_pct() > 100 {
+                    Color::ACCENT_YELLOW
+                } else {
+                    Color::TEXT_MUTED
+                },
+            );
         }
         5 => {
             // Sürücüler sekmesi: ortak durum modeli (Ready/Unavailable/Error)

@@ -101,13 +101,19 @@ static DRIVER_TIMINGS: DriverTimingsStore =
 
 pub fn record_driver_init(name: &'static str, duration_us: u64, ok: bool) {
     // Süre ve sonuç seri günlüğe de yazılır: `[DRIVER-INIT] name=.. us=.. ok=..`
-    crate::boot::console::serial_print("[DRIVER-INIT] name=");
-    crate::boot::console::serial_print(name);
-    crate::boot::console::serial_print(" us=");
-    crate::boot::console::serial_print_dec(duration_us);
-    crate::boot::console::serial_print(" ok=");
-    crate::boot::console::serial_print(if ok { "1" } else { "0" });
-    crate::boot::console::serial_print("\n");
+    // (tek format kaynağı: `drivers::api::init_line`).
+    #[cfg(not(test))]
+    {
+        let line = crate::drivers::api::init_line(name, duration_us, ok);
+        crate::boot::console::serial_print(&line);
+        crate::boot::console::serial_print("\n");
+        if !ok {
+            // Başarısız başlatmalar tanılama özetiyle birlikte görünür.
+            let summary = crate::drivers::api::diag_line();
+            crate::boot::console::serial_print(&summary);
+            crate::boot::console::serial_print("\n");
+        }
+    }
     let count = DRIVER_TIMINGS_COUNT.load(Ordering::Relaxed) as usize;
     if count < MAX_DRIVER_TIMINGS {
         // SAFETY: `count` sayaçtan okundu ve slot yazımı sayaç artırımından önce

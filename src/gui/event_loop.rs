@@ -5100,28 +5100,34 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         .set_format_type(apps::installer::FormatFsType::Exfat);
                                 }
                                 if gui::in_rect(mx, my, fmt_rect) {
-                                    // 2. Adim: Sadece bicimlendir.
+                                    // 2. Adim: Sadece bicimlendir. Disk silinecekse
+                                    // güçlü onay diyaloğu isteği AÇILIR (yazılı onay).
 
                                     if installer_app.state
                                         != apps::installer::InstallState::Formatting
                                         && installer_app.state
                                             != apps::installer::InstallState::Copying
                                     {
-                                        let formatted = with_busy_progress(
-                                            &mut fb,
-                                            mx,
-                                            my,
-                                            gui::ui_text(
-                                                "Disk biçimlendiriliyor...",
-                                                "Formatting disk...",
-                                            ),
-                                            || installer_app.format_selected_drive(),
-                                        );
+                                        if installer_app.disk_formatted {
+                                            let formatted = with_busy_progress(
+                                                &mut fb,
+                                                mx,
+                                                my,
+                                                gui::ui_text(
+                                                    "Disk biçimlendiriliyor...",
+                                                    "Formatting disk...",
+                                                ),
+                                                || installer_app.format_selected_drive(),
+                                            );
 
-                                        if formatted {
-                                            filemanager_app.set_path("/media/hdd0");
+                                            if formatted {
+                                                filemanager_app.set_path("/media/hdd0");
 
-                                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                            }
+                                        } else {
+                                            // Disk silinecek: güçlü (yazılı) onay iste.
+                                            installer_app.open_format_confirm();
                                         }
                                     }
                                 } else if gui::in_rect(mx, my, btn_rect) {
@@ -5231,6 +5237,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         apps::controlpanel::tab_rect(wx, wy, ww, tab),
                                     ) {
                                         apps::controlpanel::select_tab(tab);
+
+                                        apps::controlpanel::focus_tab(tab);
 
                                         break;
                                     }
@@ -6462,6 +6470,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                     } else {
                                         installer_app.confirm_install = true;
+                                        // Kurulum onay diyaloğunu görünür hale getir.
+                                        installer_app.confirm_dialog = 2;
+                                        installer_app.confirm_focus = 0;
+                                        installer_app.confirm_typed_clear();
                                         installer_app.status_msg = (
                                             "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.",
                                             "WARNING: Disk will be erased and formatted. Click again to confirm.",
@@ -7126,6 +7138,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             serial_print("[SCREENSHOT] HATA: VFS dosyası yazılamadı!\n");
                         }
                     }
+                }
+
+                drivers::keyboard::KeyAction::ShowHelp => {
+                    // F1 - Yardım ekranı göster
+                    let _ = force_render;
                 }
             }
         }
@@ -8334,6 +8351,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.",
                     "Select target disk, click 'Format' first, then 'One-Click Install'.",
                 );
+            } else if ch == '\x1b' && app_is_focused(&compositor, 14) {
+                // Kontrol Paneli standart sözleşmesi: birincil durum yoksa Esc
+                // paneli varsayılanına (Sistem sekmesi, odak "Ayarlar") döndürür.
+                apps::controlpanel::handle_key(apps::controlpanel::CpKey::Escape, false);
             } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\x08'
             {
                 settings_app.static_ip_backspace();
@@ -8544,7 +8565,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         installer_app.confirm_focus_next(false);
                         enter_char_consumed = true;
                     }
-                    _ => {}
+                    '\x08' => {
+                        // Güçlü onay kelimesinde geri silme.
+                        if installer_app.confirm_dialog == 1 {
+                            installer_app.confirm_typed_backspace();
+                        }
+                        enter_char_consumed = true;
+                    }
+                    _ => {
+                        // Biçimlendirme onayındaki harf/rakamlar onay
+                        // kelimesine yazılır (güçlü biçimlendirme onayı).
+                        if installer_app.confirm_dialog == 1 && ch.is_ascii_alphanumeric() {
+                            installer_app.confirm_focus = 0;
+                            installer_app.confirm_typed_push(ch);
+                            enter_char_consumed = true;
+                        }
+                    }
                 }
             } else {
                 let browser_focused = app_is_focused(&compositor, 3);

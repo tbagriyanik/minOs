@@ -276,7 +276,8 @@ impl MinGuiCompositor {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
                 // Sabit uygulama pencereleri 0..=17 arası slotlara eklenir (18 uygulama);
-                if win.app_id == u8::MAX && idx <= 17 {
+                // Daha yüksek slotlardaki pencereler için dinamik atama yapılır.
+                if win.app_id == u8::MAX {
                     win.app_id = idx as u8;
                 }
                 self.z_counter = self.z_counter.wrapping_add(1);

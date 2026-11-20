@@ -151,6 +151,8 @@ pub struct Window {
     pub open_ms: u64,
     /// Uygulama/pencere bazlı tema override'u; `None` global temayı miras alır.
     pub theme_override: Option<theme::ThemeId>,
+    /// Kaydedilmemiş değişiklik var mı? Başlık çubuğunda nokta/ yıldız ile gösterilir.
+    pub dirty: bool,
 }
 
 impl Window {
@@ -218,6 +220,7 @@ impl Window {
             scroll_anim: scrollbar::ScrollAnim::idle(),
             open_ms: 0,
             theme_override: None,
+            dirty: false,
         }
     }
 
@@ -253,6 +256,17 @@ impl Window {
         if self.is_open {
             self.is_minimized = false;
         }
+    }
+
+    /// Kaydedilmemiş değişiklik durumunu ayarlar. Başlık çubuğunda
+    /// bir nokta (●) veya yıldız (*) işaretiyle gösterilir.
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
+    }
+
+    /// Kaydedilmemiş değişiklik var mı?
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     /// Returns the visual bounds of the close button (for rendering).
@@ -811,14 +825,20 @@ impl MinGuiCompositor {
             Color::TEXT_MUTED
         };
         let localized_title = Self::window_title(win.app_id as usize, ui_english());
-        let title = if !localized_title.is_empty() {
+        let base_title = if !localized_title.is_empty() {
             localized_title
         } else {
             win.title
         };
+        // Kaydedilmemiş değişiklik varsa başlık sonuna ● işareti ekle.
+        let mut full_title: alloc::string::String = alloc::string::String::from(base_title);
+        if win.dirty {
+            full_title.push_str(" ●");
+        }
         // Başlık metnini başlık çubuğunda dikey ortala (font ölçeğine duyarlı).
         // Başlık alanı, simge ile kontrol düğmeleri arasına kırpılır; uzun
-        // başlıklar pencere dışına veya düğmelerin üzerine taşmaz.
+        // başlıklar pencere dışına veya düğmelerin üzerine taşmaz. Kırpma
+        // olduğunda sonuna … (ellipsis) eklenir.
         let text_h = Self::text_height();
         let title_y = win.y + titlebar_h().saturating_sub(text_h) / 2;
         let title_x = win.x + sp(8) + icon_sz + sp(8);
@@ -826,7 +846,28 @@ impl MinGuiCompositor {
         if title_area_w > 0 {
             let old_clip = fb.clip();
             fb.set_clip(title_x, win.y, title_area_w, titlebar_h());
-            Self::draw_string(fb, title_x, title_y, title, title_col);
+            // Başlık alana sığmıyorsa … ile kısalt.
+            let title_w = Self::text_width(&full_title, 1);
+            let display_title: alloc::string::String = if title_w > title_area_w {
+                // En fazla 3 karakter ("…") için yer bırak.
+                let ellipsis = "…";
+                let ellipsis_w = Self::text_width(ellipsis, 1);
+                let avail = title_area_w.saturating_sub(ellipsis_w);
+                let mut cut = full_title.len();
+                while cut > 0 && Self::text_width(&full_title[..cut], 1) > avail {
+                    cut -= 1;
+                }
+                if cut == 0 {
+                    alloc::string::String::from(ellipsis)
+                } else {
+                    let mut s = alloc::string::String::from(&full_title[..cut]);
+                    s.push_str(ellipsis);
+                    s
+                }
+            } else {
+                full_title.clone()
+            };
+            Self::draw_string(fb, title_x, title_y, &display_title, title_col);
             fb.set_clip(
                 old_clip.x0,
                 old_clip.y0,

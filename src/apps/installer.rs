@@ -58,9 +58,18 @@ pub struct InstallerApp {
     pub confirm_dialog: u8,
     /// Onay diyalogunda odaklı buton: 0=Evet, 1=Hayır
     pub confirm_focus: usize,
+    /// Güçlü (yazılı) biçimlendirme onayı tamponu: diyaloğa yazılan metin.
+    /// Kesin onay için `format_confirm_word()` ile birebir eşleşmesi gerekir.
+    confirm_typed: [u8; Self::CONFIRM_WORD_MAX],
+    confirm_typed_len: usize,
+    /// Onay kelimesi hatalı yazıldığında/Enter erken basıldığında gösterilir.
+    confirm_error: bool,
 }
 
 impl InstallerApp {
+    /// Yazılı onay kelimesinin tampon uzunluğu.
+    pub const CONFIRM_WORD_MAX: usize = 12;
+
     pub const fn new() -> Self {
         Self {
             selected_drive: 0,
@@ -77,7 +86,58 @@ impl InstallerApp {
             confirm_install: false,
             confirm_dialog: 0,
             confirm_focus: 0,
+            confirm_typed: [0; Self::CONFIRM_WORD_MAX],
+            confirm_typed_len: 0,
+            confirm_error: false,
         }
+    }
+
+    /// Biçimlendirme için yazılması gereken onay kelimesi (TR/EN).
+    pub fn format_confirm_word(english: bool) -> &'static str {
+        if english {
+            "ERASE"
+        } else {
+            "SIL"
+        }
+    }
+
+    /// Yazılan onay metnini döndürür.
+    pub fn confirm_typed(&self) -> &str {
+        core::str::from_utf8(&self.confirm_typed[..self.confirm_typed_len]).unwrap_or("")
+    }
+
+    /// Güçlü onay tamamlandı mı? (kelime birebir eşleşiyor)
+    pub fn format_confirm_satisfied(&self) -> bool {
+        self.confirm_typed_len == Self::format_confirm_word(crate::gui::ui_english()).len()
+            && self
+                .confirm_typed()
+                .eq_ignore_ascii_case(Self::format_confirm_word(crate::gui::ui_english()))
+    }
+
+    /// Biçimlendirme onay diyaloğuna karakter yazar.
+    pub fn confirm_typed_push(&mut self, ch: char) {
+        if !ch.is_ascii_alphanumeric() {
+            return;
+        }
+        if self.confirm_typed_len < Self::CONFIRM_WORD_MAX {
+            self.confirm_typed[self.confirm_typed_len] = ch.to_ascii_uppercase() as u8;
+            self.confirm_typed_len += 1;
+            self.confirm_error = false;
+        }
+    }
+
+    /// Yazılan son karakteri siler.
+    pub fn confirm_typed_backspace(&mut self) {
+        if self.confirm_typed_len > 0 {
+            self.confirm_typed_len -= 1;
+            self.confirm_error = false;
+        }
+    }
+
+    /// Yazılı onayı temizler (diyalog kapanırken/sıfırlanırken).
+    pub fn confirm_typed_clear(&mut self) {
+        self.confirm_typed_len = 0;
+        self.confirm_error = false;
     }
 
     pub fn set_format_type(&mut self, fmt: FormatFsType) {
@@ -87,7 +147,13 @@ impl InstallerApp {
             self.confirm_install = false;
             self.confirm_dialog = 0;
             self.confirm_focus = 0;
+            self.confirm_typed_clear();
         }
+    }
+
+    /// Etkin onay diyaloğu var mı (Esc birincil durumu kapatır)?
+    pub fn has_primary_dialog(&self) -> bool {
+        self.confirm_dialog != 0 || self.confirm_install
     }
 
     pub fn cycle_format_type(&mut self) {
@@ -124,10 +190,20 @@ impl InstallerApp {
         // Eğer onay diyalogu açıksa, Enter/Space ile odaklı butonu tetikle
         if self.confirm_dialog != 0 {
             if self.confirm_focus == 0 {
-                // Evet
+                // Güçlü onay: biçimlendirmede yazılı kelime zorunlu.
+                if self.confirm_dialog == 1 && !self.format_confirm_satisfied() {
+                    self.confirm_error = true;
+                    self.status_msg = (
+                        "Onay için istenen kelimeyi yazın (biçimlendirme verileri siler).",
+                        "Type the requested word to confirm (formatting erases data).",
+                    );
+                    return InstallerAction::None;
+                }
+                let dialog = self.confirm_dialog;
                 self.confirm_dialog = 0;
                 self.confirm_focus = 0;
-                if self.confirm_dialog == 1 {
+                self.confirm_typed_clear();
+                if dialog == 1 {
                     // Biçimlendirme onayı
                     return InstallerAction::Format;
                 } else {
@@ -139,6 +215,7 @@ impl InstallerApp {
                 self.confirm_dialog = 0;
                 self.confirm_focus = 0;
                 self.confirm_install = false;
+                self.confirm_typed_clear();
                 return InstallerAction::Cancel;
             }
         }
@@ -174,9 +251,7 @@ impl InstallerApp {
                 && self.state != InstallState::Formatting
                 && self.state != InstallState::Copying
             {
-                // Biçimlendirme onayı iste
-                self.confirm_dialog = 1; // 1 = biçimlendirme onayı
-                self.confirm_focus = 0; // Varsayılan: Evet
+                self.open_format_confirm();
                 return InstallerAction::None;
             }
             return InstallerAction::None; // Zaten biçimlendirme yapılıyorsa veya formatlıysa bir şey yapma
@@ -191,6 +266,7 @@ impl InstallerApp {
                 // İkinci tıklama: onay diyaloğu aç
                 self.confirm_dialog = 2; // 2 = kurulum onayı (biçimlendirme + kurulum)
                 self.confirm_focus = 0;
+                self.confirm_typed_clear();
                 return InstallerAction::None;
             } else {
                 // İlk tıklama: onay bayrağını aç ve mesaj göster
@@ -206,6 +282,13 @@ impl InstallerApp {
         InstallerAction::None
     }
 
+    /// Güçlü biçimlendirme onayı diyaloğunu açar (yazılı kelime zorunlu).
+    pub fn open_format_confirm(&mut self) {
+        self.confirm_dialog = 1;
+        self.confirm_focus = 0;
+        self.confirm_typed_clear();
+    }
+
     // Onay diyaloğu için klavye navigasyonu
     pub fn confirm_focus_next(&mut self, reverse: bool) {
         if self.confirm_dialog != 0 {
@@ -219,6 +302,7 @@ impl InstallerApp {
             self.confirm_dialog = 0;
             self.confirm_focus = 0;
             self.confirm_install = false;
+            self.confirm_typed_clear();
         }
     }
 
@@ -681,6 +765,13 @@ impl InstallerApp {
         (x, y, inst_w, 28)
     }
 
+    /// Seçili hedef diskin toplam baytı (yoksa `None`).
+    pub fn selected_drive_bytes(drive: u8) -> Option<u64> {
+        ata::device(drive)
+            .filter(|d| d.kind == ata::DeviceKind::Ata)
+            .map(|d| d.sectors * 512)
+    }
+
     pub fn drive_select_rect(
         win_x: usize,
         win_y: usize,
@@ -1082,6 +1173,54 @@ impl InstallerApp {
             (win_x + 26, info_y + 6, info_w.saturating_sub(12), 24),
         );
 
+        // 4b. Tablo: hedef disk özeti (kapasite, biçim, kullanılabilir alan)
+        let summary_y = win_y + 198;
+        let summary_w = win_w.saturating_sub(40);
+        fb.draw_rounded_rect(win_x + 20, summary_y, summary_w, 24, 4, Color::TASKBAR_BG);
+        fb.draw_rounded_rect_outline(win_x + 20, summary_y, summary_w, 24, 4, Color::BORDER);
+        let mut summary = TextBuf::new();
+        summary.push_str(if english {
+            "Target: Drive "
+        } else {
+            "Hedef: Sürücü "
+        });
+        summary.push_usize(self.selected_drive as usize);
+        match Self::selected_drive_bytes(self.selected_drive) {
+            Some(bytes) => {
+                summary.push_str(" • ");
+                summary.push_usize((bytes / (1024 * 1024)) as usize);
+                summary.push_str(" MB • ");
+            }
+            None => {
+                summary.push_str(" • ");
+                summary.push_str(if english { "no disk" } else { "disk yok" });
+                summary.push_str(" • ");
+            }
+        }
+        summary.push_str(self.format_type.name());
+        summary.push_str(" • ");
+        if self.disk_formatted {
+            summary.push_str(if english { "ready" } else { "hazır" });
+        } else {
+            summary.push_str(if english {
+                "will be erased"
+            } else {
+                "silinecek"
+            });
+        }
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            win_x + 28,
+            summary_y + (24usize.saturating_sub(MinGuiCompositor::text_height())) / 2,
+            summary.as_str(),
+            if self.disk_formatted {
+                Color::ACCENT_GREEN
+            } else {
+                Color::ACCENT_YELLOW
+            },
+            (win_x + 24, summary_y, summary_w.saturating_sub(8), 24),
+        );
+
         // 5. İlerleme Çubuğu
         let prog_y = win_y + 280;
         let prog_w = win_w.saturating_sub(40);
@@ -1254,7 +1393,7 @@ impl InstallerApp {
 
         // Diyalog kutusu
         let dlg_w = win_w.min(480);
-        let dlg_h = sp(160);
+        let dlg_h = sp(190);
         let dlg_x = win_x + (win_w.saturating_sub(dlg_w)) / 2;
         let dlg_y = win_y + (win_h.saturating_sub(dlg_h)) / 2;
 
@@ -1314,6 +1453,11 @@ impl InstallerApp {
             " "
         });
         drive_msg.push_str(self.format_type.name());
+        if let Some(bytes) = Self::selected_drive_bytes(self.selected_drive) {
+            drive_msg.push_str(" • ");
+            drive_msg.push_usize((bytes / (1024 * 1024)) as usize);
+            drive_msg.push_str(" MB");
+        }
         MinGuiCompositor::draw_string(
             fb,
             dlg_x + sp(20),
@@ -1322,7 +1466,52 @@ impl InstallerApp {
             Color::ACCENT_YELLOW,
         );
 
-        MinGuiCompositor::draw_string(fb, dlg_x + sp(20), dlg_y + sp(95), msg2, Color::TEXT_MUTED);
+        // Güçlü onay: yazılması gereken kelime ve ilerleme göstergesi.
+        // (Yazılı onay yalnızca biçimlendirme diyaloğunda zorunludur.)
+        let mut hint_y = dlg_y + sp(92);
+        if self.confirm_dialog == 1 {
+            let word = Self::format_confirm_word(english);
+            let mut type_line = TextBuf::new();
+            type_line.push_str(if english {
+                "Type to confirm: "
+            } else {
+                "Onay için yazın: "
+            });
+            type_line.push_str(word);
+            type_line.push_str("  ");
+            MinGuiCompositor::draw_string(
+                fb,
+                dlg_x + sp(20),
+                hint_y,
+                type_line.as_str(),
+                Color::TEXT_MAIN,
+            );
+            let typed_x = dlg_x + sp(20) + MinGuiCompositor::text_width(type_line.as_str(), 1);
+            let box_w = sp(110);
+            let box_h = sp(20);
+            let box_bg = if self.confirm_error {
+                Color::ACCENT_RED
+            } else {
+                Color::DARK_BG
+            };
+            fb.draw_rect(typed_x, hint_y - 3, box_w, box_h, box_bg);
+            fb.draw_rect_outline(typed_x, hint_y - 3, box_w, box_h, Color::BORDER);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                typed_x + sp(6),
+                hint_y,
+                self.confirm_typed(),
+                if self.confirm_error {
+                    Color::WHITE
+                } else {
+                    Color::ACCENT_GREEN
+                },
+                (typed_x, hint_y - 3, box_w, box_h),
+            );
+            hint_y += sp(22);
+        }
+
+        MinGuiCompositor::draw_string(fb, dlg_x + sp(20), hint_y, msg2, Color::TEXT_MUTED);
 
         // Evet / Hayır butonları
         let btn_w = sp(80);

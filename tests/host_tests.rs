@@ -320,6 +320,11 @@ pub mod random {
 // oldugu icin ayni yolu host harness'inda da saglariz.
 pub mod drivers {
     pub use crate::crypto;
+    // Host harness'ta bu modüller `driver_api` ve `driver_status`
+    // adlarıyla crate köküne bağlanır; çekirdek içindeki
+    // `crate::drivers::{api,status}` yollarını burada aynı şekilde sun.
+    pub use crate::driver_api as api;
+    pub use crate::driver_status as status;
     pub use crate::huffman;
     pub use crate::qpack;
     pub use crate::tls;
@@ -586,3 +591,27 @@ mod host_imgdecode_tests;
 
 #[path = "host_canvas_tests.rs"]
 mod host_canvas_tests;
+
+// Kullanım ekranı (İzleme) veri katmanı: bellek baskısı, 30 sn geçmişi,
+// sürücü başlatma süreleri, disk dolu / yazma hatası akışları ve sayaç
+// taşması / sıfırlanma testleri.
+#[path = "../src/apps/monitor.rs"]
+pub mod app_monitor;
+
+/// `monitor.rs` hem çekirdekte hem host'ta aynı bellek geçmişi kaydını
+/// kullanır; çekirdekte `crate::apps::memory`, host'ta `crate::app_memory`.
+#[cfg(not(test))]
+use crate::apps::memory as app_memory;
+
+// Disk silme/taşıma onay katmanı ve iptal edilebilir işlemler.
+#[path = "../src/apps/file_ops.rs"]
+pub mod app_file_ops;
+
+// Ortak sürücü durum API'si: standart log formatı ve tanılama özeti.
+#[path = "../src/drivers/api.rs"]
+pub mod driver_api;
+
+// Ortak sürücü durum API'si: standart log formatı ve tanılama özeti.
+#[cfg(test)]
+#[path = "host_runtime_tests.rs"]
+mod host_runtime_tests;

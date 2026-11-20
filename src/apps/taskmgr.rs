@@ -401,7 +401,22 @@ impl TaskManagerApp {
         self.shared_frames = crate::mm::vmm::shared_frame_count();
         self.lazy_pages =
             crate::mm::process::LAZY_FAULTS.load(core::sync::atomic::Ordering::Relaxed) as usize;
-        crate::apps::memory::record_history_sample(self.used_memory_kb / 1024, self.cpu_usage_pct);
+        // Son 30 saniyelik kullanım geçmişi (İzleme sekmesi grafiği) 1 sn
+        // kadansla beslenir; her karede yazmak 30 örneklik tamponu ~0.5 sn'ye
+        // sıkıştırıp grafik anlamını yok ediyordu.
+        let now_ms = crate::monotonic_ms();
+        if crate::apps::monitor::sample_tick(
+            crate::apps::monitor::last_tick_ms(),
+            now_ms,
+            crate::apps::monitor::SAMPLE_INTERVAL_MS,
+        )
+        .is_some()
+        {
+            crate::apps::memory::record_history_sample(
+                self.used_memory_kb / 1024,
+                crate::apps::monitor::clamp_pct(self.cpu_usage_pct),
+            );
+        }
         self.ramdisk_used = 0;
         self.ramdisk_files = 0;
         for node in vfs.nodes.iter().flatten() {
@@ -587,6 +602,59 @@ impl TaskManagerApp {
             width,
             TM_ACTION_H,
         )
+    }
+
+    /// Ortak durum kartı: sol renk şeridi, başlık ve ikincil metin.
+    ///
+    /// Görev Yöneticisi performans sekmesindeki birleşik sürücü durumu,
+    /// depolama ve RAM kartları aynı görsel dili paylaşır. `bar` verilirse
+    /// başlığın altında doluluk çubuğu çizilir (0..=100).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_status_card(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        accent: u32,
+        title: &str,
+        line: &str,
+        bar: Option<usize>,
+    ) {
+        fb.draw_rect(x, y, w, h, Color::WINDOW_BG);
+        fb.draw_rect_outline(x, y, w, h, Color::BORDER);
+        fb.draw_rect(x, y, 4, h, accent);
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            x + 10,
+            y + 5,
+            title,
+            accent,
+            (x + 8, y + 3, w.saturating_sub(16), 16),
+        );
+        if let Some(pct) = bar {
+            let bar_x = x + 10;
+            let bar_w = w.saturating_sub(20);
+            let bar_y = y + h.saturating_sub(16);
+            fb.draw_rect(bar_x, bar_y, bar_w, 6, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(
+                bar_x,
+                bar_y,
+                bar_w.saturating_mul(pct.min(100)) / 100,
+                6,
+                accent,
+            );
+        }
+        if !line.is_empty() {
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                x + 10,
+                y + 24,
+                line,
+                Color::TEXT_MAIN,
+                (x + 8, y + 22, w.saturating_sub(16), 16),
+            );
+        }
     }
 
     pub fn render_content(
@@ -1043,20 +1111,33 @@ impl TaskManagerApp {
                 (content_x, mem_bar_y + 18, content_w, 14),
             );
 
-            // Bellek baskısı uyarısı (Under pressure warning)
-            if self.free_memory_kb < (self.total_memory_kb * 10 / 100) {
-                fb.draw_rect(content_x, mem_bar_y + 34, content_w, 16, Color::ACCENT_RED);
+            // Bellek baskısı uyarısı (ortak baskı seviyesi ve TR/EN mesajı).
+            let pressure = crate::apps::monitor::pressure_level(
+                (self.total_memory_kb as u64) * 1024,
+                (self.free_memory_kb as u64) * 1024,
+            );
+            let mut mem_warning_extra = 0usize;
+            if pressure.is_pressured() {
+                let (title, body) = crate::apps::monitor::pressure_message(pressure, english);
+                let warn_bg = if pressure == crate::apps::monitor::PressureLevel::Critical {
+                    Color::ACCENT_RED
+                } else {
+                    Color::ACCENT_YELLOW
+                };
+                fb.draw_rect(content_x, mem_bar_y + 34, content_w, 16, warn_bg);
+                let mut warn = TextBuf::new();
+                warn.push_str(title);
+                warn.push_str(": ");
+                warn.push_str(body);
                 MinGuiCompositor::draw_string_clipped(
                     fb,
                     content_x + 4,
                     mem_bar_y + 36,
-                    crate::gui::ui_text(
-                        "! UYARI: Kritik bellek baskısı (%10 altında boş RAM) !",
-                        "! WARNING: Critical memory pressure (<10% free RAM) !",
-                    ),
-                    Color::WHITE,
+                    warn.as_str(),
+                    MinGuiCompositor::text_on(warn_bg),
                     (content_x, mem_bar_y + 34, content_w, 16),
                 );
+                mem_warning_extra = 22;
             }
 
             // Genişletilmiş bellek istatistikleri: kernel heap, kullanıcı süreçleri, paylaşım, tembel.
@@ -1070,17 +1151,21 @@ impl TaskManagerApp {
             mem_detail.push_usize(self.shared_frames);
             mem_detail.push_str(crate::gui::ui_text(" çerçeve  Tembel: ", " frames  Lazy: "));
             mem_detail.push_usize(self.lazy_pages);
+            let mut detail_y = mem_bar_y + 52;
+            if pressure.is_pressured() {
+                detail_y += mem_warning_extra;
+            }
             MinGuiCompositor::draw_string_clipped(
                 fb,
                 content_x,
-                mem_bar_y + 52,
+                detail_y,
                 mem_detail.as_str(),
                 Color::TEXT_MUTED,
-                (content_x, mem_bar_y + 52, content_w, 14),
+                (content_x, detail_y, content_w, 14),
             );
 
-            // 3. SON 30 SANİYELİK KULLANIM GRAFİĞİ (METİN TABANLI / ASCII SPARKLINE)
-            let chart_y = mem_bar_y + 70;
+            // 4. SON 30 SANİYELİK CPU KULLANIM GRAFİĞİ
+            let chart_y = mem_bar_y + 70 + mem_warning_extra;
             let mut mem_hist = [0usize; crate::apps::memory::HISTORY_CAPACITY];
             let mut cpu_hist = [0usize; crate::apps::memory::HISTORY_CAPACITY];
             let sample_count = crate::apps::memory::get_history(&mut mem_hist, &mut cpu_hist);
@@ -1092,7 +1177,7 @@ impl TaskManagerApp {
                     &mut sparkline_cpu,
                 );
                 let mut chart_text = TextBuf::new();
-                chart_text.push_str("Son 30sn CPU: [");
+                chart_text.push_str(crate::gui::ui_text("Son 30sn CPU: [", "Last 30s CPU: ["));
                 if let Ok(s) = core::str::from_utf8(&sparkline_cpu[..len_cpu]) {
                     chart_text.push_str(s);
                 }
@@ -1107,35 +1192,159 @@ impl TaskManagerApp {
                 );
             }
 
-            // 4. DEPOLAMA KULLANIMI (RAM'den ayrı fiziksel disk + ramdisk)
-            let vfs_y = chart_y + 18;
-            let mut storage_label = TextBuf::new();
-            storage_label.push_str(crate::gui::ui_text(
-                "Depolama: Ramdisk VFS ",
-                "Storage: Ramdisk VFS ",
-            ));
-            storage_label.push_usize(self.ramdisk_files);
-            storage_label.push_str(crate::gui::ui_text(" dosya (", " files ("));
-            storage_label.push_usize(self.ramdisk_used);
-            storage_label.push_str(" B)  •  Fiziksel ATA Disk: ");
-            let ata_count = crate::drivers::ata::drive_count();
-            if ata_count > 0 {
-                storage_label.push_usize(ata_count);
-                storage_label.push_str(crate::gui::ui_text(" sürücü bağlı", " drive(s) online"));
+            // 5. BİRLEŞİK SÜRÜCÜ DURUM KARTI + DEPOLAMA + RAM KARTLARI
+            //
+            // Ortak sürücü durum modeli (`drivers::status`) tek satırda
+            // özetlenir: hazır / kullanılamıyor / hata sayaçları ve ilk
+            // hatalı sürücünün kodu. Depolama ve RAM kartları aynı görsel
+            // dilde (kart + doluluk çubuğu) birbirinin altında yer alır.
+            let card_h = 46;
+            let card_gap = 6;
+            let card_y = chart_y + 16;
+
+            // — Kart çizimi ortak yardımcı (`Self::draw_status_card`) ile —
+            let (n_ready, n_unavail, n_err, _n_other) = crate::drivers::status::summary();
+            let drv_state = if n_err > 0 {
+                crate::gui::ui_text("Hata var", "Errors")
+            } else if n_unavail > 0 {
+                crate::gui::ui_text("Kısmi", "Partial")
             } else {
-                storage_label.push_str(crate::gui::ui_text("bağlı değil", "not attached"));
-            }
-            MinGuiCompositor::draw_string_clipped(
+                crate::gui::ui_text("Tümü hazır", "All ready")
+            };
+            let drv_accent = if n_err > 0 {
+                Color::ACCENT_RED
+            } else if n_unavail > 0 {
+                Color::ACCENT_YELLOW
+            } else {
+                Color::ACCENT_GREEN
+            };
+            let drv_bg = drv_accent;
+            let mut drv_title = TextBuf::new();
+            drv_title.push_str(crate::gui::ui_text("Sürücüler", "Drivers"));
+            drv_title.push_str(" · ");
+            drv_title.push_str(drv_state);
+            Self::draw_status_card(
                 fb,
                 content_x,
-                vfs_y,
-                storage_label.as_str(),
+                card_y,
+                content_w,
+                card_h,
+                drv_bg,
+                drv_title.as_str(),
+                "",
+                None,
+            );
+            let mut drv_counts = TextBuf::new();
+            drv_counts.push_str(crate::gui::ui_text("Hazır ", "Ready "));
+            drv_counts.push_usize(n_ready);
+            drv_counts.push_str(" · ");
+            drv_counts.push_str(crate::gui::ui_text("Kullanılamıyor ", "Unavailable "));
+            drv_counts.push_usize(n_unavail);
+            drv_counts.push_str(" · ");
+            drv_counts.push_str(crate::gui::ui_text("Hata ", "Error "));
+            drv_counts.push_usize(n_err);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                content_x + 10,
+                card_y + 24,
+                drv_counts.as_str(),
                 Color::TEXT_MAIN,
-                (content_x, vfs_y, content_w, 14),
+                (content_x + 8, card_y + 22, content_w.saturating_sub(16), 16),
+            );
+            // İlk hatalı sürücünün kodu (hata varsa).
+            if n_err > 0 {
+                for id in crate::drivers::status::DriverId::ALL {
+                    let e = crate::drivers::status::entry(id);
+                    if e.phase == crate::drivers::status::DriverPhase::Error {
+                        let mut err_line = TextBuf::new();
+                        err_line.push_str(id.label(english));
+                        err_line.push_str(" · ");
+                        err_line
+                            .push_str(crate::drivers::status::error_desc(e.error_code, english));
+                        MinGuiCompositor::draw_string_clipped(
+                            fb,
+                            content_x + 10,
+                            card_y + 33,
+                            err_line.as_str(),
+                            Color::ACCENT_RED,
+                            (content_x + 8, card_y + 32, content_w.saturating_sub(16), 12),
+                        );
+                        break;
+                    }
+                }
+            }
+
+            // — Depolama kartı —
+            let storage_y = card_y + card_h + card_gap;
+            let ata_count = crate::drivers::ata::drive_count();
+            let sectors = crate::drivers::ata::drive_capacity_sectors(0);
+            let disk_mb = sectors.saturating_mul(512) / (1024 * 1024);
+            let disk_bg = if ata_count == 0 {
+                Color::ACCENT_RED
+            } else {
+                Color::ACCENT_GREEN
+            };
+            let mut disk_line = TextBuf::new();
+            if ata_count == 0 {
+                disk_line.push_str(crate::gui::ui_text("Disk bağlı değil", "No disk attached"));
+            } else {
+                disk_line.push_str(crate::gui::ui_text("ATA ", "ATA "));
+                disk_line.push_usize(ata_count);
+                disk_line.push_str(" · ");
+                disk_line.push_str(crate::gui::ui_text("Toplam ", "Total "));
+                disk_line.push_usize(disk_mb as usize);
+                disk_line.push_str(" MB · VFS ");
+                disk_line.push_usize(self.ramdisk_files);
+                disk_line.push_str(crate::gui::ui_text(" dosya", " files"));
+            }
+            Self::draw_status_card(
+                fb,
+                content_x,
+                storage_y,
+                content_w,
+                card_h,
+                disk_bg,
+                crate::gui::ui_text("Depolama", "Storage"),
+                disk_line.as_str(),
+                None,
+            );
+            let _ = &mut disk_line;
+
+            // — RAM kartı (ayrı çizilir: başlık + doluluk çubuğu + satır) —
+            let ram_card_y = storage_y + card_h + card_gap;
+            let ram_bg = if memory_pct >= 90 {
+                Color::ACCENT_RED
+            } else if memory_pct >= 70 {
+                Color::ACCENT_YELLOW
+            } else {
+                Color::ACCENT_BLUE
+            };
+            let mut ram_line = TextBuf::new();
+            ram_line.push_usize(self.used_memory_kb / 1024);
+            ram_line.push_str(" / ");
+            ram_line.push_usize(self.total_memory_kb / 1024);
+            ram_line.push_str(" MB · ");
+            ram_line.push_str(crate::gui::ui_text("boş ", "free "));
+            ram_line.push_usize(self.free_memory_kb / 1024);
+            ram_line.push_str(" MB");
+            let mut ram_title = TextBuf::new();
+            ram_title.push_str(crate::gui::ui_text("RAM kullanımı", "RAM usage"));
+            ram_title.push_str(" · %");
+            ram_title.push_usize(memory_pct.min(100));
+            Self::draw_status_card(
+                fb,
+                content_x,
+                ram_card_y,
+                content_w,
+                card_h,
+                ram_bg,
+                ram_title.as_str(),
+                ram_line.as_str(),
+                Some(memory_pct.min(100)),
             );
 
-            // 5. AĞ İSTATİSTİKLERİ (Paket sayıları ve hata sayaçları)
-            let net_y = vfs_y + 18;
+            // 6. AĞ İSTATİSTİKLERİ (Paket sayıları ve hata sayaçları)
+            let net_y = ram_card_y + card_h + 4;
             let stats = crate::kernel::diag::net_stats();
             let mut net_text = TextBuf::new();
             net_text.push_str(crate::gui::ui_text("Ağ: RX ", "Net: RX "));

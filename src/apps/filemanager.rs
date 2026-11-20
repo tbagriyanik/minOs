@@ -1892,7 +1892,19 @@ impl FileManagerApp {
         n
     }
 
-    /// Seçili öğeyi açar veya klasöre girer. Klasör ise `None` döner ve dizin değiştirir.
+    /// Çöp kutusunu boşaltmadan önce onay ister (kalıcı silme).
+    /// Onay sonrası `empty_trash` çağrılmalıdır.
+    pub fn request_empty_trash(&mut self) -> bool {
+        self.confirm_dialog = ConfirmDialog::DeletePermanent;
+        self.confirm_item_idx = usize::MAX; // "tümü" işareti
+        self.status = crate::gui::ui_text(
+            "Çöp kutusu boşaltılacak. Onaylayın.",
+            "The recycle bin will be emptied. Please confirm.",
+        );
+        true
+    }
+
+    /// Seçili öğeyi açar veya klasöre girer.
     /// Dosya ise `Some((icon_tag, full_path_string))` döner.
     pub fn enter_selected(&mut self, vfs: &VirtualFileSystem) -> Option<(&'static str, String)> {
         if self.selected_idx >= self.file_count {

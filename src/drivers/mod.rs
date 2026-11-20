@@ -6,6 +6,7 @@ pub mod framework;
 pub use framework::{Driver, DriverRegistry, DriverState, HotplugEvent};
 pub mod ahci;
 pub mod amdgpu;
+pub mod api;
 pub mod ata;
 pub mod atheros;
 pub mod audio;

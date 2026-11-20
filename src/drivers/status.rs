@@ -12,7 +12,7 @@
 //! geçişleri doğrulanır.
 
 use crate::arch::x86_64::sync::SpinMutex;
-use crate::boot::console::{serial_print, serial_print_dec};
+use crate::boot::console::serial_print;
 
 /// İzlenen donanım sürücüsü kimlikleri.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -307,22 +307,14 @@ fn update(id: DriverId, f: impl FnOnce(&mut DriverStatusEntry)) {
 }
 
 /// Seri günlüğüne tek satırlık durum kaydı yazar.
+///
+/// Format tek bir yerde tanımlıdır (`drivers::api::log_line`); böylece
+/// `[DRIVER-STATUS]` satırları tüm sürücüler için aynı alan sırasını ve
+/// uzunluk sınırını kullanır.
 fn log_status(id: DriverId, phase: DriverPhase, elapsed_ms: u64, code: u16, detail: &str) {
-    serial_print("[DRIVER-STATUS] id=");
-    serial_print(id.key());
-    serial_print(" phase=");
-    serial_print(phase.key());
-    if phase == DriverPhase::Error {
-        serial_print(" code=");
-        serial_print_dec(code as u64);
-    }
-    serial_print(" ms=");
-    serial_print_dec(elapsed_ms);
-    if !detail.is_empty() {
-        serial_print(" desc=\"");
-        serial_print(detail);
-        serial_print("\"");
-    }
+    let clamped = elapsed_ms.min(u32::MAX as u64) as u32;
+    let line = crate::drivers::api::log_line(id, phase, clamped, code, detail);
+    serial_print(&line);
     serial_print("\n");
 }
 

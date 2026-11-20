@@ -60,6 +60,7 @@ pub enum KeyAction {
     MouseClickRight,
     MouseSpeedUp,
     MouseSpeedDown,
+    ShowHelp,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

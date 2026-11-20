@@ -127,6 +127,23 @@ pub static mut PANIC_FB_PITCH: usize = 0;
 #[export_name = "PANIC_FB_BPP"]
 pub static mut PANIC_FB_BPP: usize = 0;
 
+/// Gece ışığı kanal dönüşümlerini paketlenmiş u32 LUT'larına döker.
+/// `strength` 0..=100; kırmızı/yeşil kanallar pakete kaydırılmış katkı,
+/// mavi kanal doğrudan değer olarak döner. Piksel başına bölme/çarpma
+/// yerine üç tablo araması + OR zinciri çalışır.
+fn night_light_luts(strength: u32) -> ([u32; 256], [u32; 256], [u32; 256]) {
+    let mut lr = [0u32; 256];
+    let mut lg = [0u32; 256];
+    let mut lb = [0u32; 256];
+    for i in 0..256 {
+        let v = i as u32;
+        lr[i] = ((v + ((255 - v) * 12 * strength / 10_000)).min(255)) << 16;
+        lg[i] = ((v + ((255 - v) * 4 * strength / 10_000)).min(255)) << 8;
+        lb[i] = v * (100 - 45 * strength / 100) / 100;
+    }
+    (lr, lg, lb)
+}
+
 impl Framebuffer {
     /// Yeni bir framebuffer tanımlayıcı oluşturur.
     ///
@@ -1537,6 +1554,7 @@ impl Framebuffer {
         if strength == 0 {
             return;
         }
+        let (lr, lg, lb) = night_light_luts(strength);
         let limit = (self.width * self.height).min(BACKBUFFER_LEN);
         unsafe {
             let bb = core::slice::from_raw_parts_mut(
@@ -1545,13 +1563,9 @@ impl Framebuffer {
             );
             for px in bb[..limit].iter_mut() {
                 let c = *px;
-                let r = (c >> 16) & 255;
-                let g = (c >> 8) & 255;
-                let b = c & 255;
-                let nr = (r + ((255 - r) * 12 * strength / 10_000)).min(255);
-                let ng = (g + ((255 - g) * 4 * strength / 10_000)).min(255);
-                let nb = b * (100 - 45 * strength / 100) / 100;
-                *px = (nr << 16) | (ng << 8) | nb;
+                *px = lr[((c >> 16) & 255) as usize]
+                    | lg[((c >> 8) & 255) as usize]
+                    | lb[(c & 255) as usize];
             }
         }
     }
@@ -1564,27 +1578,24 @@ impl Framebuffer {
         if strength == 0 {
             return;
         }
+        let (lr, lg, lb) = night_light_luts(strength);
         let stride = self.width;
         unsafe {
+            let bb = core::slice::from_raw_parts_mut(
+                core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32,
+                BACKBUFFER_LEN,
+            );
             for y in region.y0..region.y1 {
                 let start = y * stride + region.x0;
                 let end = (y * stride + region.x1).min(BACKBUFFER_LEN);
                 if start >= end {
                     continue;
                 }
-                let bb = core::slice::from_raw_parts_mut(
-                    core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32,
-                    BACKBUFFER_LEN,
-                );
                 for px in bb[start..end].iter_mut() {
                     let c = *px;
-                    let r = (c >> 16) & 255;
-                    let g = (c >> 8) & 255;
-                    let b = c & 255;
-                    let nr = (r + ((255 - r) * 12 * strength / 10_000)).min(255);
-                    let ng = (g + ((255 - g) * 4 * strength / 10_000)).min(255);
-                    let nb = b * (100 - 45 * strength / 100) / 100;
-                    *px = (nr << 16) | (ng << 8) | nb;
+                    *px = lr[((c >> 16) & 255) as usize]
+                        | lg[((c >> 8) & 255) as usize]
+                        | lb[(c & 255) as usize];
                 }
             }
         }

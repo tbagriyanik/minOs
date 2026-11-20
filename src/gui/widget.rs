@@ -830,7 +830,7 @@ impl Widget for CheckBox {
         } else {
             Color::DARK_BG
         };
-        fb.draw_rounded_rect(b.x, b.y, b.w, b.h, 3, box_bg);
+        fb.draw_rounded_rect(b.x, b.y, b.w, b.h, 6, box_bg);
         fb.draw_rounded_rect_outline(b.x, b.y, b.w, b.h, 3, border);
         if self.checked {
             let tick = Color::ACCENT_GREEN;

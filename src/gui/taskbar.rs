@@ -144,9 +144,9 @@ impl MinGuiCompositor {
             } else {
                 Self::shade(Color::TITLE_BAR, 16)
             };
-            fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
+            fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);
             if panel_open {
-                fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::ACCENT_BLUE);
+                fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 8, Color::ACCENT_BLUE);
             }
         }
 
@@ -206,7 +206,7 @@ impl MinGuiCompositor {
                 };
                 let hovered = in_rect(mx, my, rect);
                 let bg = if hovered { Self::shade(base, 20) } else { base };
-                fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
+                fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);
                 fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
                 if active {
                     fb.draw_rounded_rect(
@@ -272,7 +272,7 @@ impl MinGuiCompositor {
             );
             if badge_w > 0 {
                 let badge = (badge_x, tb_y + 5, badge_w, tab_h);
-                fb.draw_rounded_rect(badge.0, badge.1, badge.2, badge.3, 5, Color::ACCENT_BLUE);
+                fb.draw_rounded_rect(badge.0, badge.1, badge.2, badge.3, 8, Color::ACCENT_BLUE);
                 let mut hidden = TextBuf::new();
                 hidden.push_byte(b'+');
                 hidden.push_usize(open_count.saturating_sub(shown_tabs));
@@ -295,7 +295,7 @@ impl MinGuiCompositor {
         // room remains between the tabs and the tray.
         if let Some((bx, by, bw, bh)) = self.workspace_badge_rect(fb.width, fb.height) {
             if in_rect(mx, my, (bx, by, bw, bh)) {
-                fb.draw_rounded_rect(bx, by, bw, bh, 5, Self::shade(Color::TITLE_BAR, 16));
+                fb.draw_rounded_rect(bx, by, bw, bh, 8, Self::shade(Color::TITLE_BAR, 16));
             }
             let mut ws = TextBuf::new();
             ws.push_str(ui_text("Masaüstü ", "Workspace "));

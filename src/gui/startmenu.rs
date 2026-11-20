@@ -641,7 +641,7 @@ impl MinGuiCompositor {
                 Color::TEXT_MAIN
             };
 
-            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg_col);
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 8, bg_col);
             if is_active {
                 fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::WHITE);
             }
@@ -856,7 +856,7 @@ impl MinGuiCompositor {
                 } else {
                     Color::WINDOW_BG
                 };
-                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
+                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 6, bg_col);
                 if is_hovered {
                     fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
                 }
@@ -920,7 +920,7 @@ impl MinGuiCompositor {
                     } else {
                         Color::TITLE_BAR
                     };
-                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
+                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 6, bg_col);
                 if is_hovered {
                     fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
                 }
@@ -1025,7 +1025,7 @@ impl MinGuiCompositor {
                 Color::WINDOW_BG
             };
 
-            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 6, bg_col);
             if is_hovered {
                 fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
             }

@@ -128,7 +128,7 @@ fn heap_active() -> bool {
 //
 // `KernelHeap::alloc` üç katmana dağıtır:
 //
-// 1. **Slab** — `size <= 64 && align <= 16` istekleri 16/32/64 baytlık
+// 1. **Slab** — `size <= 1 KiB && align <= 16` istekleri 16..1024 baytlık
 //    sınıflara yönlendirilir. Her sınıf 4 KiB'lık sayfalar halinde heap'ten
 //    beslenir; nesneler sayfa içinde serbest listeyle geri dönüştürülür.
 //    Slab kapasitesi dolarsa istek normal heap yoluna düşer — `dealloc`
@@ -145,17 +145,18 @@ fn heap_active() -> bool {
 // (sınırlı, tahsis yapmayan doğrudan eşlemeli tablo) ve PMM boş bellek
 // oranı [`PressureLevel`] geçişlerinde geri çağrılır.
 
-/// Slab yoluna giren azami istek boyu (bayt).
-const SLAB_THRESHOLD: usize = 64;
-/// Slab boyut sınıfları (bayt).
-const SLAB_CLASSES: [usize; 3] = [16, 32, 64];
+/// Slab'in karşıladığı azami istek boyu (bayt) — en büyük sınıf.
+const SLAB_THRESHOLD: usize = 1024;
+/// Slab boyut sınıfları (bayt). Adımlar 4 KiB sayfayı iyi doldurur ve
+/// ~%33'ü aşmayan iç parçalanma sağlar; her adım 16'nın katıdır, böylece
+/// 16 hizalı sayfa tabanından üretilen tüm nesneler 16 hizalı kalır.
+const SLAB_CLASSES: [usize; 11] = [16, 32, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
 /// Sınıf başına en fazla sayfa (4 KiB × 256 = 1 MiB/sınıf üst sınırı).
 const MAX_SLAB_PAGES_PER_CLASS: usize = 256;
 /// Slab sayfa tablosu kapasitesi. `slab_hash` maske (`size - 1`) kullandığı
-/// için 2'nin kuvveti olmalı; 768 girdi için 1024 seçildi — daha düşük doluluk
-/// oranı `slab_page_class` sondasını kısaltır (önceki 768'lik boyut maskesi
-/// yüzünden 256..511 arası yuvalar hiç kullanılmıyordu).
-const SLAB_PAGE_TABLE_SIZE: usize = 1024;
+/// için 2'nin kuvveti olmalı; 11 sınıfın toplam sayfa üst sınırı (2816)
+/// tabloya sığmalı — 4096 seçildi.
+const SLAB_PAGE_TABLE_SIZE: usize = 4096;
 
 /// Sayfa ayırıcıya giren asgari istek boyu (bayt).
 const LARGE_THRESHOLD: usize = 64 * 1024;
@@ -276,7 +277,10 @@ fn slab_page_class(ptr: *mut u8) -> Option<usize> {
 /// Heap'ten ham 4 KiB'lık sayfa ayırır (slab beslemesi; `KernelHeap`
 /// sarmalayıcısını atlar, kilit iç içe geçmez).
 fn heap_alloc_page() -> *mut u8 {
-    let layout = Layout::from_size_align(4096, 16).unwrap();
+    // Hizalama 4096 zorunludur: slab sayfa tablosu `ptr & !4095` ile kayıt
+    // arar; 16 hizalı ama sayfa hizasız bir blok slab_dealloc'da ıskalar ve
+    // nesne işaretçisi heap'e yabancı ptr olarak iade edilirdi.
+    let layout = Layout::from_size_align(4096, 4096).unwrap();
     let ptr = {
         let mut heap = ALLOCATOR.lock();
         heap.allocate_first_fit(layout)
@@ -325,7 +329,7 @@ fn slab_alloc(class: usize) -> *mut u8 {
     let count = 4096 / stride;
     if !slab_register_page(page as u64, class) {
         // Tablo dolu: sayfayı heap'e iade et, bu istek heap yoluna düşsün.
-        let layout = Layout::from_size_align(4096, 16).unwrap();
+        let layout = Layout::from_size_align(4096, 4096).unwrap();
         unsafe {
             ALLOCATOR
                 .lock()
@@ -1460,8 +1464,9 @@ pub fn test_tiered_alloc() -> bool {
         unsafe { alloc::alloc::dealloc(big, big_layout) };
     }
 
-    // 3. Heap: ara boyut (512 B) ne slab ne sayfa kapsamına girer.
-    let mid_layout = Layout::from_size_align(512, 8).unwrap();
+    // 3. Heap: ara boyut (2 KiB) ne slab (≤1 KiB) ne sayfa (≥64 KiB)
+    // kapsamına girer.
+    let mid_layout = Layout::from_size_align(2048, 8).unwrap();
     let mid = unsafe { alloc::alloc::alloc(mid_layout) };
     let heap_ok = !mid.is_null() && tier_of(mid) == Some(2);
     if !mid.is_null() {

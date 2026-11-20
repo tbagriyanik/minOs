@@ -737,23 +737,23 @@ impl MinGuiCompositor {
         } else {
             Color::BORDER
         };
-        fb.draw_rounded_rect(
-            win.x.saturating_sub(1),
-            win.y.saturating_sub(1),
-            win.width + 2,
-            win.height + 2,
-            6,
-            border,
-        );
+        // Sürükleme sırasında pencere hafif şeffaf görünür.
+        let dragging = mouse.left_button
+            && mx >= win.x
+            && my >= win.y
+            && mx < win.x + win.width
+            && my < win.y + titlebar_h();
+        let bg_alpha: u8 = if dragging { 160 } else { 232 };
         fb.draw_rounded_rect_alpha(
             win.x,
             win.y,
             win.width,
             win.height,
-            6,
+            10,
             Color::WINDOW_BG,
-            232,
+            bg_alpha,
         );
+        fb.draw_rounded_rect_outline(win.x, win.y, win.width, win.height, 10, border);
 
         // Başlık Çubuğu (dikey gradyan — yuvarlatılmış)
         let (t_top, t_bottom) = if win.is_focused {
@@ -764,8 +764,16 @@ impl MinGuiCompositor {
                 Self::shade(Color::TITLE_BAR_INACTIVE, -10),
             )
         };
-        fb.draw_rounded_vgradient(win.x, win.y, win.width, titlebar_h(), 6, t_top, t_bottom);
-        fb.draw_rounded_rect_alpha(win.x, win.y, win.width, titlebar_h(), 6, t_top, 224);
+        fb.draw_rounded_vgradient(win.x, win.y, win.width, titlebar_h(), 10, t_top, t_bottom);
+        fb.draw_rounded_rect_alpha(
+            win.x,
+            win.y,
+            win.width,
+            titlebar_h(),
+            10,
+            t_top,
+            if dragging { 140 } else { 224 },
+        );
         fb.draw_rect(win.x, win.y + titlebar_h() - 1, win.width, 1, border);
 
         // Pencereye özel ilgili program simgesi ve başlık (aktif ölçekte).
@@ -821,7 +829,7 @@ impl MinGuiCompositor {
         } else {
             Color::ACCENT_RED
         };
-        fb.draw_rounded_rect(cx, cy, cb, cb, 4, close_bg);
+        fb.draw_rounded_rect(cx, cy, cb, cb, 6, close_bg);
         if pressed_close {
             fb.draw_rounded_rect_outline(cx, cy, cb, cb, 4, Color::WHITE);
         }
@@ -867,7 +875,7 @@ impl MinGuiCompositor {
         } else {
             Color::ACCENT_GREEN
         };
-        fb.draw_rounded_rect(mxr, myr, mb, mb, 4, max_bg);
+        fb.draw_rounded_rect(mxr, myr, mb, mb, 6, max_bg);
         if pressed_max {
             fb.draw_rounded_rect_outline(mxr, myr, mb, mb, 4, Color::WHITE);
         }
@@ -1011,7 +1019,7 @@ impl MinGuiCompositor {
         } else {
             Color::ACCENT_YELLOW
         };
-        fb.draw_rounded_rect(nx, ny, nb, nb, 4, min_bg);
+        fb.draw_rounded_rect(nx, ny, nb, nb, 6, min_bg);
         if pressed_min {
             fb.draw_rounded_rect_outline(nx, ny, nb, nb, 4, Color::WHITE);
         }

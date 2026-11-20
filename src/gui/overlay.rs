@@ -69,7 +69,7 @@ impl MinGuiCompositor {
                     };
                 }
 
-                fb.draw_rounded_rect(card_x, card_y, 50, 58, 6, card_bg);
+                fb.draw_rounded_rect(card_x, card_y, 50, 58, 8, card_bg);
                 if is_sel {
                     fb.draw_rounded_rect_outline(
                         card_x.saturating_sub(1),

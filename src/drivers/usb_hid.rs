@@ -2740,6 +2740,33 @@ unsafe fn queue_hid_transfer(device: &mut HidDevice) {
     c.doorbell(device.slot, device.dci);
 }
 
+/// Tanılama rapor dökümü: tüm satırı tek `serial::print` çağrısıyla yazar.
+/// Parça parça `print_hex`/`print` çağırmak her seferinde `SERIAL_LOCK`'u
+/// alıp UART'ı ayrı ayrı meşgul eder; tek çağrı ~17 kat daha az kilit
+/// çevrimi yapar. `[USB-HID] ... raporu:` kalıbı `test_qemu.ps1 -UsbHid`
+/// tarafından doğrulandığı için korunur.
+fn dump_hid_sample(tag: &str, data: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut buf = [0u8; 128];
+    let mut pos = 0usize;
+    for &b in tag.as_bytes() {
+        buf[pos] = b;
+        pos += 1;
+    }
+    buf[pos] = b' ';
+    pos += 1;
+    for b in data.iter().take(8) {
+        buf[pos] = HEX[(b >> 4) as usize];
+        buf[pos + 1] = HEX[(b & 0xF) as usize];
+        buf[pos + 2] = b' ';
+        pos += 3;
+    }
+    buf[pos] = b'\n';
+    pos += 1;
+    // SAFETY: tüm baytlar ASCII (etiket + hex rakamları + boşluk + '\n').
+    crate::serial::print(unsafe { core::str::from_utf8_unchecked(&buf[..pos]) });
+}
+
 unsafe fn handle_transfer_event(
     controller: usize,
     event: Trb,
@@ -2808,12 +2835,7 @@ unsafe fn handle_transfer_event(
                         // Tanılama: ilk 8 klavye raporunun hex dökümü.
                         if device.samples < 8 {
                             device.samples += 1;
-                            crate::serial::print("[USB-HID] klavye raporu: ");
-                            for b in data.iter().take(8) {
-                                crate::serial::print_hex(*b as u64);
-                                crate::serial::print(" ");
-                            }
-                            crate::serial::print("\n");
+                            dump_hid_sample("[USB-HID] klavye raporu:", data);
                         }
                     }
                     HidKind::Touchscreen => {
@@ -2826,12 +2848,7 @@ unsafe fn handle_transfer_event(
                         // Tanılama: ilk 8 digitizer raporunun hex dökümü.
                         if device.samples < 8 {
                             device.samples += 1;
-                            crate::serial::print("[USB-HID] dokunma raporu: ");
-                            for b in data.iter().take(8) {
-                                crate::serial::print_hex(*b as u64);
-                                crate::serial::print(" ");
-                            }
-                            crate::serial::print("\n");
+                            dump_hid_sample("[USB-HID] dokunma raporu:", data);
                         }
                     }
                     HidKind::Mouse => {
@@ -2867,12 +2884,7 @@ unsafe fn handle_transfer_event(
                         // Tanılama: ilk 8 fare raporunun hex dökümü.
                         if device.samples < 8 {
                             device.samples += 1;
-                            crate::serial::print("[USB-HID] fare raporu: ");
-                            for b in data.iter().take(8) {
-                                crate::serial::print_hex(*b as u64);
-                                crate::serial::print(" ");
-                            }
-                            crate::serial::print("\n");
+                            dump_hid_sample("[USB-HID] fare raporu:", data);
                         }
                     }
                 }

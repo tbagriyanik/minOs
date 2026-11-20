@@ -512,11 +512,17 @@ pub fn render_full_frame(
             fb.reset_clip();
 
             // Çizim ve isabet testi aynı `ScrollbarLayout` üzerinden yapılır.
+            // Tutamak üzerine gelince vurgulanır (hover geri bildirimi).
+            let smx = mouse.x as usize;
+            let smy = mouse.y as usize;
+            let sb_hover = |r: (usize, usize, usize, usize)| {
+                smx >= r.0 && smx < r.0 + r.2 && smy >= r.1 && smy < r.1 + r.3
+            };
             if let Some(g) = scroll_layout.vertical {
-                crate::gui::scrollbar::draw_vertical(fb, &g);
+                crate::gui::scrollbar::draw_vertical(fb, &g, sb_hover(g.thumb));
             }
             if let Some(g) = scroll_layout.horizontal {
-                crate::gui::scrollbar::draw_horizontal(fb, &g);
+                crate::gui::scrollbar::draw_horizontal(fb, &g, sb_hover(g.thumb));
             }
         }
     }

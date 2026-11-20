@@ -846,3 +846,137 @@ fn tls_rejects_untrusted_server_certificate() {
     );
     assert!(!session.is_cert_verified());
 }
+
+// ---------------------------------------------------------------------------
+// Ortak surucu durum modeli gecis testleri (drivers::status)
+//
+// Host testleri paralel kosar ve kayit tablosu global oldugundan her test
+// AYRI bir DriverId kullanir; boylece testler birbirini bozmaz.
+// status.rs icindeki birim testleri Sdmmc/Ahci/Nvme/Net/Ata/VirtioBlk
+// kullanir; asagidaki testler Pci/Display/Audio/Usb/Input'e ayrilmistir.
+// ---------------------------------------------------------------------------
+
+use crate::driver_status::{self, DriverId, DriverPhase};
+
+#[test]
+fn test_driver_status_initial_state_is_unknown() {
+    // Input hicbir teste dokunmaz; dokunulmamis kayit Unknown kalmalidir.
+    assert_eq!(
+        driver_status::entry(DriverId::Input).phase,
+        DriverPhase::Unknown
+    );
+}
+
+#[test]
+fn test_driver_status_transitions_unknown_to_terminal() {
+    let _guard = driver_status::test_guard();
+    let id = DriverId::Pci;
+
+    // Probe baslar -> Probing.
+    let t = driver_status::probe_start(id);
+    assert_eq!(driver_status::entry(id).phase, DriverPhase::Probing);
+
+    // Donanim yok -> Unavailable (hata kodu temiz).
+    driver_status::probe_unavailable(id, t, "pci tarama hatasi");
+    let e = driver_status::entry(id);
+    assert_eq!(e.phase, DriverPhase::Unavailable);
+    assert_eq!(e.error_code, driver_status::ERR_NONE);
+    assert_eq!(e.detail, "pci tarama hatasi");
+
+    // Tekrar probe: Unavailable -> Probing -> Ready.
+    let t = driver_status::probe_start(id);
+    driver_status::probe_ready(id, t);
+    let e = driver_status::entry(id);
+    assert_eq!(e.phase, DriverPhase::Ready);
+    assert_eq!(e.error_code, driver_status::ERR_NONE);
+
+    // Ready -> Error (sonraki probe basarisiz).
+    let t = driver_status::probe_start(id);
+    driver_status::probe_error(id, t, driver_status::ERR_TIMEOUT, "ready timeout");
+    let e = driver_status::entry(id);
+    assert_eq!(e.phase, DriverPhase::Error);
+    assert_eq!(e.error_code, driver_status::ERR_TIMEOUT);
+    assert_eq!(e.detail, "ready timeout");
+}
+
+#[test]
+fn test_driver_status_unavailable_differs_from_error() {
+    let _guard = driver_status::test_guard();
+    // Ayni surucu iki kez probe edilir: once Unavailable, sonra Error.
+    let id = DriverId::Display;
+    let t = driver_status::probe_start(id);
+    driver_status::probe_unavailable(id, t, "gpu aygiti bulunamadi");
+    assert_eq!(driver_status::entry(id).phase, DriverPhase::Unavailable);
+
+    let t = driver_status::probe_start(id);
+    driver_status::probe_error(id, t, driver_status::ERR_INIT_FAILED, "modeset hatasi");
+    let e = driver_status::entry(id);
+    assert_eq!(e.phase, DriverPhase::Error);
+    assert_ne!(e.phase, DriverPhase::Unavailable);
+    assert_eq!(e.error_code, driver_status::ERR_INIT_FAILED);
+}
+
+#[test]
+fn test_driver_status_rescan_resets_error_state() {
+    let _guard = driver_status::test_guard();
+    // Hata sonrasi yeniden tarama (probe_start) hata kodunu temizler.
+    let id = DriverId::Audio;
+    let t = driver_status::probe_start(id);
+    driver_status::probe_error(id, t, driver_status::ERR_BAD_STATE, "bad state");
+    assert_eq!(driver_status::entry(id).phase, DriverPhase::Error);
+    assert_eq!(
+        driver_status::entry(id).error_code,
+        driver_status::ERR_BAD_STATE
+    );
+
+    // Yeniden tarama: probe basarili -> Ready, hata kodu sifirlanir.
+    let t = driver_status::probe_start(id);
+    driver_status::probe_ready_detail(id, t, "hda hazir");
+    let e = driver_status::entry(id);
+    assert_eq!(e.phase, DriverPhase::Ready);
+    assert_eq!(e.error_code, driver_status::ERR_NONE);
+    assert_eq!(e.detail, "hda hazir");
+}
+
+#[test]
+fn test_driver_status_usb_lifecycle() {
+    let _guard = driver_status::test_guard();
+    // Usb kaydini bastan sona gezdirir: Unknown -> Probing -> Ready.
+    let id = DriverId::Usb;
+    let t = driver_status::probe_start(id);
+    driver_status::probe_ready(id, t);
+    assert_eq!(driver_status::entry(id).phase, DriverPhase::Ready);
+}
+
+#[test]
+fn test_driver_status_all_ids_have_labels() {
+    for id in DriverId::ALL {
+        assert!(!id.key().is_empty());
+        assert!(!id.label_tr().is_empty());
+        assert!(!id.label_en().is_empty());
+    }
+    for phase in [
+        DriverPhase::Unknown,
+        DriverPhase::Probing,
+        DriverPhase::Ready,
+        DriverPhase::Unavailable,
+        DriverPhase::Error,
+    ] {
+        assert!(!phase.key().is_empty());
+        assert!(!phase.label_tr().is_empty());
+        assert!(!phase.label_en().is_empty());
+    }
+}
+
+#[test]
+fn test_driver_status_summary_counts() {
+    let _guard = driver_status::test_guard();
+    // Paralel testler kaydi surekli degistirdigi icin yalnizca
+    // tutarlilik invarianti dogrulanir: sayimlar toplam kayit sayisina esit.
+    let (ready, unavailable, error, other) = driver_status::summary();
+    assert_eq!(
+        ready + unavailable + error + other,
+        DriverId::COUNT,
+        "ozet sayimlari tum kayitlari kapsamali"
+    );
+}

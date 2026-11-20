@@ -1,6 +1,6 @@
 # Hakkında & Mimari
 
-minOs (Sarman Edition) v2.5.0, Rust programlama diliyle geliştirilmiş, `no_std` ve `no_main` özelliklerini kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
+minOs (Sarman Edition) v2.6.0, Rust programlama diliyle geliştirilmiş, `no_std` ve `no_main` özelliklerini kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
 
 ---
 

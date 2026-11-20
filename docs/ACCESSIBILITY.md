@@ -1,95 +1,97 @@
 # Accessibility
 
-<!--
-Include a brief statement describing why accessibility matters to your
-project, who should be able to use and contribute to it, and what this
-document covers, such as your accessibility commitments, contributor
-expectations, and issue-reporting process.
+minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Grafik masaüstü, yerleşik uygulamalar ve bir web tarayıcısı içerir. Erişilebilirlik, minOs'un herkes tarafından kullanılabilir olmasına yönelik taahhüdünün bir parçasıdır: görme, işitsel, hareket veya kognitif farklılıkları olan kullanıcılar dahil. Bu belge, minOs'un erişilebilirlik taahhütlerini, önceliklerini, katkıda bulunanların beklediklerini ve erişim engellerinin nasıl raporlanacağını açıklar. Dildeki teknik terimler yerine kullanıcı deneyimleri üzerinden yazılmıştır.
 
-Write for people who may read this after encountering a barrier. Use plain
-language and describe user experiences rather than relying on legal
-language, technical jargon, or standards codes.
--->
- 
 ## Priorities
 
-<!--
-Describe the outcomes the project prioritizes and how it works toward them.
-If you name a WCAG level as an accessibility target, make clear that it is
-an aspirational goal rather than a verified conformance claim. Only claim
-conformance after an evaluation, and identify the evaluated scope, date,
-method, and evaluator. Also describe the areas you prioritize, such as
-keyboard, screen reader, content, or language support.
--->
+minOs, aşağıdaki erişilebilirlik sonuçlarını önceliklendirir:
+
+- **Klavyeyle gezinme:** Tüm formlar, menüler ve pencereler Tab / Shift+Tab ile gezilebilir. Odaklı denetim çevresinde renkli bir odak halkası çizilir (gui::widget::Ui ve MinGuiCompositor::draw_focus_ring). Enter varsayılan işlemi çalıştırır; Escape iletişim kutularını kapatır.
+- **Renk ve kontrast:** Tüm UI renkleri tema jetonları üzerinden çözümlenir. `HighContrast` teması, gövde metni ve odak/çerçeve renkleri için pencere arka planına göre en az 7:1 kontrast oranı hedefler (host testlerinde doğrulanır). Diğer temalar için başlık/metin ve pencere arka planı/aksan renkleri arasında en az 1.8:1 görünürlük korunduğu test edilir.
+- **Yazı ölçeği:** Font yakınlaştırması %100, %125 ve %150 olarak ayarlanabilir; düğme, menü ve liste boyutları bu ölçeğe orantılı büyütülür (`gui::sp`).
+- **Hareketi azaltma:** Sistem Ayarları > Ekran sekmesindeki "Arayüz animasyonları" anahtarı tüm hareketi kapatır (pencere açılış, geçiş, tooltip ve toast animasyonları).
+- **Dil desteği:** Tüm kullanıcılara yönelik metinler Türkçe ve İngilizce olarak yerelleştirilmiştir (`gui::ui_text`). İki dildeki metinler aynı anlamı taşımak zorundadır; host testleri TR/EN eşitsizliğini doğrular.
+
+Bu hedefler istek üzerine değerlendirme sonrası doğrulanmış bir uygunluk iddiası değildir; hedefler, projenin erişilebilirlik yol haritasının parçasıdır.
 
 ## Contributor expectations
 
-<!--
-Describe the accessibility guardrails that apply to contributions,
-including relevant testing, documentation, and continuous integration
-checks. Name specific tools only when the project uses them, and explain
-what evidence contributors should include with user-facing changes.
--->
+Katkıda bulunanlar, kullanıcıya yönelik her değişiklikle aşağıdaki erişilebilirlik koruma ötesini uygulamalıdır:
+
+- **Klavye odak sırası:** Yeni bir form veya iletişim kutusu eklendiğinde Tab / Shift+Tab sırası kontrol edilmeli; devre dışı bırakılan denetimler odak sırasından dışlanmalı (`Widget::enabled` ve `Widget::focusable`).
+- **Düğme durumları:** Düğmelerin seçili, odaklanmış ve devre dışı durumları görsel olarak ayrıştırılmalı (widget.rs'deki `Button::enabled`, `Button::selected` ve çizim mantığı).
+- **Hata mesajları:** Kullanıcıya gösterilen her hata, hata metni yanında somut bir çözüm önerisi içermelidir (`apps/errors.rs`'deki `AppErrorKind::recovery`).
+- **Yerelleştirme:** Her yeni kullanıcı metni Türkçe ve İngilizce olarak eklenmeli; iki versiyonun aynı anlamı taşıması gerekir.
+- **Testler:** Kullanıcıya görünen davranışını etkileyen değişiklikler, `tests/host_gui_tests.rs` veya ilgili host test dosyasına eklenmeli. Tema kontrastı, odak halkası ve TR/EN yerelleştirme testleri `test_host.ps1` ile çalıştırılabilir.
 
 ## Reporting accessibility issues
 
-<!--
-Provide a direct, accessible way to report a barrier or request help.
-Invite useful context such as the affected task, URL, observed behavior,
-browser, operating system, and assistive technology. Make screenshots or
-recordings optional and do not require disability disclosure.
--->
+Erişim engeliyle karşılaşırsanız veya yardım istiyorsanız, GitHub deposunda yeni bir issue açın:
+
+https://github.com/tbagriyanik/minos/issues
+
+İşe yarayan bir rapor şunları içerebilir:
+
+- Etkilenen görev (ör. "Kontrol Paneli'nde depolama bilgisi okunamıyor", "Ayarlar formunda Tab ile gezinilemiyor")
+- Gözlemlenen davranış ve beklediğiniz davranış
+- İşletim sistemi (minOs sürümü), donanım ve ekran çözünürlüğü
+- Kullandığınız yardımcı teknoloji (ekran okuyucu, yüksek kontrast teması vb.)
+
+Ekran görüntüsü veya kayıt isteğe bağlıdır ve zorunlu değildir. Engelle ilgili olarak özür dilişmeniz veya disabilità açıklamanız istenmez.
 
 ### Severity
 
-<!--
-If your project uses severity levels, define them and give practical
-examples based on how strongly a barrier affects a user's ability to
-complete a task. Keep labels consistent with your issue template and
-resolution targets if those processes exist. Maintainers can assign or
-confirm severity during triage; reporters do not need to.
--->
+Proje, şu şiddet düzeylerini kullanır:
+
+- **Kritik:** Kullanıcı temel bir görevi tamamlayamaz (ör. pencere kapatılamıyor, klavye odak sırası kırılmış, Escape ile iletişim kutusu kapanmıyor).
+- **Yüksek:** Görev mümkün ancak çok zor (ör. odaklı denetim görsel olarak belirgin değil, kontrast çok düşük).
+- **Orta:** Kullanıcı deneyimini etkileyen ancak geçici bir çözüm olan sorun (ör. Türkçe/İngilizce metinlerde küçük anlam farkı).
+- **Düşük:** İyileştirme önerisi veya estetik erişilebilirlik eksikliği.
+
+Şiddet düzeyleri bakıcılar tarafından tartışma sırasında atanır veya onaylanır; rapor veren zorunda değildir.
 
 ### How we respond
 
-<!--
-Explain what reporters can expect after submitting an accessibility issue,
-including acknowledgement, status updates, workarounds, expected timelines,
-and opportunities to verify a fix. Use commitments your project can
-consistently uphold.
--->
+Bir erişilebilirlik raporu alındığında şunları taahhüt ederiz:
+
+- 5 iş günü içinde kabul ve ilk yanıt
+- Durum güncellemeleri ve geçici çözüm önerileri (varsa)
+- Düzeltilmesi planlanan değişiklikler için doğrulama fırsatı (test veya QEMU üzerinden)
+
+Bu taahhütler, proje bakıcılarının sürekli yerine getirebileceği kapsamda tutulur.
 
 ## Ownership and maintenance
 
-<!--
-Identify the team, role, or maintainer responsible for accessibility and
-describe their responsibilities to the project. Include the review cadence
-and how ownership transfers when responsibilities change.
--->
+Erişilebilirlik sahibi minOs proje bakıcısıdır (https://github.com/tbagriyanik/minos). Sorumlulukları şunlardır:
+
+- Erişilebilirlik tartışmalarının ve issue'ların incelenmesi
+- Yeni temalar ve UI değişikliklerinin erişilebilirlik koruma ötesine uygunluğu
+- Bu belgenin düzenli olarak güncellenmesi
+
+Sorumluluk devredildiğinde, yeni sahibin bu belge ve ilgili issue'lar üzerinden bilgilendirilmesi sağlanır.
 
 ## Supported environments
 
-<!--
-List the platforms, devices, browsers, input methods, and assistive
-technologies the project supports or has tested. Include versions where
-useful, note partial support, and avoid implying support for combinations
-that have not been evaluated.
--->
+minOs şu ortamlarda desteklenmiş veya test edilmiştir:
+
+- **Platform:** x86_64 (QEMU, gerçek donanım)
+- **Giriş yöntemleri:** Klavye (PS/2 ve USB HID), fare (USB HID), MouseKeys (sayısal tuş takımıyla fare sürme)
+- **Temalar:** VelvetDark (varsayılan), Daylight, Nord, TerminalGreen, Sunset, Dracula, Monokai, SolarizedDark, HighContrast
+- **Yazı ölçeği:** %100, %125, %150
+- **Diller:** Türkçe ve İngilizce
+
+Kısmi destek: Ekran okuyucu uyumluluğu henüz tam olarak değerlendirilmemiştir. Odak halkası ve kontrast gibi görsel erişilebilirlik özellikleri varsayılan temada mevcuttur.
 
 ## Known limitations
 
-<!--
-Describe known barriers in terms of the affected user experience, such as
-"videos do not have captions," rather than standards codes. Include
-available workarounds or equivalent access and link to tracked issues. If
-no limitations are currently documented, describe what has been tested
-instead of claiming that no barriers exist.
--->
+Aşağıdaki erişim engelleri bilinmektedir:
+
+- **Ekran okuyucu desteği:** minOs, bir işletim sistemi çekirdeği ve grafik masaüstü olduğu için geleneksel ekran okuyucu API'sine (ör. ARIA, MSAA) sahip değildir. Odak halkası ve yüksek kontrast teması, kısmi bir eşdeğer erişim sağlar.
+- **Küçük ekranlar:** 240x160 gibi çok düşük çözünürlüklerde bazı pencereler ve metinler ekran dışına çıkabilir; `screen_layout` modülünde kapanış ve açılış kutuları sınırlı çözünürlüklerde sınanmıştır.
+- **İşaret dili / sesli komut:** Henüz desteklenmemektedir.
+
+Bu sınırlamalar için henüz izleme issue'ı açılmamışsa, lütfen yukarıdaki raporlama sürecini kullanın.
 
 ## Feedback and improvements
 
-<!--
-Explain how users and contributors can suggest improvements to this
-statement or the project's accessibility practices. Direct active
-accessibility barriers to the reporting process above.
--->
+Bu belge veya minOs erişilebilirlik uygulamalarıyla ilgili önerileriniz için GitHub deposunda issue açabilirsiniz. Aktif erişim engelleri doğrudan yukarıdaki "Reporting accessibility issues" bölümünde açıklanan süreçten iletilmelidir.

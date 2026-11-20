@@ -327,7 +327,8 @@ pub fn h_track_for(
 }
 
 /// Kaydırma çubuğunu çizer (track + thumb + kenarlık).
-pub fn draw_vertical(fb: &mut Framebuffer, g: &ScrollbarGeom) {
+/// `hovered`: imleç çubuğun üzerinde mi; tutamak vurgulanır.
+pub fn draw_vertical(fb: &mut Framebuffer, g: &ScrollbarGeom, hovered: bool) {
     let (tx, ty, tw, th) = g.track;
     if tw == 0 || th == 0 {
         return;
@@ -336,17 +337,22 @@ pub fn draw_vertical(fb: &mut Framebuffer, g: &ScrollbarGeom) {
     fb.draw_rect_outline(tx, ty, tw, th, Color::BORDER);
     if g.thumb.3 > 0 {
         let (hx, hy, hw, hh) = g.thumb;
+        let thumb = if hovered {
+            MinGuiCompositor::shade(Color::ACCENT_BLUE, 42)
+        } else {
+            Color::ACCENT_BLUE
+        };
         fb.draw_rect(
             hx + 1,
             hy + 1,
             hw.saturating_sub(2),
             hh.saturating_sub(2),
-            Color::ACCENT_BLUE,
+            thumb,
         );
     }
 }
 
-pub fn draw_horizontal(fb: &mut Framebuffer, g: &ScrollbarGeom) {
+pub fn draw_horizontal(fb: &mut Framebuffer, g: &ScrollbarGeom, hovered: bool) {
     let (tx, ty, tw, th) = g.track;
     if tw == 0 || th == 0 {
         return;
@@ -355,12 +361,17 @@ pub fn draw_horizontal(fb: &mut Framebuffer, g: &ScrollbarGeom) {
     fb.draw_rect_outline(tx, ty, tw, th, Color::BORDER);
     if g.thumb.2 > 0 {
         let (hx, hy, hw, hh) = g.thumb;
+        let thumb = if hovered {
+            MinGuiCompositor::shade(Color::ACCENT_BLUE, 42)
+        } else {
+            Color::ACCENT_BLUE
+        };
         fb.draw_rect(
             hx + 1,
             hy + 1,
             hw.saturating_sub(2),
             hh.saturating_sub(2),
-            Color::ACCENT_BLUE,
+            thumb,
         );
     }
 }

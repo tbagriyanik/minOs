@@ -161,6 +161,77 @@ fn publish_runtime_app_memory(
     }
 }
 
+/// `FileManagerApp` onay iletişim kutusu açıkken Enter onayını ilgili diyalog
+/// türüne dağıtır. Diyalog tüketildiyse `true` döner.
+fn fm_confirm_accept(
+    app: &mut apps::filemanager::FileManagerApp,
+    vfs: &mut crate::fs::vfs::VirtualFileSystem,
+) -> bool {
+    use apps::filemanager::ConfirmDialog;
+    match app.confirm_dialog {
+        ConfirmDialog::NewFile => app.confirm_new_file(vfs),
+        ConfirmDialog::NewFolder => app.confirm_new_folder(vfs),
+        ConfirmDialog::Rename => app.confirm_rename(vfs),
+        ConfirmDialog::Delete | ConfirmDialog::DeletePermanent => {
+            app.confirm_delete(vfs);
+        }
+        ConfirmDialog::None => return false,
+    }
+    true
+}
+
+/// `FileManagerApp` onay iletişim kutusu açıkken tuş eylemini diyaloğa
+/// yönlendirir; olay tüketildiyse `true` döner.
+fn fm_confirm_key(
+    app: &mut apps::filemanager::FileManagerApp,
+    vfs: &mut crate::fs::vfs::VirtualFileSystem,
+    action: drivers::keyboard::KeyAction,
+) -> bool {
+    use apps::filemanager::ConfirmDialog;
+    if app.confirm_dialog == ConfirmDialog::None {
+        return false;
+    }
+    match action {
+        drivers::keyboard::KeyAction::EnterKey => fm_confirm_accept(app, vfs),
+        drivers::keyboard::KeyAction::ArrowLeft => {
+            app.confirm_rename_move_cursor(false);
+            true
+        }
+        drivers::keyboard::KeyAction::ArrowRight => {
+            app.confirm_rename_move_cursor(true);
+            true
+        }
+        drivers::keyboard::KeyAction::Delete => {
+            app.confirm_rename_delete();
+            true
+        }
+        _ => true,
+    }
+}
+
+/// `FileManagerApp` onay iletişim kutusu açıkken karakter girişini diyaloğa
+/// yönlendirir; olay tüketildiyse `true` döner.
+fn fm_confirm_char(
+    app: &mut apps::filemanager::FileManagerApp,
+    vfs: &mut crate::fs::vfs::VirtualFileSystem,
+    ch: char,
+) -> bool {
+    use apps::filemanager::ConfirmDialog;
+    if app.confirm_dialog == ConfirmDialog::None {
+        return false;
+    }
+    match ch {
+        '\x1b' => app.cancel_confirm(),
+        '\x08' => app.confirm_rename_backspace(),
+        '\n' | '\r' => {
+            fm_confirm_accept(app, vfs);
+        }
+        ch if ch >= ' ' && ch != '\x7f' => app.confirm_rename_char(ch),
+        _ => {}
+    }
+    true
+}
+
 /// Kapanış/yeniden başlatma akışı: görünür ilerleme, VFS senkronizasyonu,
 /// sürücü kapatma ve DONANIM reseti. Tüm kapatma giriş noktaları burayı
 /// kullanır; böylece kullanıcı "kaydediliyor / boşaltılıyor / kapatılıyor"
@@ -213,6 +284,10 @@ fn finish_system(
     if restart {
         restart_system();
     }
+
+    // ACPI PM1a yazılım yolu (FADT PM1a_CNT_BLK); yazım başarısızsa
+    // veya makine kapanmazsa aşağıdaki QEMU/legacy fallback çalışır.
+    drivers::acpi_power::shutdown();
 
     unsafe {
         // QEMU/Bochs ACPI poweroff (0x604), ardından legacy fallback.
@@ -725,7 +800,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 if !url.is_empty() {
                     browser_app.set_url(url.as_bytes());
                     browser_app.navigate();
-                    compositor.launch_app_window(3);
+                    open_app(&mut compositor, 3);
                     serial_print("[BOOT] browserurl=");
                     serial_print(url);
                     serial_print("\n");
@@ -743,7 +818,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         .map(|c| crate::boot::limine::cmdline_has_token(c, "perftest"))
         .unwrap_or(false)
     {
-        compositor.launch_app_window(14);
+        open_app(&mut compositor, 14);
         apps::controlpanel::select_tab(3);
         apps::controlpanel::start_perf_test();
         serial_print("[BOOT] perftest=1: performans testi baslatildi.\n");
@@ -1833,7 +1908,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     6 => desktop_files.begin_rename(),
 
                                     7 => {
-                                        desktop_files.delete_selected(&mut fs_mgr.vfs);
+                                        desktop_files.delete_selected();
                                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                                     }
 
@@ -1996,7 +2071,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         if let Some(file_idx) = compositor.context_file_idx {
                                             filemanager_app.selected_idx = file_idx;
 
-                                            filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                            filemanager_app.delete_selected();
                                         }
                                     }
 
@@ -3043,7 +3118,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 } else if menu_action == Some(2) {
                                     filemanager_app.new_folder(&mut fs_mgr.vfs);
                                 } else if menu_action == Some(3) {
-                                    filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                    filemanager_app.delete_selected();
                                 } else if menu_action == Some(4) {
                                     // Geri Donusum Kutusu'ndayken "Ac" dugmesi ogeyi geri yukler.
 
@@ -5182,6 +5257,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 {
                                     apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
                                     force_render = true;
+                                } else if apps::controlpanel::active_tab() == 5
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::controlpanel::rescan_btn_rect(wx, wy, ww, wh),
+                                    )
+                                {
+                                    apps::controlpanel::rescan_drivers();
+                                    force_render = true;
                                 }
                             }
 
@@ -5226,6 +5310,16 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         let mut enter_char_consumed = false;
 
         while let Some(action) = keyboard.take_last_action() {
+            // Dosya yöneticisi onay iletişim kutusu açıkken tuşlar önce diyaloğa gider.
+            let fm_handled = fm_confirm_key(&mut desktop_files, &mut fs_mgr.vfs, action)
+                || (app_is_focused(&compositor, 0)
+                    && fm_confirm_key(&mut filemanager_app, &mut fs_mgr.vfs, action));
+            if fm_handled {
+                if action == drivers::keyboard::KeyAction::EnterKey {
+                    enter_char_consumed = true;
+                }
+                continue;
+            }
             match action {
                 drivers::keyboard::KeyAction::ToggleStartMenu => {
                     compositor.is_start_menu_open = !compositor.is_start_menu_open;
@@ -5654,10 +5748,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         }
                         continue;
                     }
-                    if desktop_files.rename_active {
-                        desktop_files.rename_move_cursor(false);
-                    } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
-                        filemanager_app.rename_move_cursor(false);
+                    if desktop_files.confirm_dialog == apps::filemanager::ConfirmDialog::Rename {
+                        desktop_files.confirm_rename_move_cursor(false);
+                    } else if app_is_focused(&compositor, 0)
+                        && filemanager_app.confirm_dialog
+                            == apps::filemanager::ConfirmDialog::Rename
+                    {
+                        filemanager_app.confirm_rename_move_cursor(false);
                     } else if compositor.is_start_menu_open {
                         if compositor.start_search_focused {
                             let target = if keyboard.ctrl {
@@ -5750,10 +5847,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         }
                         continue;
                     }
-                    if desktop_files.rename_active {
-                        desktop_files.rename_move_cursor(true);
-                    } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
-                        filemanager_app.rename_move_cursor(true);
+                    if desktop_files.confirm_dialog == apps::filemanager::ConfirmDialog::Rename {
+                        desktop_files.confirm_rename_move_cursor(true);
+                    } else if app_is_focused(&compositor, 0)
+                        && filemanager_app.confirm_dialog
+                            == apps::filemanager::ConfirmDialog::Rename
+                    {
+                        filemanager_app.confirm_rename_move_cursor(true);
                     } else if compositor.is_start_menu_open {
                         if compositor.start_search_focused {
                             let target = if keyboard.ctrl {
@@ -6068,91 +6168,81 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 0) {
                         enter_char_consumed = true;
 
-                        if filemanager_app.rename_active {
-                            filemanager_app.commit_rename(&mut fs_mgr.vfs);
-                        } else {
-                            match filemanager_app.focused_control {
-                                0 => filemanager_app.refresh_from_vfs(&fs_mgr.vfs),
+                        match filemanager_app.focused_control {
+                            0 => filemanager_app.refresh_from_vfs(&fs_mgr.vfs),
 
-                                1 => filemanager_app.new_file(&mut fs_mgr.vfs),
+                            1 => filemanager_app.new_file(&mut fs_mgr.vfs),
 
-                                2 => filemanager_app.new_folder(&mut fs_mgr.vfs),
+                            2 => filemanager_app.new_folder(&mut fs_mgr.vfs),
 
-                                3 => {
-                                    filemanager_app.delete_selected(&mut fs_mgr.vfs);
-                                }
+                            3 => {
+                                filemanager_app.delete_selected();
+                            }
 
-                                4 | 5 => {
-                                    if filemanager_app.path() == crate::fs::vfs::TRASH_DIR {
-                                        filemanager_app.restore_selected(&mut fs_mgr.vfs);
-                                    } else if let Some((tag, path)) =
-                                        filemanager_app.enter_selected(&fs_mgr.vfs)
-                                    {
-                                        if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                            let data = with_busy_progress(
-                                                &mut fb,
-                                                mx,
-                                                my,
-                                                gui::ui_text(
-                                                    "Dosya açılıyor...",
-                                                    "Opening file...",
-                                                ),
-                                                || fs_mgr.vfs.read_file(&path),
-                                            );
+                            4 | 5 => {
+                                if filemanager_app.path() == crate::fs::vfs::TRASH_DIR {
+                                    filemanager_app.restore_selected(&mut fs_mgr.vfs);
+                                } else if let Some((tag, path)) =
+                                    filemanager_app.enter_selected(&fs_mgr.vfs)
+                                {
+                                    if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                        let data = with_busy_progress(
+                                            &mut fb,
+                                            mx,
+                                            my,
+                                            gui::ui_text("Dosya açılıyor...", "Opening file..."),
+                                            || fs_mgr.vfs.read_file(&path),
+                                        );
 
-                                            if let Some(data) = data {
-                                                notepad_app.open_file(&path, data);
-                                            }
-
-                                            open_app(&mut compositor, 2);
-                                        } else if tag == "IMG" {
-                                            with_busy_progress(
-                                                &mut fb,
-                                                mx,
-                                                my,
-                                                gui::ui_text(
-                                                    "Resim açılıyor...",
-                                                    "Opening image...",
-                                                ),
-                                                || {
-                                                    open_image_file(
-                                                        &path,
-                                                        &fs_mgr.vfs,
-                                                        &paint_apps,
-                                                        &mut imageviewer_app,
-                                                    )
-                                                },
-                                            );
-
-                                            open_app(&mut compositor, 4);
-                                        } else if tag == "SND" {
-                                            open_app(&mut compositor, 5);
-                                        } else if tag == "VID" {
-                                            open_app(&mut compositor, 6);
-                                        } else if tag == "WEB" {
-                                            open_app(&mut compositor, 3);
-                                        } else if tag == "3D" {
-                                            let data = with_busy_progress(
-                                                &mut fb,
-                                                mx,
-                                                my,
-                                                gui::ui_text(
-                                                    "3D model açılıyor...",
-                                                    "Opening 3D model...",
-                                                ),
-                                                || fs_mgr.vfs.read_file(&path),
-                                            );
-
-                                            if let Some(data) = data {
-                                                viewer3d_app.load_file(&path, data);
-                                            }
-
-                                            open_app(&mut compositor, 12);
+                                        if let Some(data) = data {
+                                            notepad_app.open_file(&path, data);
                                         }
+
+                                        open_app(&mut compositor, 2);
+                                    } else if tag == "IMG" {
+                                        with_busy_progress(
+                                            &mut fb,
+                                            mx,
+                                            my,
+                                            gui::ui_text("Resim açılıyor...", "Opening image..."),
+                                            || {
+                                                open_image_file(
+                                                    &path,
+                                                    &fs_mgr.vfs,
+                                                    &paint_apps,
+                                                    &mut imageviewer_app,
+                                                )
+                                            },
+                                        );
+
+                                        open_app(&mut compositor, 4);
+                                    } else if tag == "SND" {
+                                        open_app(&mut compositor, 5);
+                                    } else if tag == "VID" {
+                                        open_app(&mut compositor, 6);
+                                    } else if tag == "WEB" {
+                                        open_app(&mut compositor, 3);
+                                    } else if tag == "3D" {
+                                        let data = with_busy_progress(
+                                            &mut fb,
+                                            mx,
+                                            my,
+                                            gui::ui_text(
+                                                "3D model açılıyor...",
+                                                "Opening 3D model...",
+                                            ),
+                                            || fs_mgr.vfs.read_file(&path),
+                                        );
+
+                                        if let Some(data) = data {
+                                            viewer3d_app.load_file(&path, data);
+                                        }
+
+                                        open_app(&mut compositor, 12);
                                     }
                                 }
-                                _ => {}
                             }
+                            _ => {}
                         }
                     } else if app_is_focused(&compositor, 1) {
                         enter_char_consumed = true;
@@ -6379,6 +6469,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
                                 }
                             }
+                            apps::installer::InstallerAction::Cancel
+                            | apps::installer::InstallerAction::ConfirmYes
+                            | apps::installer::InstallerAction::ConfirmNo => {}
                         }
                     } else if app_is_focused(&compositor, 13) {
                         enter_char_consumed = true;
@@ -6404,6 +6497,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 {
                                     apps::controlpanel::start_perf_test();
                                 }
+                            }
+                            apps::controlpanel::CpAction::RescanDrivers => {
+                                apps::controlpanel::rescan_drivers();
                             }
                             apps::controlpanel::CpAction::None => {}
                         }
@@ -6739,17 +6835,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         browser_app.address_delete();
-                    } else if app_is_focused(&compositor, 0) && !filemanager_app.rename_active {
-                        filemanager_app.delete_selected(&mut fs_mgr.vfs);
-                    } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
-                        filemanager_app.rename_delete();
-                    } else if desktop_files.rename_active {
-                        desktop_files.rename_delete();
+                    } else if app_is_focused(&compositor, 0) {
+                        filemanager_app.delete_selected();
                     } else if desktop_files.selected_items.iter().any(|&s| s)
                         || (desktop_files.selected_idx < desktop_files.file_count
                             && desktop_files.selected_items[desktop_files.selected_idx])
                     {
-                        desktop_files.delete_selected(&mut fs_mgr.vfs);
+                        desktop_files.delete_selected();
 
                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                     }
@@ -8069,6 +8161,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 continue;
             }
 
+            // Dosya yöneticisi onay iletişim kutusu açıkken karakterler diyaloğa gider.
+            if fm_confirm_char(&mut desktop_files, &mut fs_mgr.vfs, ch)
+                || (app_is_focused(&compositor, 0)
+                    && fm_confirm_char(&mut filemanager_app, &mut fs_mgr.vfs, ch))
+            {
+                continue;
+            }
+
             // Baslat menusu acikken klavye kisayollari menu SIRASINI kullanir
 
             if run_dialog_open {
@@ -8268,31 +8368,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 desktop_files.drag_active = false;
 
                 desktop_files.drag_target = None;
-            } else if filemanager_app.rename_active && app_is_focused(&compositor, 0) {
-                if ch == '\x1b' {
-                    filemanager_app.rename_active = false;
-                } else if ch == '\x08' {
-                    filemanager_app.rename_backspace();
-                } else if ch == '\n' {
-                    filemanager_app.commit_rename(&mut fs_mgr.vfs);
-                } else if ch >= ' ' {
-                    filemanager_app.rename_char(ch);
-                }
             } else if app_is_focused(&compositor, 0) && ch == '\x08' {
                 filemanager_app.search_backspace();
 
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
-            } else if desktop_files.rename_active {
-                if ch == '\x1b' {
-                    desktop_files.rename_active = false;
-                } else if ch == '\x08' {
-                    desktop_files.rename_backspace();
-                } else if ch == '\n' {
-                    desktop_files.commit_rename(&mut fs_mgr.vfs);
-                    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                } else if ch >= ' ' {
-                    desktop_files.rename_char(ch);
-                }
             } else if (ch == 'g' || ch == 'G') && keyboard.ctrl && app_is_focused(&compositor, 0) {
                 // Ctrl+G: liste <-> izgara gorunumu.
 
@@ -8407,6 +8486,66 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 apps::controlpanel::focus_next_control(keyboard.shift);
             } else if ch == '\t' && app_is_focused(&compositor, 11) {
                 installer_app.focus_next_control(keyboard.shift);
+            } else if app_is_focused(&compositor, 11) && installer_app.confirm_dialog != 0 {
+                // Kurulum onay diyaloğu açıkken klavye kısayolları
+                match ch {
+                    'y' | 'Y' | 'e' | 'E' | '\n' | '\r' | ' ' => {
+                        installer_app.confirm_focus = 0; // Evet
+                        enter_char_consumed = true;
+                        match installer_app.activate_focused_control() {
+                            apps::installer::InstallerAction::Format => {
+                                if installer_app.state != apps::installer::InstallState::Formatting
+                                    && installer_app.state != apps::installer::InstallState::Copying
+                                {
+                                    let formatted = with_busy_progress(
+                                        &mut fb,
+                                        mx,
+                                        my,
+                                        gui::ui_text(
+                                            "Disk biçimlendiriliyor...",
+                                            "Formatting disk...",
+                                        ),
+                                        || installer_app.format_selected_drive(),
+                                    );
+                                    if formatted {
+                                        filemanager_app.set_path("/media/hdd0");
+                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                    }
+                                }
+                            }
+                            apps::installer::InstallerAction::Install
+                                if installer_app.state
+                                    != apps::installer::InstallState::Formatting
+                                    && installer_app.state
+                                        != apps::installer::InstallState::Copying =>
+                            {
+                                let installed = with_busy_progress(
+                                    &mut fb,
+                                    mx,
+                                    my,
+                                    gui::ui_text("minOs kuruluyor...", "Installing minOs..."),
+                                    || installer_app.perform_install(&mut fs_mgr.vfs),
+                                );
+                                if installed {
+                                    filemanager_app.set_path("/media/hdd0");
+                                }
+                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                            }
+                            _ => {}
+                        }
+                    }
+                    'n' | 'N' | 'h' | 'H' | '\x1b' => {
+                        // Esc veya N/H
+                        installer_app.confirm_focus = 1; // Hayır
+                        installer_app.confirm_cancel();
+                        enter_char_consumed = true;
+                    }
+                    '\t' => {
+                        installer_app.confirm_focus_next(false);
+                        enter_char_consumed = true;
+                    }
+                    _ => {}
+                }
             } else {
                 let browser_focused = app_is_focused(&compositor, 3);
 
@@ -8684,6 +8823,68 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             tb_rect.0, tb_rect.1, tb_rect.2, tb_rect.3,
                         ),
                     );
+                }
+
+                // Kaydırma çubuğu hover'i: imleç içerik alanının kenar
+                // şeridine (dikey: sağ, yatay: alt) girip çıkarken kirli
+                // işaretle; tutamak vurgusu bir sonraki karede görünür.
+                // Yalnızca geçiş anında işaretlenir — şerit üzerinde her
+                // harekette değil.
+                let (cx, cy, cw, ch) = w.content_rect();
+                let (c_w, c_h) = window_content_size(
+                    w.app_id as usize,
+                    w.width,
+                    w.height,
+                    w.content_w,
+                    w.content_h,
+                    &filemanager_app,
+                    &notepad_app,
+                    &browser_app,
+                );
+                let sb = gui::scrollbar::SCROLLBAR_THICKNESS;
+                let want_v = c_h > ch && ch > 0;
+                let want_h = c_w > cw && cw > 0;
+                let mut gx = 0usize;
+                let mut gy = 0usize;
+                let mut gw = 0usize;
+                let mut gh = 0usize;
+                if want_v {
+                    gx = cx + cw.saturating_sub(sb);
+                    gy = cy;
+                    gw = sb;
+                    gh = ch;
+                }
+                if want_h {
+                    let (hx, hy, hw, hh) = (cx, cy + ch.saturating_sub(sb), cw, sb);
+                    if gw == 0 {
+                        gx = hx;
+                        gy = hy;
+                        gw = hw;
+                        gh = hh;
+                    } else {
+                        // Dikey şerit zaten kapsıyor; yatay şeridi birleşik
+                        // sınırlayıcı kutuyla genişlet (tekrar işaretleme
+                        // zaten birleşir, basit tut).
+                        let x1 = gx.max(hx);
+                        let y1 = gy.max(hy);
+                        let x2 = (gx + gw).max(hx + hw);
+                        let y2 = (gy + gh).max(hy + hh);
+                        gx = x1;
+                        gy = y1;
+                        gw = x2.saturating_sub(x1);
+                        gh = y2.saturating_sub(y1);
+                    }
+                }
+                if gw > 0 && gh > 0 {
+                    let gutter = (gx, gy, gw, gh);
+                    let was_in_sb =
+                        gui::in_rect(last_mouse_x as usize, last_mouse_y as usize, gutter);
+                    let in_sb = gui::in_rect(mx, my, gutter);
+                    if was_in_sb || in_sb {
+                        compositor
+                            .dirty_tracker
+                            .track(idx, crate::gui::dirty_rect::DirtyRect::new(gx, gy, gw, gh));
+                    }
                 }
                 break;
             }

@@ -28,7 +28,7 @@
 
 use core::arch::asm;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 fn serial_print(s: &str) {
     crate::boot::console::serial_print(s);
@@ -251,6 +251,16 @@ unsafe fn dma_pool_virt() -> u64 {
 // ---------------------------------------------------------------------------
 
 static HDA_READY: AtomicBool = AtomicBool::new(false);
+
+/// `init` sonucunun sınıflandırması (sürücü durum ekranı için):
+/// 0 = çalışmadı, 1 = donanım yok, 2 = hazır, 3 = DMA tahsisi başarısız,
+/// 4 = başlatma hatası (reset/MMIO).
+static INIT_OUTCOME: AtomicU8 = AtomicU8::new(0);
+
+/// Son `init` çağrısının sınıflandırılmış sonucu.
+pub fn init_outcome() -> u8 {
+    INIT_OUTCOME.load(Ordering::Relaxed)
+}
 
 static mut HDA_MMIO_BASE: u64 = 0;
 
@@ -489,7 +499,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
 
             None => {
                 serial_print("[HDA] DMA havuzu ayrılamadı; sürücü başlatılmadı.\n");
-
+                INIT_OUTCOME.store(3, Ordering::Relaxed);
                 return;
             }
         };
@@ -584,7 +594,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 serial_print(
                     "[HDA] Intel HDA denetleyicisi PCI'da bulunamadı; PC Speaker kullanılacak.\n",
                 );
-
+                INIT_OUTCOME.store(1, Ordering::Relaxed);
                 return;
             }
         };
@@ -623,7 +633,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
 
         if gctl == 0xFFFF_FFFF {
             serial_print("[HDA] Hata: MMIO GCTL okunamadı (0xFFFFFFFF). Aygıt DSP veya D3 modunda; PC Speaker kullanılacak.\n");
-
+            INIT_OUTCOME.store(4, Ordering::Relaxed);
             return;
         }
 
@@ -653,7 +663,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
 
         if (mmio_read32(mmio_base, GCTL) & 0x1) == 0 {
             serial_print("[HDA] Denetleyici reset zaman aşımı (CRST=0); HDA devre dışı, PC Speaker kullanılacak.\n");
-
+            INIT_OUTCOME.store(4, Ordering::Relaxed);
             return;
         }
 
@@ -910,6 +920,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         serial_print("[HDA] Intel HDA başlatıldı. 48kHz 16-bit Stereo DMA akışı hazır.\n");
 
         HDA_READY.store(true, Ordering::Relaxed);
+        INIT_OUTCOME.store(2, Ordering::Relaxed);
     }
 }
 

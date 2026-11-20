@@ -129,6 +129,19 @@ impl MinGuiCompositor {
         font_render::draw(fb, font_render::Face::Inria, x, y, text, color, size);
     }
 
+    /// Klavye odağı (Tab) göstergesi: denetim çevresinde standart halka.
+    /// Tüm uygulamalar aynı görünümü kullanır; renk temadan gelir.
+    pub fn draw_focus_ring(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
+        fb.draw_rounded_rect_outline(
+            x.saturating_sub(2),
+            y.saturating_sub(2),
+            w.saturating_add(4),
+            h.saturating_add(4),
+            4,
+            Color::ACCENT_YELLOW,
+        );
+    }
+
     /// Monospace metni CMD ekranında Geist Mono ile çizer.
     pub fn draw_terminal_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
         let size = Self::scaled_font_size();

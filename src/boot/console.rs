@@ -101,6 +101,9 @@ pub fn serial_print_hex(v: u64) {
 
 pub fn restart_system() -> ! {
     serial_print("[minOs] Sistem yeniden başlatılıyor...\n");
+    // ACPI RESET_REG yolu (FADT); kayıtçı yoksa/çalışmazsa port
+    // fallback'lerine düşülür.
+    crate::drivers::acpi_power::reboot();
     unsafe {
         // 1. QEMU/PC reset control register
         core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);

@@ -22,7 +22,7 @@ pub mod timefmt;
 pub mod toast;
 pub mod tooltip;
 pub mod tray;
-pub mod user_lib;
+pub mod ui_helpers;
 pub mod wallpaper;
 pub mod widget;
 pub mod window;
@@ -35,6 +35,7 @@ pub use scrollbar::{ScrollState, ScrollbarGeom};
 pub use setup::*;
 pub use textbuf::TextBuf;
 pub use toast::*;
+pub use ui_helpers::*;
 pub use window::*;
 
 #[allow(unused_imports)]

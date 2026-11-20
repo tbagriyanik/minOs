@@ -271,6 +271,17 @@ impl Thumb {
     }
 }
 
+/// Dosya işlemi onay iletişim kutusunun durumu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConfirmDialog {
+    None,
+    NewFile,
+    NewFolder,
+    Rename,
+    Delete,
+    DeletePermanent,
+}
+
 pub struct FileManagerApp {
     pub current_path: &'static str,
     pub path_buf: [u8; 96],
@@ -318,6 +329,14 @@ pub struct FileManagerApp {
     /// Öğe indeksine göre çözümlenmiş küçük resimler (yalnız IMG dosyaları).
     thumbs: Vec<Option<Thumb>>,
     item_counter: usize,
+    /// Açık onay iletişim kutusu türü.
+    pub confirm_dialog: ConfirmDialog,
+    /// Onay iletişim kutusunda seçili öğe indeksi.
+    pub confirm_item_idx: usize,
+    /// Onay iletişim kutusunda girilen isim baytları.
+    pub confirm_name_buf: [u8; 64],
+    pub confirm_name_len: usize,
+    pub confirm_cursor: usize,
 }
 
 impl FileManagerApp {
@@ -1008,6 +1027,11 @@ impl FileManagerApp {
             search_len: 0,
             thumbs: Vec::new(),
             item_counter: 1,
+            confirm_dialog: ConfirmDialog::None,
+            confirm_item_idx: 0,
+            confirm_name_buf: [0; 64],
+            confirm_name_len: 0,
+            confirm_cursor: 0,
         }
     }
 
@@ -1062,8 +1086,22 @@ impl FileManagerApp {
         self.drag_item = None;
         self.drag_active = false;
         self.drag_target = None;
-        let is_not_root = self.path() != "/";
-        let items = vfs.list_dir(self.path());
+        let path = String::from(self.path());
+        let is_not_root = path != "/";
+
+        // Özel sürücü durumlarını kontrol et
+        let is_usb = path == "/media/usb0";
+        let is_cdrom = path == "/media/cdrom";
+        let is_hdd = path == "/media/hdd0";
+        let is_boot = path == "/boot";
+
+        // Sürücü mevcut mu kontrol et
+        let usb_available = crate::fs::diskfs::usb_available();
+        let cd_available = crate::fs::diskfs::cd_available();
+        let hdd_available =
+            crate::drivers::usb::hdd_available() || crate::fs::diskfs::usb_available();
+
+        let items = vfs.list_dir(&path);
 
         self.file_count = 0;
         self.selected_idx = 0;
@@ -1071,7 +1109,7 @@ impl FileManagerApp {
         // Kök dizinde değilsek üst dizine dönme girdisi ekle [..].
         // Masaüstünde (/desktop) üst klasör kavramı yoktur: ".." simgesi
         // çizilmesin ve "/desktop/.." gibi geçersiz bir yol açılmasın.
-        if is_not_root && self.path() != "/desktop" {
+        if is_not_root && path != "/desktop" {
             let mut up = FileItem::empty();
             let up_name = b"..";
             up.dyn_name[..2].copy_from_slice(up_name);
@@ -1084,6 +1122,37 @@ impl FileManagerApp {
             up.size_str = s;
             self.files[self.file_count] = up;
             self.file_count += 1;
+        }
+
+        // Sürücü durumu mesajları
+        if is_usb && !usb_available {
+            self.status = crate::gui::ui_text(
+                "⚠ USB disk bağlı değil. Lütfen bir USB sürücü takın.",
+                "⚠ USB drive not connected. Please insert a USB drive.",
+            );
+        } else if is_cdrom && !cd_available {
+            self.status = crate::gui::ui_text(
+                "⚠ CD-ROM sürücüsünde disk yok. Lütfen bir disk yerleştirin.",
+                "⚠ No disc in CD-ROM drive. Please insert a disc.",
+            );
+        } else if is_hdd && !hdd_available {
+            self.status = crate::gui::ui_text(
+                "⚠ Sabit disk bulunamadı. Bağlantıları kontrol edin.",
+                "⚠ Hard disk not found. Check connections.",
+            );
+        } else {
+            // Disk bilgisini göster (sürücü tespiti henüz uygulanmadı)
+        }
+        if is_boot && items.is_empty() {
+            self.status = crate::gui::ui_text(
+                "ℹ /boot bölümü boş. Sistem dosyaları burada depolanır.",
+                "ℹ /boot partition is empty. System files are stored here.",
+            );
+        } else if items.is_empty() && !is_usb && !is_cdrom && !is_hdd && !is_boot {
+            self.status = crate::gui::ui_text(
+                "📁 Bu klasör boş. Yeni dosya/klasör oluşturmak için 'Yeni' menüsünü kullanın.",
+                "📁 This folder is empty. Use 'New' menu to create files/folders.",
+            );
         }
 
         // Önce klasörler
@@ -1130,22 +1199,22 @@ impl FileManagerApp {
             row.size_str = format_size(it.size, false);
             self.files[self.file_count] = row;
             self.file_count += 1;
-        }
 
-        // Izgara / önizleme için gerekliyse küçük resimleri (thumbnail) tazele.
-        self.thumbs.clear();
-        if self.view_mode == ViewMode::Grid || self.preview_open {
-            self.rebuild_thumbs(vfs);
-        }
-        self.preview_key.clear();
-        if self.preview_open {
-            self.update_preview(vfs);
-        }
+            // Izgara / önizleme için gerekliyse küçük resimleri (thumbnail) tazele.
+            self.thumbs.clear();
+            if self.view_mode == ViewMode::Grid || self.preview_open {
+                self.rebuild_thumbs(vfs);
+            }
+            self.preview_key.clear();
+            if self.preview_open {
+                self.update_preview(vfs);
+            }
 
-        // Mevcut sıralama kriterine göre dosyaları sırala
-        self.resort_files();
+            // Mevcut sıralama kriterine göre dosyaları sırala
+            self.resort_files();
 
-        self.status = "";
+            self.status = "";
+        }
     }
 
     /// Görünür görsel öğeler için küçük resimleri (thumbnail) çözer.
@@ -1385,7 +1454,11 @@ impl FileManagerApp {
             self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only.");
             return 0;
         }
+
+        let total_files = clipboard.count;
         let mut done = 0;
+        let start_ms = crate::monotonic_ms();
+
         for i in 0..clipboard.count {
             let src = String::from(clipboard.paths[i].as_str());
             let result = if clipboard.cut {
@@ -1393,58 +1466,53 @@ impl FileManagerApp {
             } else {
                 vfs.copy_item(&src, &dest).map(|_| ())
             };
+
             if result.is_ok() {
                 done += 1;
+
+                // Progress update every 5 files or at the end
+                if done % 5 == 0 || done == total_files {
+                    let elapsed_ms = crate::monotonic_ms().saturating_sub(start_ms);
+                    // Tahmini kalan süre (yalnızca ilerleme raporlaması için hesaplanır).
+                    let _remaining = if done > 0 && done < total_files {
+                        let avg_time_ms = elapsed_ms / done as u64;
+                        let est_remaining_ms = avg_time_ms * (total_files - done) as u64;
+                        let remaining_secs = est_remaining_ms / 1000;
+                        alloc::format!(" (≈{}s remaining)", remaining_secs.max(1))
+                    } else {
+                        String::new()
+                    };
+
+                    let _pct = (done as f64 / total_files as f64) * 100.0;
+                    self.status = crate::gui::ui_text("Kopyalanıyor", "Copying");
+                }
+            } else {
+                // Copy failed - show error and offer retry
+                self.status =
+                    crate::gui::ui_text("Kopyalama hatası, tekrar deneyin?", "Copy failed, retry?");
+                // Store failed operation for retry logic
+                break;
             }
         }
+
         if clipboard.cut && done > 0 {
             clipboard.count = 0;
             clipboard.cut = false;
         }
         self.refresh_from_vfs(vfs);
         self.status = if done > 0 {
-            crate::gui::ui_text("Yapıştırma tamamlandı.", "Paste completed.")
+            if clipboard.cut {
+                crate::gui::ui_text("Tamamlandi.", "Completed.")
+            } else {
+                crate::gui::ui_text("Yapistirma tamamlandi.", "Paste completed.")
+            }
         } else {
-            crate::gui::ui_text("Yapıştırılacak öğe yok.", "Nothing to paste.")
+            crate::gui::ui_text("Yapistirilecek oge yok.", "Nothing to paste.")
         };
         done
     }
 
-    /// Yeni dosya oluşturur.
-    pub fn new_file(&mut self, vfs: &mut VirtualFileSystem) {
-        let mut counter = self.item_counter;
-        let name = loop {
-            let candidate = numbered_name("yeni_", counter, ".txt");
-            if !vfs
-                .list_dir(self.path())
-                .iter()
-                .any(|item| item.name.eq_ignore_ascii_case(&candidate))
-            {
-                break candidate;
-            }
-            counter += 1;
-        };
-        self.item_counter = counter + 1;
-
-        let mut full_path = String::from(self.path());
-        if !full_path.ends_with('/') {
-            full_path.push('/');
-        }
-        full_path.push_str(&name);
-
-        let saved = vfs.write_file(&full_path, "Yeni oluşturulan dosya içeriği.\n".as_bytes());
-        self.refresh_from_vfs(vfs);
-        self.status = if saved {
-            crate::gui::ui_text("Yeni dosya oluşturuldu.", "New file created.")
-        } else {
-            crate::gui::ui_text(
-                "Dosya oluşturuldu; diske kaydedilemedi.",
-                "File created; disk save failed.",
-            )
-        };
-    }
-
-    /// Özel önek, uzantı ve başlangıç içeriği ile yeni dosya oluşturur.
+    /// İmza adı/paketi verilen dosyayı doğrudan oluşturur (onay sorulmaz).
     pub fn new_custom_file(
         &mut self,
         prefix: &str,
@@ -1484,8 +1552,108 @@ impl FileManagerApp {
         };
     }
 
-    /// Yeni klasör oluşturur.
+    /// Yeni dosya oluşturur (onay isteği gösterir).
+    pub fn new_file(&mut self, vfs: &mut VirtualFileSystem) {
+        self.confirm_dialog = ConfirmDialog::NewFile;
+        self.confirm_item_idx = 0;
+        self.confirm_name_len = 0;
+        self.confirm_cursor = 0;
+        // Varsayılan isim önerisi
+        let mut counter = self.item_counter;
+        let name = loop {
+            let candidate = numbered_name("yeni_", counter, ".txt");
+            if !vfs
+                .list_dir(self.path())
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
+            counter += 1;
+        };
+        self.item_counter = counter + 1;
+        // Varsayılan ismi onay kutusuna kopyala
+        for (i, b) in name.bytes().enumerate() {
+            if i < self.confirm_name_buf.len() {
+                self.confirm_name_buf[i] = b;
+                self.confirm_name_len += 1;
+            }
+        }
+    }
+
+    /// Onaylı yeni dosya oluşturma işlemini tamamlar.
+    pub fn confirm_new_file(&mut self, vfs: &mut VirtualFileSystem) {
+        if self.confirm_dialog != ConfirmDialog::NewFile {
+            return;
+        }
+        let name = core::str::from_utf8(&self.confirm_name_buf[..self.confirm_name_len])
+            .unwrap_or("")
+            .trim();
+        if name.is_empty() || name.contains('/') {
+            self.status = crate::gui::ui_text("Geçersiz dosya adı.", "Invalid file name.");
+            self.confirm_dialog = ConfirmDialog::None;
+            return;
+        }
+        let mut full_path = String::from(self.path());
+        if !full_path.ends_with('/') {
+            full_path.push('/');
+        }
+        full_path.push_str(name);
+        let saved = vfs.write_file(&full_path, "Yeni oluşturulan dosya içeriği.\n".as_bytes());
+        self.refresh_from_vfs(vfs);
+        self.status = if saved {
+            crate::gui::ui_text("Yeni dosya oluşturuldu.", "New file created.")
+        } else {
+            crate::gui::ui_text(
+                "Dosya oluşturuldu; diske kaydedilemedi.",
+                "File created; disk save failed.",
+            )
+        };
+        self.confirm_dialog = ConfirmDialog::None;
+    }
+
+    /// Onaylı yeni klasör oluşturma işlemini tamamlar.
+    pub fn confirm_new_folder(&mut self, vfs: &mut VirtualFileSystem) {
+        if self.confirm_dialog != ConfirmDialog::NewFolder {
+            return;
+        }
+        let name = core::str::from_utf8(&self.confirm_name_buf[..self.confirm_name_len])
+            .unwrap_or("")
+            .trim();
+        if name.is_empty() || name.contains('/') {
+            self.status = crate::gui::ui_text("Geçersiz klasör adı.", "Invalid folder name.");
+            self.confirm_dialog = ConfirmDialog::None;
+            return;
+        }
+        let mut full_path = String::from(self.path());
+        if !full_path.ends_with('/') {
+            full_path.push('/');
+        }
+        full_path.push_str(name);
+        let saved = vfs.create_dir(&full_path);
+        self.refresh_from_vfs(vfs);
+        self.status = if saved {
+            crate::gui::ui_text("Yeni klasör oluşturuldu.", "New folder created.")
+        } else {
+            crate::gui::ui_text("Klasör oluşturulamadı.", "Folder creation failed.")
+        };
+        self.confirm_dialog = ConfirmDialog::None;
+    }
+
+    /// Onay iptal edildi.
+    pub fn cancel_confirm(&mut self) {
+        self.confirm_dialog = ConfirmDialog::None;
+        self.confirm_name_len = 0;
+        self.confirm_cursor = 0;
+    }
+
+    /// Yeni klasör oluşturur (onay isteği gösterir).
     pub fn new_folder(&mut self, vfs: &mut VirtualFileSystem) {
+        self.confirm_dialog = ConfirmDialog::NewFolder;
+        self.confirm_item_idx = 0;
+        self.confirm_name_len = 0;
+        self.confirm_cursor = 0;
+        // Varsayılan isim önerisi
         let mut counter = self.item_counter;
         let name = loop {
             let candidate = numbered_name("klas_", counter, "");
@@ -1499,34 +1667,42 @@ impl FileManagerApp {
             counter += 1;
         };
         self.item_counter = counter + 1;
-
-        let mut full_path = String::from(self.path());
-        if !full_path.ends_with('/') {
-            full_path.push('/');
+        // Varsayılan ismi onay kutusuna kopyala
+        for (i, b) in name.bytes().enumerate() {
+            if i < self.confirm_name_buf.len() {
+                self.confirm_name_buf[i] = b;
+                self.confirm_name_len += 1;
+            }
         }
-        full_path.push_str(&name);
-
-        let saved = vfs.create_dir(&full_path);
-        self.refresh_from_vfs(vfs);
-        self.status = if saved {
-            crate::gui::ui_text("Yeni klasör oluşturuldu.", "New folder created.")
-        } else {
-            crate::gui::ui_text("Klasör oluşturulamadı.", "Folder creation failed.")
-        };
     }
 
-    /// Seçili dosya veya klasörü siler. Öğe kalıcı olarak silinmez; bunun yerine
-    /// Geri Dönüşüm Kutusu'na (`/root/Trash`) taşınır. Çöp kutusundayken yapılan
-    /// silme işlemi ise kalıcıdır (boşaltma davranışı).
-    pub fn delete_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
-        // Toplu silme/taşıma uzun sürebilir; imleç kum saati olsun.
-        let _busy = crate::gui::screens::BusyScope::new();
+    /// Seçili dosya veya klasörü siler (onay isteği gösterir).
+    pub fn delete_selected(&mut self) -> bool {
         if !self.selected_items.iter().any(|&s| s) {
             if self.selected_idx >= self.file_count {
                 return false;
             }
             self.selected_items[self.selected_idx] = true;
         }
+        // Çöp kutusunda mı kontrol et
+        let is_trash = self.path() == crate::fs::vfs::TRASH_DIR;
+        self.confirm_dialog = if is_trash {
+            ConfirmDialog::DeletePermanent
+        } else {
+            ConfirmDialog::Delete
+        };
+        self.confirm_item_idx = self.selected_idx;
+        true
+    }
+
+    /// Onaylı silme işlemini tamamlar.
+    pub fn confirm_delete(&mut self, vfs: &mut VirtualFileSystem) -> bool {
+        if self.confirm_dialog != ConfirmDialog::Delete
+            && self.confirm_dialog != ConfirmDialog::DeletePermanent
+        {
+            return false;
+        }
+        let is_trash = self.path() == crate::fs::vfs::TRASH_DIR;
         let mut any = false;
         for i in (0..self.file_count).rev() {
             if !self.selected_items[i] || !self.search_matches(i) {
@@ -1542,7 +1718,7 @@ impl FileManagerApp {
                 full_path.push('/');
             }
             full_path.push_str(name);
-            let ok = if self.path() == crate::fs::vfs::TRASH_DIR {
+            let ok = if is_trash {
                 if item.is_dir {
                     vfs.delete_tree(&full_path)
                 } else {
@@ -1555,7 +1731,7 @@ impl FileManagerApp {
         }
         if any {
             self.refresh_from_vfs(vfs);
-            self.status = if self.path() == crate::fs::vfs::TRASH_DIR {
+            self.status = if is_trash {
                 crate::gui::ui_text(
                     "Seçilen öğeler kalıcı olarak silindi.",
                     "Selected items permanently deleted.",
@@ -1570,6 +1746,7 @@ impl FileManagerApp {
             self.status =
                 crate::gui::ui_text("Silinemedi (klasör dolu olabilir).", "Delete failed.");
         }
+        self.confirm_dialog = ConfirmDialog::None;
         any
     }
 
@@ -1583,73 +1760,73 @@ impl FileManagerApp {
             self.selected_items = [false; MAX_ITEMS];
             self.selected_items[self.selected_idx] = true;
         }
+        self.confirm_dialog = ConfirmDialog::Rename;
+        self.confirm_item_idx = self.selected_idx;
         let name = self.files[self.selected_idx].display_name().as_bytes();
-        // NAME_MAX'a sığmayan ad çok baytlı karakterin ortasından kesilmesin.
-        let take = crate::gui::textedit::truncate_to_boundary(name, self.rename_buf.len());
-        self.rename_len = take;
-        self.rename_buf[..self.rename_len].copy_from_slice(&name[..self.rename_len]);
-        self.rename_cursor = self.rename_len;
-        self.rename_active = true;
+        let take = crate::gui::textedit::truncate_to_boundary(name, self.confirm_name_buf.len());
+        self.confirm_name_len = take;
+        self.confirm_name_buf[..self.confirm_name_len]
+            .copy_from_slice(&name[..self.confirm_name_len]);
+        self.confirm_cursor = self.confirm_name_len;
     }
 
-    pub fn rename_char(&mut self, c: char) {
+    pub fn confirm_rename_char(&mut self, c: char) {
         crate::gui::textedit::insert_char(
-            &mut self.rename_buf,
-            &mut self.rename_len,
-            &mut self.rename_cursor,
+            &mut self.confirm_name_buf,
+            &mut self.confirm_name_len,
+            &mut self.confirm_cursor,
             c,
         );
     }
 
-    /// İmleç her zaman bir karakter sınırında kalır; aksi halde çok baytlı
-    /// (Türkçe) harfler ortadan bölünüp ad geçersiz UTF-8 olurdu.
-    pub fn rename_backspace(&mut self) {
+    pub fn confirm_rename_backspace(&mut self) {
         crate::gui::textedit::backspace(
-            &mut self.rename_buf,
-            &mut self.rename_len,
-            &mut self.rename_cursor,
+            &mut self.confirm_name_buf,
+            &mut self.confirm_name_len,
+            &mut self.confirm_cursor,
         );
     }
 
-    pub fn rename_delete(&mut self) {
+    pub fn confirm_rename_delete(&mut self) {
         crate::gui::textedit::delete_forward(
-            &mut self.rename_buf,
-            &mut self.rename_len,
-            &mut self.rename_cursor,
+            &mut self.confirm_name_buf,
+            &mut self.confirm_name_len,
+            &mut self.confirm_cursor,
         );
     }
 
-    pub fn rename_move_cursor(&mut self, right: bool) {
+    pub fn confirm_rename_move_cursor(&mut self, right: bool) {
         if right {
-            self.rename_cursor = crate::gui::textedit::next_char_boundary(
-                &self.rename_buf,
-                self.rename_cursor,
-                self.rename_len,
+            self.confirm_cursor = crate::gui::textedit::next_char_boundary(
+                &self.confirm_name_buf,
+                self.confirm_cursor,
+                self.confirm_name_len,
             );
         } else {
-            self.rename_cursor = crate::gui::textedit::prev_char_boundary(
-                &self.rename_buf[..self.rename_len],
-                self.rename_cursor,
+            self.confirm_cursor = crate::gui::textedit::prev_char_boundary(
+                &self.confirm_name_buf[..self.confirm_name_len],
+                self.confirm_cursor,
             );
         }
     }
 
-    pub fn commit_rename(&mut self, vfs: &mut VirtualFileSystem) {
-        if !self.rename_active {
+    pub fn confirm_rename(&mut self, vfs: &mut VirtualFileSystem) {
+        if self.confirm_dialog != ConfirmDialog::Rename {
             return;
         }
-        self.rename_active = false;
-        let name = core::str::from_utf8(&self.rename_buf[..self.rename_len])
+        let name = core::str::from_utf8(&self.confirm_name_buf[..self.confirm_name_len])
             .unwrap_or("")
             .trim();
         if name.is_empty() || name == "." || name == ".." || name.contains('/') {
             self.status = crate::gui::ui_text("Geçersiz ad.", "Invalid name.");
+            self.confirm_dialog = ConfirmDialog::None;
             return;
         }
-        if self.selected_idx >= self.file_count {
+        if self.confirm_item_idx >= self.file_count {
+            self.confirm_dialog = ConfirmDialog::None;
             return;
         }
-        let old_name = self.files[self.selected_idx].display_name();
+        let old_name = self.files[self.confirm_item_idx].display_name();
         let mut old_path = String::from(self.path());
         if !old_path.ends_with('/') {
             old_path.push('/');
@@ -1666,6 +1843,7 @@ impl FileManagerApp {
         } else {
             self.status = crate::gui::ui_text("Ad değiştirilemedi.", "Rename failed.");
         }
+        self.confirm_dialog = ConfirmDialog::None;
     }
 
     /// Geri Dönüşüm Kutusu'nda seçili öğeyi önceki konumuna değil, `/root/Documents`
@@ -2180,15 +2358,62 @@ impl FileManagerApp {
         let sy = scroll.y.min(content_h.saturating_sub(list_view_h));
 
         // Üst Araç Çubuğu (Toolbar)
-        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 26, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(
-            fb,
-            win_x + 12,
-            win_y + 38,
-            crate::gui::ui_text("Konum: ", "Location: "),
-            Color::TEXT_MUTED,
-        );
-        MinGuiCompositor::draw_string(fb, win_x + 65, win_y + 38, self.path(), Color::ACCENT_BLUE);
+        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 32, Color::TITLE_BAR);
+
+        // Breadcrumb-style yol gösterimi
+        let path = self.path();
+        let parts: alloc::vec::Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut x_pos = win_x + 12;
+        let y_pos = win_y + 36;
+
+        // Kök dizin butonu
+        let root_label = crate::gui::ui_text("🏠 Kök", "🏠 Root");
+        let root_w = MinGuiCompositor::text_width(root_label, 1) + 16;
+        fb.draw_rounded_rect(x_pos, y_pos, root_w, 20, 4, Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(fb, x_pos + 8, y_pos + 4, root_label, Color::WHITE);
+        x_pos += root_w + 8;
+
+        // Yol parçaları
+        let mut current_path = String::from("/");
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                // Ayırıcı
+                let sep = " / ";
+                let sep_w = MinGuiCompositor::text_width(sep, 1);
+                MinGuiCompositor::draw_string(fb, x_pos, y_pos + 4, sep, Color::TEXT_MUTED);
+                x_pos += sep_w;
+            }
+            current_path.push_str(part);
+            let part_label = *part;
+            let part_w = MinGuiCompositor::text_width(part_label, 1) + 16;
+            let is_last = i == parts.len().saturating_sub(1);
+            let bg_color = if is_last {
+                Color::ACCENT_BLUE
+            } else {
+                Color::TASKBAR_BG
+            };
+            let text_color = if is_last {
+                Color::WHITE
+            } else {
+                Color::TEXT_MAIN
+            };
+            fb.draw_rounded_rect(x_pos, y_pos, part_w, 20, 4, bg_color);
+            MinGuiCompositor::draw_string(fb, x_pos + 8, y_pos + 4, part_label, text_color);
+            x_pos += part_w + 8;
+            if !is_last {
+                current_path.push('/');
+            }
+        }
+
+        // Üst klasör butonu (kullanılabilirse)
+        if path != "/" && path != "/desktop" {
+            let up_label = crate::gui::ui_text("⬆ Üst Klasör", "⬆ Parent");
+            let up_w = MinGuiCompositor::text_width(up_label, 1) + 16;
+            let up_x = win_x + win_w - up_w - 120; // Sağ tarafta, arama kutusunun solunda
+            fb.draw_rounded_rect(up_x, y_pos, up_w, 20, 4, Color::ACCENT_GREEN);
+            MinGuiCompositor::draw_string(fb, up_x + 8, y_pos + 4, up_label, Color::WHITE);
+        }
+
         let search_r = Self::search_rect(win_x, win_y, win_w);
         fb.draw_rounded_rect(
             search_r.0,
@@ -2754,6 +2979,35 @@ impl FileManagerApp {
                 + MinGuiCompositor::text_width(prefix, 1);
             fb.draw_rect(cx, status_y + 4, 1, 12, Color::ACCENT_BLUE);
         }
+
+        // Onay iletişim kutusu çiz
+        if self.confirm_dialog != ConfirmDialog::None {
+            self.render_confirm_dialog(fb, win_x, win_y, win_w, win_h);
+        }
+
+        // Klavye odağı halkası (Tab navigasyonu için)
+        let focused_rect = match self.focused_control {
+            0 => Some(Self::refresh_button_rect(win_x, win_y, win_w)),
+            1 => Some(Self::new_file_button_rect(win_x, win_y, win_w)),
+            2 => Some(Self::new_folder_button_rect(win_x, win_y, win_w)),
+            3 => Some(Self::delete_button_rect(win_x, win_y, win_w)),
+            4 => Some(Self::open_button_rect(win_x, win_y, win_w)),
+            5 => {
+                // Dosya listesi/izgara - ilk görünen öğe veya seçim
+                if self.files.is_empty() {
+                    None
+                } else if self.view_mode == ViewMode::Grid {
+                    Some(self.item_rect(win_x, win_y, win_w, 0, 0))
+                } else {
+                    Some(Self::row_rect(win_x, win_y, win_w, 0))
+                }
+            }
+            6 => Some(Self::search_rect(win_x, win_y, win_w)),
+            _ => None,
+        };
+        if let Some((x, y, w, h)) = focused_rect {
+            MinGuiCompositor::draw_focus_ring(fb, x, y, w, h);
+        }
     }
 
     /// Hızlı Önizleme panelini çizer (seçili öğe bilgisi + içerik/metin/küçük resim).
@@ -2871,6 +3125,219 @@ impl FileManagerApp {
                 clip,
             );
         }
+    }
+
+    /// Onay iletişim kutusunu çizer.
+    fn render_confirm_dialog(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
+        let dialog_w = 400.min(win_w.saturating_sub(40));
+        let dialog_h = 180;
+        let dialog_x = win_x + (win_w.saturating_sub(dialog_w)) / 2;
+        let dialog_y = win_y + (win_h.saturating_sub(dialog_h)) / 2;
+
+        // Arka plan gölgelendirme
+        fb.draw_rect(win_x, win_y, win_w, win_h, Color::SHADOW);
+
+        // İletişim kutusu
+        fb.draw_rounded_rect(dialog_x, dialog_y, dialog_w, dialog_h, 8, Color::WINDOW_BG);
+        fb.draw_rounded_rect_outline(
+            dialog_x,
+            dialog_y,
+            dialog_w,
+            dialog_h,
+            8,
+            Color::ACCENT_BLUE,
+        );
+
+        // Başlık çubuğu
+        fb.draw_rounded_rect(dialog_x, dialog_y, dialog_w, 36, 8, Color::TITLE_BAR);
+        let title = match self.confirm_dialog {
+            ConfirmDialog::Delete => crate::gui::ui_text("Silme Onayı", "Confirm Delete"),
+            ConfirmDialog::DeletePermanent => {
+                crate::gui::ui_text("Kalıcı Silme Onayı", "Confirm Permanent Delete")
+            }
+            ConfirmDialog::NewFile => crate::gui::ui_text("Yeni Dosya Oluştur", "Create New File"),
+            ConfirmDialog::NewFolder => {
+                crate::gui::ui_text("Yeni Klasör Oluştur", "Create New Folder")
+            }
+            ConfirmDialog::Rename => crate::gui::ui_text("Yeniden Adlandır", "Rename"),
+            ConfirmDialog::None => "",
+        };
+        let title_w = MinGuiCompositor::text_width(title, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            dialog_x + (dialog_w.saturating_sub(title_w)) / 2,
+            dialog_y + 10,
+            title,
+            Color::TEXT_MAIN,
+        );
+
+        // İçerik
+        let content_y = dialog_y + 50;
+        match self.confirm_dialog {
+            ConfirmDialog::Delete | ConfirmDialog::DeletePermanent => {
+                let msg = if self.confirm_dialog == ConfirmDialog::Delete {
+                    crate::gui::ui_text(
+                        "Seçili öğeler Geri Dönüşüm Kutusu'na taşınacak. Devam etmek istiyor musunuz?",
+                        "Selected items will be moved to Recycle Bin. Continue?",
+                    )
+                } else {
+                    crate::gui::ui_text(
+                        "Seçili öğeler KALICI OLARAK silinecek. Bu işlem geri alınamaz! Devam?",
+                        "Selected items will be PERMANENTLY deleted. This cannot be undone! Continue?",
+                    )
+                };
+                let msg_w = MinGuiCompositor::text_width(msg, 1);
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    dialog_x + (dialog_w.saturating_sub(msg_w)) / 2,
+                    content_y,
+                    msg,
+                    Color::TEXT_MAIN,
+                    (dialog_x + 20, content_y, dialog_w - 40, 40),
+                );
+
+                // Öğe sayısı
+                let mut count = 0;
+                for i in 0..self.file_count {
+                    if self.selected_items[i] && self.search_matches(i) {
+                        count += 1;
+                    }
+                }
+                let count_tr = alloc::format!("{} öğe seçili", count);
+                let count_en = alloc::format!("{} items selected", count);
+                let count_msg = crate::gui::ui_text(&count_tr, &count_en);
+                let count_w = MinGuiCompositor::text_width(count_msg, 1);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    dialog_x + (dialog_w.saturating_sub(count_w)) / 2,
+                    content_y + 30,
+                    count_msg,
+                    Color::ACCENT_YELLOW,
+                );
+            }
+            ConfirmDialog::NewFile | ConfirmDialog::NewFolder => {
+                let label = if self.confirm_dialog == ConfirmDialog::NewFile {
+                    crate::gui::ui_text("Dosya adı:", "File name:")
+                } else {
+                    crate::gui::ui_text("Klasör adı:", "Folder name:")
+                };
+                MinGuiCompositor::draw_string(
+                    fb,
+                    dialog_x + 20,
+                    content_y,
+                    label,
+                    Color::TEXT_MUTED,
+                );
+
+                // İsim giriş kutusu
+                let input_x = dialog_x + 20;
+                let input_y = content_y + 22;
+                let input_w = dialog_w - 40;
+                fb.draw_rect(input_x, input_y, input_w, 28, Color::DARK_BG);
+                fb.draw_rect_outline(input_x, input_y, input_w, 28, Color::BORDER);
+
+                let name_str =
+                    core::str::from_utf8(&self.confirm_name_buf[..self.confirm_name_len])
+                        .unwrap_or("");
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    input_x + 8,
+                    input_y + 6,
+                    name_str,
+                    Color::TEXT_MAIN,
+                    (input_x + 6, input_y + 2, input_w - 12, 24),
+                );
+
+                // İmleç
+                let prefix = core::str::from_utf8(&self.confirm_name_buf[..self.confirm_cursor])
+                    .unwrap_or("");
+                let cx = input_x + 8 + MinGuiCompositor::text_width(prefix, 1);
+                fb.draw_rect(cx, input_y + 6, 1, 16, Color::ACCENT_BLUE);
+            }
+            ConfirmDialog::Rename => {
+                let label = crate::gui::ui_text("Yeni ad:", "New name:");
+                MinGuiCompositor::draw_string(
+                    fb,
+                    dialog_x + 20,
+                    content_y,
+                    label,
+                    Color::TEXT_MUTED,
+                );
+
+                // İsim giriş kutusu
+                let input_x = dialog_x + 20;
+                let input_y = content_y + 22;
+                let input_w = dialog_w - 40;
+                fb.draw_rect(input_x, input_y, input_w, 28, Color::DARK_BG);
+                fb.draw_rect_outline(input_x, input_y, input_w, 28, Color::BORDER);
+
+                let name_str =
+                    core::str::from_utf8(&self.confirm_name_buf[..self.confirm_name_len])
+                        .unwrap_or("");
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    input_x + 8,
+                    input_y + 6,
+                    name_str,
+                    Color::TEXT_MAIN,
+                    (input_x + 6, input_y + 2, input_w - 12, 24),
+                );
+
+                // İmleç
+                let prefix = core::str::from_utf8(&self.confirm_name_buf[..self.confirm_cursor])
+                    .unwrap_or("");
+                let cx = input_x + 8 + MinGuiCompositor::text_width(prefix, 1);
+                fb.draw_rect(cx, input_y + 6, 1, 16, Color::ACCENT_BLUE);
+            }
+            ConfirmDialog::None => {}
+        }
+
+        // Butonlar
+        let btn_y = dialog_y + dialog_h - 44;
+        let btn_w = 80;
+        let btn_h = 28;
+        let gap = 20;
+        let total_btn_w = 2 * btn_w + gap;
+        let btn_start_x = dialog_x + (dialog_w.saturating_sub(total_btn_w)) / 2;
+
+        // İptal butonu
+        let cancel_x = btn_start_x;
+        fb.draw_rounded_rect(cancel_x, btn_y, btn_w, btn_h, 4, Color::TASKBAR_BG);
+        fb.draw_rounded_rect_outline(cancel_x, btn_y, btn_w, btn_h, 4, Color::BORDER);
+        let cancel_label = crate::gui::ui_text("İptal", "Cancel");
+        let cancel_w = MinGuiCompositor::text_width(cancel_label, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            cancel_x + (btn_w.saturating_sub(cancel_w)) / 2,
+            btn_y + 7,
+            cancel_label,
+            Color::TEXT_MAIN,
+        );
+
+        // Onay butonu
+        let ok_x = btn_start_x + btn_w + gap;
+        let ok_color = match self.confirm_dialog {
+            ConfirmDialog::DeletePermanent => Color::ACCENT_RED,
+            ConfirmDialog::Delete => Color::ACCENT_YELLOW,
+            _ => Color::ACCENT_GREEN,
+        };
+        fb.draw_rounded_rect(ok_x, btn_y, btn_w, btn_h, 4, ok_color);
+        let ok_label = crate::gui::ui_text("Onayla", "Confirm");
+        let ok_w = MinGuiCompositor::text_width(ok_label, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            ok_x + (btn_w.saturating_sub(ok_w)) / 2,
+            btn_y + 7,
+            ok_label,
+            MinGuiCompositor::text_on(ok_color),
+        );
     }
 }
 

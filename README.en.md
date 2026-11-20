@@ -6,18 +6,20 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-180%2C656%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-456%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
-[![Version](https://img.shields.io/badge/Version-v2.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-180%2C383%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-470%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
 
-## Current · v2.5.0
+## Current · v2.6.0
 
+- Driver visibility and debugging: a shared status model tracks every hardware driver as `Ready` / `Unavailable` / `Error`, logging error codes and init timing to serial. The Control Panel gained a **Drivers** tab (status table + network/graphics/audio/storage details + **Rescan**); apps whose driver failed are safely blocked.
+- File Manager and the Installation Wizard now use confirmation dialogs: creating a new file/folder, renaming and deleting (move to Recycle Bin or permanent delete) all require a labeled confirm window — Enter confirms, Esc cancels. The wizard's `Format` and `One-Click Install` steps ask for the same confirmation.
 - Frozen-app monitoring now runs independently of the main loop, and the FPS 3D app reports real frame-rate measurements.
 - The FPS game has start and result menus; basic form controls support Tab navigation, Enter confirmation and Esc cancellation, including the Welcome screen.
 - Incomplete frames are no longer displayed when the render budget expires.
-- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 456 tests.
+- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 470 tests.
 - The web browser is now a modern browser: HTTP/1.1 + TLS 1.3 gained HTTP/2 and HTTP/3 (QUIC); HTML5 gained inline SVG rasterization plus `<details>`/`<dialog>`/`<template>`/`<picture>` support; CSS3 gained context-aware selectors (`:nth-child`, `[attr=]`, `:is()`/`:not()`, sibling/ancestor combinators); Canvas 2D gained gradients, transforms, Bézier/arc paths, `save`/`restore` and `getImageData`/`putImageData`; minJs gained `XMLHttpRequest`, `history.pushState` and `requestAnimationFrame`.
 - Browser CSS3 `display` (flex/grid/block/inline/inline-block) and `overflow` rules are now applied correctly; a multi-CPU scheduler bug where a CPU skipped its own ready task and idled has been fixed.
 - Deterministic host tests were added for `TimeBudget` and `OperationGuard`.

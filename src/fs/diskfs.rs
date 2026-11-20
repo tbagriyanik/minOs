@@ -1733,7 +1733,22 @@ pub fn init() {
         if READY {
             return;
         }
+        let t_ata = crate::boot::time::monotonic_ms();
+        crate::drivers::status::probe_start(crate::drivers::status::DriverId::Ata);
         ata::init();
+        let dt_ata_us = crate::boot::time::monotonic_ms()
+            .saturating_sub(t_ata)
+            .saturating_mul(1000);
+        crate::kernel::diag::record_driver_init("ATA/ATAPI", dt_ata_us, ata::drive_count() > 0);
+        if ata::drive_count() > 0 {
+            crate::drivers::status::probe_ready(crate::drivers::status::DriverId::Ata, t_ata);
+        } else {
+            crate::drivers::status::probe_unavailable(
+                crate::drivers::status::DriverId::Ata,
+                t_ata,
+                "ATA/ATAPI aygiti bulunamadi",
+            );
+        }
         READY = true;
     }
     // 1) Master → Sabit Disk / USB bellek (FAT32 veya Ext2)

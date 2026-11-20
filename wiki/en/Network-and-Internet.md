@@ -26,7 +26,7 @@ PCI network identification includes Intel PRO/1000, Realtek RTL8139 and AMD PCne
 
 | Feature | Description |
 | :--- | :--- |
-| **Protocol** | HTTP/1.1, `Connection: keep-alive`, `Host` and `User-Agent: Mozilla/5.0 (…) Firefox/128.0 minOs/2.5` headers |
+| **Protocol** | HTTP/1.1, `Connection: keep-alive`, `Host` and `User-Agent: Mozilla/5.0 (…) Firefox/128.0 minOs/2.6` headers |
 | **Methods** | GET, POST (`application/x-www-form-urlencoded`) |
 | **Redirects** | HTTP 3xx (301, 302, 303, 307, 308) and `Location:` header resolver (max 3 hops) |
 | **Cookies** | `Set-Cookie:` headers automatically saved and `Cookie:` header sent based on domain/path matching |

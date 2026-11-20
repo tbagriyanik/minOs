@@ -228,6 +228,14 @@ impl MinGuiCompositor {
                     Color::TITLE_BAR_INACTIVE
                 };
                 let hovered = in_rect(mx, my, rect);
+                // Sekme ipucu: yerleşik uygulama başlığını gösterir;
+                // kullanıcı uygulamalarında (statik metin yok) atlanır.
+                if hovered {
+                    let tip = Self::window_title(win.app_id as usize, ui_english());
+                    if !tip.is_empty() {
+                        self.tooltip_offer(rect, tip);
+                    }
+                }
                 let bg = if hovered { Self::shade(base, 20) } else { base };
                 fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);
                 fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);

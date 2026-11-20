@@ -26,7 +26,7 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 
 | Özellik | Açıklama |
 | :--- | :--- |
-| **Protokol** | HTTP/1.1, `Connection: keep-alive`, `Host` ve `User-Agent: Mozilla/5.0 (…) Firefox/128.0 minOs/2.5` başlıkları |
+| **Protokol** | HTTP/1.1, `Connection: keep-alive`, `Host` ve `User-Agent: Mozilla/5.0 (…) Firefox/128.0 minOs/2.6` başlıkları |
 | **Yöntemler** | GET, POST (`application/x-www-form-urlencoded`) |
 | **Yönlendirme** | HTTP 3xx (301, 302, 303, 307, 308) ve `Location:` başlığı çözümleyicisi (azami 3 atlama) |
 | **Çerezler** | `Set-Cookie:` başlıklarının otomatik kaydedilmesi ve domain/path eşleşmesine göre `Cookie:` başlığının gönderilmesi |

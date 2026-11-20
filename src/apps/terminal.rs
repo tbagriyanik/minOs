@@ -1290,6 +1290,84 @@ impl TerminalApp {
         }
     }
 
+    /// Belirli bir komut için detaylı yardım gösterir.
+    fn show_command_help(&mut self, cmd: &str) {
+        let no_help_tr = alloc::format!(
+            "'{}' komutu için özel yardım bulunamadı.\nGenel yardım için 'help' yazın.",
+            cmd
+        );
+        let no_help_en = alloc::format!(
+            "No specific help for '{}'.\nType 'help' for general help.",
+            cmd
+        );
+        let help_text = match cmd.to_lowercase().as_str() {
+            "ls" => crate::gui::ui_text(
+                "ls [dizin]\n  Dizin içeriğini listeler.\n  Örnek: ls          (geçerli dizin)\n       ls /root      (kök dizin)\n       ls -l         (detaylı - Unix stili)",
+                "ls [dir]\n  Lists directory contents.\n  Example: ls           (current dir)\n       ls /root       (root dir)\n       ls -l          (detailed - Unix style)",
+            ),
+            "cd" => crate::gui::ui_text(
+                "cd <dizin>\n  Çalışma dizinini değiştirir.\n  Örnek: cd Documents    (alt dizin)\n       cd ..            (üst dizin)\n       cd /             (kök dizin)\n       cd ~             (ev dizini /root/Documents)",
+                "cd <dir>\n  Changes working directory.\n  Example: cd Documents    (subdir)\n       cd ..            (parent dir)\n       cd /             (root dir)\n       cd ~             (home dir /root/Documents)",
+            ),
+            "pwd" => crate::gui::ui_text(
+                "pwd\n  Geçerli çalışma dizinini tam yoluyla gösterir.",
+                "pwd\n  Prints the full path of the current working directory.",
+            ),
+            "mkdir" => crate::gui::ui_text(
+                "mkdir <klasor_adı>\n  Yeni bir dizin oluşturur.\n  Örnek: mkdir yeni_klasor\n       mkdir /root/test (mutlak yol)",
+                "mkdir <dir_name>\n  Creates a new directory.\n  Example: mkdir new_folder\n       mkdir /root/test (absolute path)",
+            ),
+            "touch" => crate::gui::ui_text(
+                "touch <dosya_adı>\n  Boş bir dosya oluşturur (veya zaman damgasını günceller).\n  Örnek: touch dosya.txt\n       touch /root/yeni.log",
+                "touch <file_name>\n  Creates an empty file (or updates timestamp).\n  Example: touch file.txt\n       touch /root/new.log",
+            ),
+            "write" => crate::gui::ui_text(
+                "write <dosya> <metin>\n  Belirtilen dosyaya metin yazar (üzerine yazar).\n  Örnek: write merhaba.txt \"Merhaba Dünya\"\n       write log.txt \"Hata: 404\"",
+                "write <file> <text>\n  Writes text to a file (overwrites).\n  Example: write hello.txt \"Hello World\"\n       write log.txt \"Error: 404\"",
+            ),
+            "cat" => crate::gui::ui_text(
+                "cat <dosya>\n  Dosya içeriğini terminale yazdırır.\n  Örnek: cat dosya.txt\n       cat /etc/config.cfg",
+                "cat <file>\n  Prints file contents to terminal.\n  Example: cat file.txt\n       cat /etc/config.cfg",
+            ),
+            "rm" => crate::gui::ui_text(
+                "rm <hedef>\n  Dosya veya dizini siler.\n  Örnek: rm dosya.txt\n       rm -r klasor     (dizini ve içeriğini sil)\n  Not: Güvenlik için geri dönüşüm kutusuna taşınır.",
+                "rm <target>\n  Deletes a file or directory.\n  Example: rm file.txt\n       rm -r folder     (recursive delete)\n  Note: Moved to recycle bin for safety.",
+            ),
+            "cp" => crate::gui::ui_text(
+                "cp <kaynak> <hedef>\n  Dosyayı kopyalar.\n  Örnek: cp kaynak.txt hedef.txt\n       cp dosya.txt /root/backup/",
+                "cp <source> <dest>\n  Copies a file.\n  Example: cp src.txt dst.txt\n       cp file.txt /root/backup/",
+            ),
+            "mv" => crate::gui::ui_text(
+                "mv <kaynak> <hedef>\n  Dosyayı taşır veya yeniden adlandırır.\n  Örnek: mv eski.txt yeni.txt     (yeniden adla)\n       mv dosya.txt /root/klasor/ (taşı)",
+                "mv <source> <dest>\n  Moves or renames a file.\n  Example: mv old.txt new.txt     (rename)\n       mv file.txt /root/folder/  (move)",
+            ),
+            "ping" => crate::gui::ui_text(
+                "ping <IPv4_adresi>\n  ICMP Echo Request gönderir.\n  Örnek: ping 8.8.8.8\n       ping 192.168.1.1",
+                "ping <IPv4_addr>\n  Sends ICMP Echo Request.\n  Example: ping 8.8.8.8\n       ping 192.168.1.1",
+            ),
+            "curl" => crate::gui::ui_text(
+                "curl <URL>\n  HTTP GET isteği yapar ve yanıtı gösterir.\n  Örnek: curl http://example.com\n       curl http://api.site.com/data",
+                "curl <URL>\n  Performs HTTP GET and shows response.\n  Example: curl http://example.com\n       curl http://api.site.com/data",
+            ),
+            "wget" => crate::gui::ui_text(
+                "wget <URL>\n  URL'den dosya indirir ve kaydeder.\n  Örnek: wget http://site.com/dosya.zip\n       wget https://raw.githubusercontent.com/user/repo/main/file.txt",
+                "wget <URL>\n  Downloads file from URL.\n  Example: wget http://site.com/file.zip\n       wget https://raw.githubusercontent.com/user/repo/main/file.txt",
+            ),
+            "format" => crate::gui::ui_text(
+                "format <fs_türü> <disk_id>\n  Bağlı ATA diski biçimlendirir.\n  fs_türü: fat32, ext4, exfat, ext2\n  disk_id: 0-3 (ATA kanal numarası)\n  Örnek: format fat32 0\n       format ext4 1",
+                "format <fs_type> <disk_id>\n  Formats attached ATA disk.\n  fs_type: fat32, ext4, exfat, ext2\n  disk_id: 0-3 (ATA channel)\n  Example: format fat32 0\n       format ext4 1",
+            ),
+            "open" => crate::gui::ui_text(
+                "open <uygulama_adı>\n  Masaüstü uygulamasını açar.\n  Uygulamalar: files, settings, notepad, browser, image, music, video, taskmgr, calc, paint, cmd, pkgmgr, panel\n  Örnek: open files\n       open browser",
+                "open <app_name>\n  Opens a desktop application.\n  Apps: files, settings, notepad, browser, image, music, video, taskmgr, calc, paint, cmd, pkgmgr, panel\n  Example: open files\n       open browser",
+            ),
+            _ => crate::gui::ui_text(no_help_tr.as_str(), no_help_en.as_str()),
+        };
+        for line in help_text.lines() {
+            self.push_line(line, Color::ACCENT_YELLOW);
+        }
+    }
+
     /// Tek bir komutu (boru hattı olmadan) yürütür.
     fn execute_single(
         &mut self,
@@ -1354,36 +1432,186 @@ impl TerminalApp {
 
         match cmd {
             "help" => {
-                self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem meminfo ps exec", Color::TEXT_MAIN);
-                self.push_line(
-                    "uptime fetch neofetch date uname whoami theme ipconfig ping ping6 dns nslookup curl wget cam wifi",
-                    Color::ACCENT_GREEN,
-                );
-                self.push_line(
-                    "hexdump <file> | nc <host> <port> [text] | fortune | benchmark",
-                    Color::ACCENT_BLUE,
-                );
-                self.push_line(
-                    "minPak list|search|install|remove | exec <file> [args] | open <app>",
-                    Color::ACCENT_BLUE,
-                );
-                self.push_line(
-                    "boru: cmd | grep <desen> | sort | wc   yonlendirme: cmd > dosya  cmd >> dosya",
-                    Color::ACCENT_YELLOW,
-                );
-                self.push_line(
-                    "filtreler: cat grep wc sort head tail tee",
-                    Color::ACCENT_YELLOW,
-                );
-                self.push_line(
-                    "karma (CMD/Unix): dir=ls  cls=clear  type=cat  md=mkdir  rd/del=rm",
-                    Color::ACCENT_YELLOW,
-                );
-                self.push_line(
-                    "  copy=cp  move=mv  ren <eski> <yeni>  edit <dosya>  where <komut>  ver  set",
-                    Color::ACCENT_YELLOW,
-                );
-                self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd games", Color::ACCENT_PINK);
+                // help <komut> için detaylı yardım
+                if !arg.is_empty() {
+                    self.show_command_help(arg);
+                } else {
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "=== minOs Terminal Yardım ===",
+                            "=== minOs Terminal Help ===",
+                        ),
+                        Color::ACCENT_PINK,
+                    );
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "📁 DOSYA VE DİZİN İŞLEMLERİ:",
+                            "📁 FILE & DIRECTORY OPERATIONS:",
+                        ),
+                        Color::ACCENT_BLUE,
+                    );
+                    self.push_line(
+                        "  ls [dizin]        - Dizin içeriğini listele (örn: ls /root/Documents)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  cd <dizin>        - Dizin değiştir (örn: cd ..  cd /  cd ~)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  pwd               - Geçerli dizini göster",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  mkdir <klasor>    - Yeni klasör oluştur (örn: mkdir yeni_klasor)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  touch <dosya>     - Boş dosya oluştur (örn: touch deneme.txt)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("  write <dosya> <metin> - Dosyaya yaz (örn: write merhaba.txt \"Merhaba Dünya\")", Color::TEXT_MAIN);
+                    self.push_line(
+                        "  cat <dosya>       - Dosya içeriğini göster (örn: cat dosya.txt)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  rm <hedef>        - Dosya/klasör sil (örn: rm dosya.txt  rm -r klasor)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  cp <kaynak> <hedef> - Dosya kopyala (örn: cp a.txt b.txt)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("  mv <kaynak> <hedef> - Dosya taşı/yeniden adla (örn: mv eski.txt yeni.txt)", Color::TEXT_MAIN);
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text("💾 DİSK VE SİSTEM:", "💾 DISK & SYSTEM:"),
+                        Color::ACCENT_GREEN,
+                    );
+                    self.push_line(
+                        "  disks / df        - Bağlı diskleri göster",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  format <fs> <id>  - Disk biçimlendir (örn: format fat32 0)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("  mem / meminfo     - Bellek bilgisi", Color::TEXT_MAIN);
+                    self.push_line(
+                        "  ps                - Çalışan süreçleri listele",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("  date              - Tarih ve saat", Color::TEXT_MAIN);
+                    self.push_line("  uptime            - Çalışma süresi", Color::TEXT_MAIN);
+                    self.push_line("  uname             - Sistem bilgisi", Color::TEXT_MAIN);
+                    self.push_line("  whoami            - Kullanıcı bilgisi", Color::TEXT_MAIN);
+                    self.push_line("  theme             - Temayı değiştir", Color::TEXT_MAIN);
+                    self.push_line("  clear / cls       - Ekranı temizle", Color::TEXT_MAIN);
+                    self.push_line(
+                        "  fetch / neofetch  - Sistem özeti (ASCII art)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text("🌐 AĞ ARAÇLARI:", "🌐 NETWORK TOOLS:"),
+                        Color::ACCENT_YELLOW,
+                    );
+                    self.push_line("  ipconfig          - Ağ arayüzü bilgisi", Color::TEXT_MAIN);
+                    self.push_line(
+                        "  ping <IP>         - ICMP ping (örn: ping 8.8.8.8)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("  ping6 <IPv6>      - IPv6 ping", Color::TEXT_MAIN);
+                    self.push_line(
+                        "  dns <alan>        - DNS sorgusu (örn: dns google.com)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  curl <URL>        - HTTP GET (örn: curl http://example.com)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  wget <URL>        - Dosya indir (örn: wget http://site.com/dosya.txt)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text("📦 PAKET VE UYGULAMA:", "📦 PACKAGE & APPS:"),
+                        Color::ACCENT_PINK,
+                    );
+                    self.push_line(
+                        "  minPak list|search|install|remove - Paket yönetimi",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  open <uygulama>   - Uygulama aç (örn: open files  open browser)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  exec <dosya>      - ELF/PKG çalıştır (örn: exec /bin/app.elf)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("  Uygulama adları: files settings notepad browser image music video taskmgr calc paint cmd pkgmgr", Color::TEXT_MAIN);
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text("🔧 KABUK ÖZELLİKLERİ:", "🔧 SHELL FEATURES:"),
+                        Color::ACCENT_BLUE,
+                    );
+                    self.push_line(
+                        "  Boru hattı:  komut1 | komut2 | komut3  (örn: ls | grep txt | wc)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  Yönlendirme: komut > dosya  (yaz),  komut >> dosya (ekle)",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  Filtreler:   cat grep wc sort head tail tee",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  CMD/Unix alias: dir=ls  cls=clear  type=cat  md=mkdir  rd/del=rm",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line(
+                        "  copy=cp  move=mv  ren <eski> <yeni>  edit <dosya>  where <komut>",
+                        Color::TEXT_MAIN,
+                    );
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text("⌨️  KLAVYE KISAYOLLARI:", "⌨️  KEYBOARD SHORTCUTS:"),
+                        Color::ACCENT_GREEN,
+                    );
+                    self.push_line("  Tab           - Komut/dosya tamamlama", Color::TEXT_MAIN);
+                    self.push_line("  Yukarı/Aşağı  - Komut geçmişi gezinme", Color::TEXT_MAIN);
+                    self.push_line("  Ctrl+C        - Mevcut komutu iptal", Color::TEXT_MAIN);
+                    self.push_line("  Ctrl+L        - Ekranı temizle", Color::TEXT_MAIN);
+                    self.push_line("  Ctrl+U        - Satırı temizle", Color::TEXT_MUTED);
+                    self.push_line("", Color::TEXT_MUTED);
+
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "📖 Detaylı kılavuz: docs/usage.md",
+                            "📖 Full guide: docs/usage.md",
+                        ),
+                        Color::ACCENT_BLUE,
+                    );
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "💡 Komut-specific yardım için: help <komut> (örn: help ls)",
+                            "💡 Command-specific help: help <cmd> (e.g. help ls)",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
+                }
             }
             "pwd" => {
                 let mut buf = TextBuf::new();

@@ -340,11 +340,11 @@ pub fn read_sector(lba: u64, buffer: &mut [u8]) -> bool {
             return false;
         }
 
-        // TODO: AHCI üzerinden LBA okuma
-        // Command Header, FIS ve PRDT hazırla
-        // Command Issue register'a yaz
+        // Command Header/FIS/PRDT DMA belleği ve komut kuyruğu
+        // henüz uygulanmadı; sahte başarı yerine false döner.
+        let _ = (lba, buffer);
 
-        true
+        false
     }
 }
 
@@ -355,8 +355,9 @@ pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
             return false;
         }
 
-        // TODO: AHCI üzerinden LBA yazma
+        // AHCI yazma yolu da LBA okuma ile aynı DMA altyapısını gerektirir.
+        let _ = (lba, buffer);
 
-        true
+        false
     }
 }

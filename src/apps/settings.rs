@@ -266,6 +266,83 @@ fn render_device_inventory(
         draw(&line, Color::ACCENT_BLUE);
     }
 
+    // Depolama: algılanan disk denetleyicileri ve sürücüler tek satırda.
+    // ATA/ATAPI sürücüsü fiilen PIO ile çalışır; AHCI/NVMe/SD algılama
+    // durumları da görünür — donanım varsa "algılandı" olarak listelenir.
+    {
+        let mut line = DeviceLine::new();
+        line.push(if english { "Storage: " } else { "Depolama: " });
+        let mut any_ata = false;
+        for drive in 0..4u8 {
+            if let Some(dev) = crate::drivers::ata::device(drive) {
+                if any_ata {
+                    line.push(" | ");
+                }
+                any_ata = true;
+                let model = dev.model_str();
+                let model = model.trim();
+                if model.is_empty() {
+                    line.push("ATA disk");
+                } else {
+                    line.push(model);
+                }
+                line.push(" ");
+                line.number(dev.size_mb());
+                line.push(" MB");
+            }
+        }
+        if !any_ata {
+            line.push(if english {
+                "no ATA device"
+            } else {
+                "ATA aygıtı yok"
+            });
+        }
+        line.push(" | AHCI: ");
+        line.push(if crate::drivers::ahci::is_detected() {
+            if english {
+                "detected"
+            } else {
+                "algılandı"
+            }
+        } else {
+            if english {
+                "none"
+            } else {
+                "yok"
+            }
+        });
+        line.push(" | NVMe: ");
+        line.push(if crate::drivers::nvme::is_detected() {
+            if english {
+                "detected"
+            } else {
+                "algılandı"
+            }
+        } else {
+            if english {
+                "none"
+            } else {
+                "yok"
+            }
+        });
+        line.push(" | SD: ");
+        line.push(if crate::drivers::sdmmc::is_detected() {
+            if english {
+                "detected"
+            } else {
+                "algılandı"
+            }
+        } else {
+            if english {
+                "none"
+            } else {
+                "yok"
+            }
+        });
+        draw(&line, Color::ACCENT_YELLOW);
+    }
+
     if let Some(controller) = crate::drivers::usb::controller_info() {
         let mut line = DeviceLine::new();
         line.push(if english {
@@ -1792,7 +1869,7 @@ impl SystemSettings {
                 fb.draw_rect(r.0, r.1, 3, r.3, Color::ACCENT_BLUE);
             }
             if self.focused_control == i {
-                fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_focus_ring(fb, r.0, r.1, r.2, r.3);
             }
             let col = if is_cur {
                 MinGuiCompositor::text_on(bg)
@@ -1819,9 +1896,9 @@ impl SystemSettings {
             0 => {
                 // --- minOs Sistem ve Sürüm Bilgisi (Satır 0) ---
                 let ver_str = if self.language.is_english() {
-                    "minOs Sarman Edition v2.5 (x86_64)"
+                    "minOs Sarman Edition v2.6 (x86_64)"
                 } else {
-                    "minOs Sarman Sürümü v2.5 (x86_64)"
+                    "minOs Sarman Sürümü v2.6 (x86_64)"
                 };
                 MinGuiCompositor::draw_string(
                     fb,
@@ -1869,7 +1946,7 @@ impl SystemSettings {
                     false,
                 );
                 if self.focused_control == 5 {
-                    fb.draw_rect_outline(kbd_r.0, kbd_r.1, kbd_r.2, kbd_r.3, Color::ACCENT_YELLOW);
+                    MinGuiCompositor::draw_focus_ring(fb, kbd_r.0, kbd_r.1, kbd_r.2, kbd_r.3);
                 }
 
                 MinGuiCompositor::draw_string_clipped(
@@ -2805,7 +2882,7 @@ impl SystemSettings {
             _ => (5, 6),
         };
         if self.focused_control == save_idx {
-            fb.draw_rect_outline(save_r.0, save_r.1, save_r.2, save_r.3, Color::ACCENT_YELLOW);
+            MinGuiCompositor::draw_focus_ring(fb, save_r.0, save_r.1, save_r.2, save_r.3);
         }
         if self.focused_control == reset_idx {
             fb.draw_rect_outline(

@@ -375,12 +375,11 @@ pub fn read_sector(lba: u64, buffer: &mut [u8]) -> bool {
             return false;
         }
 
-        // TODO: SDHCI üzerinden LBA okuma
-        // Block size ayarla
-        // Read block komutu gönder
-        // Buffer'dan veri al
+        // SDHCI LBA yolu (OCR/RCA/CSD + çoklu blok) henüz
+        // uygulanmadı; sahte başarı yerine false döner.
+        let _ = (lba, buffer);
 
-        true
+        false
     }
 }
 
@@ -391,8 +390,9 @@ pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
             return false;
         }
 
-        // TODO: SDHCI üzerinden LBA yazma
+        // SDHCI yazma yolu da aynı komut altyapısını gerektirir.
+        let _ = (lba, buffer);
 
-        true
+        false
     }
 }

@@ -446,7 +446,17 @@ pub fn init_subsystems(
     serial_print("\n");
 
     // 4b. Gelismis grafik suruculeri: VirtIO-GPU varsayılan render yolu olarak seçiliyor.
+    let t_gpu = crate::monotonic_ms();
+    use crate::drivers::status::{self, DriverId};
+    let t_disp = status::probe_start(DriverId::Display);
     let gpu_caps = drivers::gpu::init();
+    let dt_gpu_us = (crate::monotonic_ms().saturating_sub(t_gpu)).saturating_mul(1000);
+    crate::kernel::diag::record_driver_init("GPU", dt_gpu_us, true);
+    if gpu_caps.vga_present {
+        status::probe_ready(DriverId::Display, t_disp);
+    } else {
+        status::probe_unavailable(DriverId::Display, t_disp, "gpu aygiti bulunamadi");
+    }
     let mut virtio_default = false;
     if gpu_caps.virtio_gpu_present && drivers::virtio_gpu::set_default_render_path() {
         serial_print("[GPU] VirtIO-GPU varsayılan render yolu olarak ayarlandı.\n");
@@ -466,7 +476,21 @@ pub fn init_subsystems(
     // 5. PS/2 Donanim Suruculeri
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
+    let t_ps2 = crate::monotonic_ms();
+    let t_input = status::probe_start(DriverId::Input);
     drivers::ps2::init();
+    let dt_ps2_us = (crate::monotonic_ms().saturating_sub(t_ps2)).saturating_mul(1000);
+    crate::kernel::diag::record_driver_init("PS/2", dt_ps2_us, drivers::ps2::present());
+    // Giriş ailesi: USB HID (hat 3) + PS/2 + dokunmatik birleşik durumu.
+    if drivers::usb_hid::ready()
+        || drivers::usb_hid::device_count() > 0
+        || drivers::usb_touchscreen::max_x() > 0
+        || drivers::ps2::present()
+    {
+        status::probe_ready(DriverId::Input, t_input);
+    } else {
+        status::probe_unavailable(DriverId::Input, t_input, "klavye/fare aygiti bulunamadi");
+    }
     if drivers::ps2::present() {
         serial_print("[BOOT] PS/2 ready.\n");
     } else {
@@ -527,6 +551,11 @@ pub fn init_subsystems(
     serial_print("[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n");
     timer.mark("surucu-kesfi");
 
+    // Ortak sürücü durum modeli: hatların raporlamadığı sürücüleri tamamla,
+    // PCI ve depolama denetleyicilerini probe et, özeti seri günlüğe yaz.
+    crate::boot::devices::collect_driver_statuses();
+    crate::boot::devices::log_status_summary();
+
     serial_print("[BOOT] All critical subsystems started. Loading GUI and applications...\n");
     timer.mark("alt-sistemler");
     crate::boot::timing::report_total();
@@ -569,8 +598,31 @@ unsafe fn driver_lane_audio(arg: *mut u8) {
         return;
     };
     serial_print("[DRIVER] Starting HDA audio driver...\n");
+    let t0 = crate::monotonic_ms();
     drivers::hda::init(Some(dma));
-    serial_print("[DRIVER] HDA audio driver ready.\n");
+    let dt_us = (crate::monotonic_ms().saturating_sub(t0)).saturating_mul(1000);
+    crate::kernel::diag::record_driver_init("Intel HDA", dt_us, drivers::hda::is_ready());
+    use crate::drivers::status::{self, DriverId};
+    if drivers::hda::is_ready() {
+        serial_print("[DRIVER] HDA audio driver ready.\n");
+        status::probe_ready(DriverId::Audio, t0);
+    } else {
+        match drivers::hda::init_outcome() {
+            3 => status::probe_error(
+                DriverId::Audio,
+                t0,
+                status::ERR_NO_DMA,
+                "HDA DMA havuzu ayrilamadi",
+            ),
+            4 => status::probe_error(
+                DriverId::Audio,
+                t0,
+                status::ERR_INIT_FAILED,
+                "HDA denetleyici baslatma hatasi",
+            ),
+            _ => status::probe_unavailable(DriverId::Audio, t0, "HDA yok; PC Speaker yedegi etkin"),
+        }
+    }
 }
 
 /// Hat 1 — PCI/ISA ağ kartı + protokol yığını (yalnızca `hardware`/`full`).
@@ -579,15 +631,22 @@ unsafe fn driver_lane_net(arg: *mut u8) {
         return;
     };
     serial_print("[DRIVER] PCI ağ sürücüsü (e1000/VMXNET3/RTL816x/RTL8139) başlatılıyor...\n");
+    let t0 = crate::monotonic_ms();
     drivers::e1000::init(Some(dma));
+    let dt_us = (crate::monotonic_ms().saturating_sub(t0)).saturating_mul(1000);
     if drivers::e1000::is_ready() {
+        crate::kernel::diag::record_driver_init("PCI NIC (e1000)", dt_us, true);
         serial_print("[DRIVER] PCI ağ sürücüsü hazır: ");
         serial_print(drivers::e1000::nic_name());
         serial_print("\n");
     } else {
         // PCI kart yoksa NE2000 (ISA/PnP) denenir.
         serial_print("[DRIVER] NE2000 ağ sürücüsü başlatılıyor...\n");
-        if drivers::ne2000::init_isa_pnp() {
+        let t_isa = crate::monotonic_ms();
+        let ok_isa = drivers::ne2000::init_isa_pnp();
+        let dt_isa_us = (crate::monotonic_ms().saturating_sub(t_isa)).saturating_mul(1000);
+        crate::kernel::diag::record_driver_init("NE2000 (ISA)", dt_isa_us, ok_isa);
+        if ok_isa {
             serial_print("[DRIVER] NE2000 ağ sürücüsü hazır.\n");
         } else {
             serial_print("[DRIVER] Ağ adaptörü bulunamadı (PCI/ISA).\n");
@@ -595,12 +654,37 @@ unsafe fn driver_lane_net(arg: *mut u8) {
     }
 
     serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
+    let t_stack = crate::monotonic_ms();
     drivers::netstack::init();
     let _ = drivers::netstack::dhcp_request();
     drivers::netstack::run_network_self_test();
+    let dt_stack_us = (crate::monotonic_ms().saturating_sub(t_stack)).saturating_mul(1000);
+    crate::kernel::diag::record_driver_init("Netstack", dt_stack_us, true);
     // `livetest` işlemleri boot sırasında devre dışı bırakıldı.
     // drivers::netstack::run_live_server_tests();
     serial_print("[DRIVER] Ağ protokolü hazır.\n");
+
+    // Ortak durum modeli: hazır / desteklenmiyor / başlatma hatası ayrımı.
+    use crate::drivers::status::{self, DriverId};
+    if drivers::e1000::is_ready() {
+        status::probe_ready(DriverId::Net, t0);
+    } else {
+        match drivers::e1000::init_outcome() {
+            3 => status::probe_error(
+                DriverId::Net,
+                t0,
+                status::ERR_NO_DMA,
+                "DMA ring havuzu ayrilamadi",
+            ),
+            4 => status::probe_error(
+                DriverId::Net,
+                t0,
+                status::ERR_INIT_FAILED,
+                "ag surucusu baslatma hatasi",
+            ),
+            _ => status::probe_unavailable(DriverId::Net, t0, "PCI/ISA ag adaptoru bulunamadi"),
+        }
+    }
 }
 
 /// Hat 2 — USB ana makine denetleyicileri + Wi-Fi algılama
@@ -613,11 +697,28 @@ unsafe fn driver_lane_usb(arg: *mut u8) {
         return;
     }
     serial_print("[DRIVER] Starting USB driver...\n");
+    use crate::drivers::status::{self, DriverId};
+    let t_usb_status = status::probe_start(DriverId::Usb);
+    let t_usb = crate::monotonic_ms();
     drivers::usb::init();
     drivers::usb::test_usb_subsystems();
+    let dt_usb_us = (crate::monotonic_ms().saturating_sub(t_usb)).saturating_mul(1000);
+    crate::kernel::diag::record_driver_init("USB Host", dt_usb_us, true);
     serial_print("[DRIVER] Starting Wi-Fi (802.11) subsystem...\n");
+    let t_wifi = crate::monotonic_ms();
     drivers::wifi::init();
+    let dt_wifi_us = (crate::monotonic_ms().saturating_sub(t_wifi)).saturating_mul(1000);
+    crate::kernel::diag::record_driver_init("Wi-Fi", dt_wifi_us, true);
     serial_print("[DRIVER] USB driver ready.\n");
+    if drivers::usb::controller_info().is_some() {
+        status::probe_ready(DriverId::Usb, t_usb_status);
+    } else {
+        status::probe_unavailable(
+            DriverId::Usb,
+            t_usb_status,
+            "USB host denetleyicisi bulunamadi",
+        );
+    }
 }
 
 /// Hat 3 — xHCI HID (klavye/fare/dokunmatik) taraması; PMM'e tek erişen hat.

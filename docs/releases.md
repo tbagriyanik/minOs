@@ -6,6 +6,10 @@ README'den ayrılan v1.6.0 ve v1.5.0 değişiklik listeleri.
 > - 🧪 **Deneysel:** Özellik çalışıyor ancak henüz kararlı kabul edilmez; üretimde dikkatli kullanılmalı.
 > - ⚠️ **Sınırlı / Başarısız deneme:** Özellik kısıtlı şekilde çalışır veya bilinmeyen bir sınırı/bozulması vardır; geri alınabilir veya yeniden tasarlanabilir.
 
+## Yenilikler (v2.6.0)
+
+- **Sürücü görünürlüğü ve hata ayıklama:** Ortak sürücü durum modeli (`drivers::status`) — her donanım sürücüsü `Ready` / `Unavailable` / `Error` olarak izlenir; hata durumunda kararlı hata kodu ve açıklama saklanır, başlatma süresi ve sonucu seri günlüğe yazılır. Kontrol Paneli'ne **Sürücüler** sekmesi eklendi (durum tablosu + ağ/grafik/ses/depolama ayrıntıları + **Yeniden Tara**). Ağ/ses init sonuçları artık donanım-yok ile başlatma-hatasını ayırır; depolama veya ağ sürücüsü hatalıyken bağımlı uygulamalar güvenli biçimde engellenir.
+
 ## Yenilikler (v2.5.0)
 
 - **🌐 Web Tarayıcısı Ağ Katmanı Yenilemesi:**

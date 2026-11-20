@@ -6308,7 +6308,7 @@ impl BrowserApp {
         fb.draw_rect(win_x + 64, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 36, "R", Color::ACCENT_GREEN);
         if self.focused_control == Self::FOCUS_REFRESH {
-            fb.draw_rect_outline(win_x + 64, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
+            MinGuiCompositor::draw_focus_ring(fb, win_x + 64, win_y + 32, 22, 20);
         }
 
         let url_x = win_x + 94;
@@ -6386,7 +6386,7 @@ impl BrowserApp {
             }
         }
         if self.focused_control == Self::FOCUS_ADDRESS {
-            fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW);
+            MinGuiCompositor::draw_focus_ring(fb, url_x, win_y + 32, url_w, 20);
         }
 
         // Araç çubuğu seçenekleri taşma menüsünde sunulur.

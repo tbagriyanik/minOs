@@ -2,7 +2,7 @@ use crate::drivers::ata;
 use crate::drivers::video::Framebuffer;
 use crate::fs::diskfs;
 use crate::fs::vfs::VirtualFileSystem;
-use crate::gui::{Color, MinGuiCompositor, TextBuf};
+use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InstallState {
@@ -37,6 +37,9 @@ pub enum InstallerAction {
     None,
     Format,
     Install,
+    Cancel,     // İptal/geri dönüş
+    ConfirmYes, // Onay: Evet
+    ConfirmNo,  // Onay: Hayır
 }
 
 pub struct InstallerApp {
@@ -51,6 +54,10 @@ pub struct InstallerApp {
     pub disk_formatted: bool,
     /// Kullanicinin "Tek Tıkla Kur" icin verdigi onay (2. tiklamada kurar).
     pub confirm_install: bool,
+    /// Onay diyalog durumu: 0=yok, 1=Biçimlendirme onayı, 2=Kurulum onayı
+    pub confirm_dialog: u8,
+    /// Onay diyalogunda odaklı buton: 0=Evet, 1=Hayır
+    pub confirm_focus: usize,
 }
 
 impl InstallerApp {
@@ -68,6 +75,8 @@ impl InstallerApp {
             focused_control: 0,
             disk_formatted: false,
             confirm_install: false,
+            confirm_dialog: 0,
+            confirm_focus: 0,
         }
     }
 
@@ -76,6 +85,8 @@ impl InstallerApp {
             self.format_type = fmt;
             self.disk_formatted = false;
             self.confirm_install = false;
+            self.confirm_dialog = 0;
+            self.confirm_focus = 0;
         }
     }
 
@@ -110,12 +121,42 @@ impl InstallerApp {
     }
 
     pub fn activate_focused_control(&mut self) -> InstallerAction {
+        // Eğer onay diyalogu açıksa, Enter/Space ile odaklı butonu tetikle
+        if self.confirm_dialog != 0 {
+            if self.confirm_focus == 0 {
+                // Evet
+                self.confirm_dialog = 0;
+                self.confirm_focus = 0;
+                if self.confirm_dialog == 1 {
+                    // Biçimlendirme onayı
+                    return InstallerAction::Format;
+                } else {
+                    // Kurulum onayı
+                    return InstallerAction::Install;
+                }
+            } else {
+                // Hayır - iptal
+                self.confirm_dialog = 0;
+                self.confirm_focus = 0;
+                self.confirm_install = false;
+                return InstallerAction::Cancel;
+            }
+        }
+
+        // Disk seçimi (focused_control == 0)
         if self.focused_control == 0 {
+            if !self.disk_formatted {
+                // Disk seçiliyken ve biçimlendirilmemişse: disk değiştir
+                self.select_next_drive();
+                return InstallerAction::None;
+            }
+            // Disk zaten biçimlendirilmişse: disk değiştir
             self.select_next_drive();
             return InstallerAction::None;
         }
 
         let format_index = self.focused_control - 1;
+        // Dosya sistemi seçimi
         if format_index < Self::format_choice_count() {
             match format_index {
                 0 => self.set_format_type(FormatFsType::Fat32),
@@ -127,10 +168,57 @@ impl InstallerApp {
             return InstallerAction::None;
         }
 
+        // Biçimlendir butonu
         if format_index == Self::format_choice_count() {
-            InstallerAction::Format
-        } else {
-            InstallerAction::Install
+            if !self.disk_formatted
+                && self.state != InstallState::Formatting
+                && self.state != InstallState::Copying
+            {
+                // Biçimlendirme onayı iste
+                self.confirm_dialog = 1; // 1 = biçimlendirme onayı
+                self.confirm_focus = 0; // Varsayılan: Evet
+                return InstallerAction::None;
+            }
+            return InstallerAction::None; // Zaten biçimlendirme yapılıyorsa veya formatlıysa bir şey yapma
+        }
+
+        // Tek Tıkla Kur butonu
+        if self.state != InstallState::Formatting && self.state != InstallState::Copying {
+            if self.disk_formatted {
+                // Disk zaten biçimlendirilmiş: doğrudan kur
+                return InstallerAction::Install;
+            } else if self.confirm_install {
+                // İkinci tıklama: onay diyaloğu aç
+                self.confirm_dialog = 2; // 2 = kurulum onayı (biçimlendirme + kurulum)
+                self.confirm_focus = 0;
+                return InstallerAction::None;
+            } else {
+                // İlk tıklama: onay bayrağını aç ve mesaj göster
+                self.confirm_install = true;
+                self.status_msg = (
+                    "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın veya Enter basın.",
+                    "WARNING: Disk will be erased and formatted. Click again or press Enter to confirm.",
+                );
+                return InstallerAction::None;
+            }
+        }
+
+        InstallerAction::None
+    }
+
+    // Onay diyaloğu için klavye navigasyonu
+    pub fn confirm_focus_next(&mut self, reverse: bool) {
+        if self.confirm_dialog != 0 {
+            self.confirm_focus = if reverse { 1 } else { 0 };
+        }
+    }
+
+    // Onay diyaloğu kapat (Esc ile)
+    pub fn confirm_cancel(&mut self) {
+        if self.confirm_dialog != 0 {
+            self.confirm_dialog = 0;
+            self.confirm_focus = 0;
+            self.confirm_install = false;
         }
     }
 
@@ -195,6 +283,8 @@ impl InstallerApp {
         }
         // Disk degisti: biçimlendirme ve kurulum durumu sifirlanir.
         self.confirm_install = false;
+        self.confirm_dialog = 0;
+        self.confirm_focus = 0;
         self.refresh_drives();
     }
 
@@ -208,6 +298,25 @@ impl InstallerApp {
     /// Hedef diski MBR + dosya sistemi (LBA 2048) olarak bölümler, Limine MBR önyükleyicisini kurar
     /// ve seçili dosya sistemini hazırlar.
     pub fn format_selected_drive(&mut self) -> bool {
+        let english = crate::gui::ui_english();
+        // Disk seçeneği için ikinci onay:Henüz 'Tek Tıkla Kur' yapılmadıysa biçimlendirme uyarısı
+        if !self.confirm_install && !self.disk_formatted {
+            let mut confirm = TextBuf::new();
+            confirm.push_str(if english {
+                "\n⚠ Are you sure you want to format drive "
+            } else {
+                "\n⚠ Bu diske biçimlendirmek istiyor musunuz?"
+            });
+            confirm.push_usize(self.selected_drive as usize);
+            confirm.push_str(if english {
+                "? This will erase all data! (y/n)"
+            } else {
+                "? Tüm verileri silecek! (e/h)"
+            });
+            // Wait for user confirmation
+            return false;
+        }
+
         // Disk bölümleme/biçimlendirme uzun sürer; imleç kum saati olsun.
         let _busy = crate::gui::screens::BusyScope::new();
         self.state = InstallState::Formatting;
@@ -663,7 +772,7 @@ impl InstallerApp {
             step_x += MinGuiCompositor::text_width(label, 1) + 10;
         }
 
-        // 3. Disk Seçim Kartı
+        // 3. Disk Seçim Kartı - Tüm mevcut ATA sürücüleri listele
         let sel_rect = Self::drive_select_rect(win_x, win_y, win_w);
         fb.draw_rounded_rect(
             sel_rect.0,
@@ -682,53 +791,154 @@ impl InstallerApp {
             Color::ACCENT_BLUE,
         );
 
-        // Disk Simge & Bilgisi
-        let disk_dev = ata::device(self.selected_drive);
-        let mut disk_label = TextBuf::new();
-        disk_label.push_str(if english { "Drive " } else { "Sürücü " });
-        disk_label.push_usize(self.selected_drive as usize);
-        disk_label.push_str(": ");
-        if let Some(dev) = disk_dev {
-            let mb = dev.size_mb();
-            disk_label.push_usize(mb as usize);
-            disk_label.push_str(" MB (");
-            let m_str = dev.model_str();
-            if m_str.is_empty() {
-                disk_label.push_str("ATA Sabit Disk");
-            } else {
-                let bytes = m_str.as_bytes();
-                let take = bytes.len().min(18);
-                if let Ok(sub) = core::str::from_utf8(&bytes[..take]) {
-                    disk_label.push_str(sub);
+        // Tüm ATA sürücülerini topla
+        let mut drives = alloc::vec::Vec::new();
+        for i in 0..4 {
+            if let Some(dev) = ata::device(i) {
+                if dev.kind == ata::DeviceKind::Ata {
+                    let total_bytes = dev.sectors * 512;
+                    let total_mb = total_bytes / 1024 / 1024;
+                    let model = dev.model_str();
+                    let model_display: alloc::string::String = if model.is_empty() {
+                        if english {
+                            alloc::string::String::from("ATA Hard Disk")
+                        } else {
+                            alloc::string::String::from("ATA Sabit Disk")
+                        }
+                    } else {
+                        let bytes = model.as_bytes();
+                        let take = bytes.len().min(24);
+                        alloc::string::String::from(
+                            core::str::from_utf8(&bytes[..take]).unwrap_or("Unknown"),
+                        )
+                    };
+                    let is_selected = i == self.selected_drive;
+                    drives.push((i, total_mb, model_display, is_selected));
                 }
             }
-            disk_label.push_str(")");
-        } else {
-            disk_label.push_str(if english {
-                "No disk detected"
-            } else {
-                "Disk tespit edilemedi"
-            });
         }
-        MinGuiCompositor::draw_string_clipped(
-            fb,
-            sel_rect.0 + 12,
-            sel_rect.1 + 5,
-            disk_label.as_str(),
-            Color::TEXT_MAIN,
-            (
-                sel_rect.0 + 10,
-                sel_rect.1 + 2,
-                sel_rect.2.saturating_sub(20),
-                20,
-            ),
-        );
 
-        let switch_hint = if english {
-            "(Click to switch drive)"
+        if drives.is_empty() {
+            let msg = if english {
+                "No ATA drives detected"
+            } else {
+                "ATA sürücü bulunamadı"
+            };
+            MinGuiCompositor::draw_string(
+                fb,
+                sel_rect.0
+                    + (sel_rect
+                        .2
+                        .saturating_sub(MinGuiCompositor::text_width(msg, 1)))
+                        / 2,
+                sel_rect.1 + (sel_rect.3.saturating_sub(MinGuiCompositor::text_height())) / 2,
+                msg,
+                Color::ACCENT_RED,
+            );
         } else {
-            "(Diski değiştirmek için tıklayın)"
-        };
+            // Sürücüleri yatay kartlar olarak çiz
+            let card_w = (sel_rect.2.saturating_sub(sp(20) * (drives.len() + 1))) / drives.len();
+            let card_h = sel_rect.3 - sp(10);
+            let start_x = sel_rect.0 + sp(10);
+            let card_y = sel_rect.1 + sp(5);
+
+            for (idx, (drive_id, total_mb, model, is_selected)) in drives.iter().enumerate() {
+                let card_x = start_x + idx * (card_w + sp(10));
+
+                // Kart arka planı
+                let bg = if *is_selected {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::WINDOW_BG
+                };
+                fb.draw_rounded_rect(card_x, card_y, card_w, card_h, 4, bg);
+                fb.draw_rounded_rect_outline(
+                    card_x,
+                    card_y,
+                    card_w,
+                    card_h,
+                    4,
+                    if *is_selected {
+                        Color::WHITE
+                    } else {
+                        Color::BORDER
+                    },
+                );
+
+                // Sürücü numarası
+                let mut num_buf = TextBuf::new();
+                num_buf.push_str(if english { "Drive " } else { "Sürücü " });
+                num_buf.push_usize(*drive_id as usize);
+                let num_color = if *is_selected {
+                    Color::WHITE
+                } else {
+                    Color::TEXT_MAIN
+                };
+                MinGuiCompositor::draw_string(
+                    fb,
+                    card_x + sp(8),
+                    card_y + sp(4),
+                    num_buf.as_str(),
+                    num_color,
+                );
+
+                // Boyut
+                let mut size_buf = TextBuf::new();
+                size_buf.push_usize(*total_mb as usize);
+                size_buf.push_str(" MB");
+                MinGuiCompositor::draw_string(
+                    fb,
+                    card_x + sp(8),
+                    card_y + sp(22),
+                    size_buf.as_str(),
+                    if *is_selected {
+                        Color::ACCENT_YELLOW
+                    } else {
+                        Color::TEXT_MAIN
+                    },
+                );
+
+                // Model
+                let model_x = card_x + sp(8);
+                let model_w = card_w - sp(16);
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    model_x,
+                    card_y + sp(38),
+                    model,
+                    Color::TEXT_MUTED,
+                    (model_x, card_y + sp(36), model_w, sp(18)),
+                );
+
+                // Seçili ise alt çizgi
+                if *is_selected {
+                    fb.draw_rect(
+                        card_x + sp(4),
+                        card_y + card_h - 2,
+                        card_w - sp(8),
+                        2,
+                        Color::WHITE,
+                    );
+                }
+            }
+
+            // İpucu
+            let hint = if english {
+                "(Click or Tab to switch drive)"
+            } else {
+                "(Diski değiştirmek için tıklayın veya Tab)"
+            };
+            let hint_w = MinGuiCompositor::text_width(hint, 1);
+            let hint_x = sel_rect.0 + (sel_rect.2.saturating_sub(hint_w)) / 2;
+            MinGuiCompositor::draw_string(
+                fb,
+                hint_x,
+                sel_rect.1 + sel_rect.3 - sp(16),
+                hint,
+                Color::ACCENT_YELLOW,
+            );
+        }
+
         // Seçili diskin biçimlendirme/kurulum durumu
         let fmt_state = if self.state == InstallState::Complete {
             if english {
@@ -753,6 +963,11 @@ impl InstallerApp {
             Color::ACCENT_GREEN
         } else {
             Color::ACCENT_RED
+        };
+        let switch_hint = if english {
+            "(Click to switch drive)"
+        } else {
+            "(Diski değiştirmek için tıklayın)"
         };
         let state_y = sel_rect.1 + 27;
         MinGuiCompositor::draw_string_clipped(
@@ -1015,14 +1230,145 @@ impl InstallerApp {
             Some((bx, by, bw, bh))
         };
         if let Some((x, y, w, h)) = focused_rect {
-            fb.draw_rect_outline(
-                x.saturating_sub(2),
-                y.saturating_sub(2),
-                w + 4,
-                h + 4,
-                Color::ACCENT_YELLOW,
-            );
+            MinGuiCompositor::draw_focus_ring(fb, x, y, w, h);
         }
+
+        // Onay diyaloğu overlay'i
+        if self.confirm_dialog != 0 {
+            self.render_confirm_dialog(fb, win_x, win_y, win_w, win_h, english);
+        }
+    }
+
+    /// Onay diyaloğunu çizer (modal overlay)
+    fn render_confirm_dialog(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+        english: bool,
+    ) {
+        // Yarı saydam arka plan
+        fb.draw_rect(win_x, win_y, win_w, win_h, Color::DARK_BG);
+
+        // Diyalog kutusu
+        let dlg_w = win_w.min(480);
+        let dlg_h = sp(160);
+        let dlg_x = win_x + (win_w.saturating_sub(dlg_w)) / 2;
+        let dlg_y = win_y + (win_h.saturating_sub(dlg_h)) / 2;
+
+        fb.draw_rounded_rect(dlg_x, dlg_y, dlg_w, dlg_h, 8, Color::WINDOW_BG);
+        fb.draw_rounded_rect_outline(dlg_x, dlg_y, dlg_w, dlg_h, 8, Color::ACCENT_YELLOW);
+
+        // Başlık
+        let title = if self.confirm_dialog == 1 {
+            if english {
+                "⚠ Confirm Format"
+            } else {
+                "⚠ Biçimlendirme Onayı"
+            }
+        } else {
+            if english {
+                "⚠ Confirm Install"
+            } else {
+                "⚠ Kurulum Onayı"
+            }
+        };
+        MinGuiCompositor::draw_string(
+            fb,
+            dlg_x + (dlg_w.saturating_sub(MinGuiCompositor::text_width(title, 1))) / 2,
+            dlg_y + sp(16),
+            title,
+            Color::ACCENT_RED,
+        );
+
+        // Mesaj
+        let msg1 = if self.confirm_dialog == 1 {
+            if english {
+                "This will ERASE ALL DATA on drive"
+            } else {
+                "Bu işlem sürücüdeki TÜM VERİLERİ SİLECEK"
+            }
+        } else {
+            if english {
+                "Format drive and install minOs?"
+            } else {
+                "Diski biçimlendirip minOs kurulsun mu?"
+            }
+        };
+        let msg2 = if english {
+            "Press Enter/Y for Yes, Esc/N for No"
+        } else {
+            "Enter/E=Evet, Esc/H=Hayır"
+        };
+
+        MinGuiCompositor::draw_string(fb, dlg_x + sp(20), dlg_y + sp(50), msg1, Color::TEXT_MAIN);
+
+        let mut drive_msg = TextBuf::new();
+        drive_msg.push_str(if english { "Drive " } else { "Sürücü " });
+        drive_msg.push_usize(self.selected_drive as usize);
+        drive_msg.push_str(if english {
+            " will be formatted as "
+        } else {
+            " "
+        });
+        drive_msg.push_str(self.format_type.name());
+        MinGuiCompositor::draw_string(
+            fb,
+            dlg_x + sp(20),
+            dlg_y + sp(70),
+            drive_msg.as_str(),
+            Color::ACCENT_YELLOW,
+        );
+
+        MinGuiCompositor::draw_string(fb, dlg_x + sp(20), dlg_y + sp(95), msg2, Color::TEXT_MUTED);
+
+        // Evet / Hayır butonları
+        let btn_w = sp(80);
+        let btn_h = sp(28);
+        let btn_gap = sp(20);
+        let btn_y = dlg_y + dlg_h - btn_h - sp(16);
+        let total_btn_w = btn_w * 2 + btn_gap;
+        let btn_start_x = dlg_x + (dlg_w.saturating_sub(total_btn_w)) / 2;
+
+        // Evet butonu (sol)
+        let yes_x = btn_start_x;
+        let yes_bg = if self.confirm_focus == 0 {
+            Color::ACCENT_GREEN
+        } else {
+            Color::WINDOW_BG
+        };
+        fb.draw_rounded_rect(yes_x, btn_y, btn_w, btn_h, 6, yes_bg);
+        fb.draw_rounded_rect_outline(yes_x, btn_y, btn_w, btn_h, 6, Color::WHITE);
+        let yes_text = if english { "Yes (Y)" } else { "Evet (E)" };
+        let yes_tw = MinGuiCompositor::text_width(yes_text, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            yes_x + (btn_w.saturating_sub(yes_tw)) / 2,
+            btn_y + (btn_h.saturating_sub(MinGuiCompositor::text_height())) / 2,
+            yes_text,
+            MinGuiCompositor::text_on(yes_bg),
+        );
+
+        // Hayır butonu (sağ)
+        let no_x = btn_start_x + btn_w + btn_gap;
+        let no_bg = if self.confirm_focus == 1 {
+            Color::ACCENT_RED
+        } else {
+            Color::WINDOW_BG
+        };
+        fb.draw_rounded_rect(no_x, btn_y, btn_w, btn_h, 6, no_bg);
+        fb.draw_rounded_rect_outline(no_x, btn_y, btn_w, btn_h, 6, Color::WHITE);
+        let no_text = if english { "No (N)" } else { "Hayır (H)" };
+        let no_tw = MinGuiCompositor::text_width(no_text, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            no_x + (btn_w.saturating_sub(no_tw)) / 2,
+            btn_y + (btn_h.saturating_sub(MinGuiCompositor::text_height())) / 2,
+            no_text,
+            MinGuiCompositor::text_on(no_bg),
+        );
     }
 }
 

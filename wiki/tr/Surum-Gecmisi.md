@@ -4,7 +4,14 @@ minOs sürüm notları ve gelecek planları.
 
 ---
 
-## v2.5.0 (Güncel)
+## v2.6.0 (Güncel)
+
+### Yenilikler
+
+- **Sürücü Görünürlüğü ve Hata Ayıklama:** Ortak sürücü durum modeli (`drivers::status`) her donanım sürücüsünü `Ready` / `Unavailable` (donanım yok veya profilde devre dışı) / `Error` (başlatma hatası) olarak kararlı hata kodu ve kısa açıklamayla kaydeder; başlatma süresi ve sonucu seri günlüğe yazılır. Kontrol Paneli'ne **Sürücüler** sekmesi eklendi: 11 sürücünün durum tablosu, ağ (adaptör/MAC/link/IP), grafik (framebuffer çözünürlük/format), ses (aygıt/örnekleme hızı/DMA) ve depolama (tür/kapasite/hazırlık) ayrıntıları ile **Yeniden Tara** düğmesi. Ağ ve HDA sürücüleri artık "donanım yok" ile "başlatma hatası"nı ayırır; sürücüsü hatalı uygulamalar açılışta güvenli biçimde engellenir.
+- **🛡️ Dosya Yöneticisi ve Kurulum Onay Diyalogları:** Yeni dosya/klasör oluşturma, yeniden adlandırma ve silme (Geri Dönüşüm Kutusu'na taşıma veya kalıcı silme) artık adlandırmalı onay penceresiyle onaylatılıyor — Enter onaylar, Esc vazgeçer. Kurulum Sihirbazı'nda `Biçimlendir` ve `Tek Tıkla Kur` adımları da aynı şekilde onay istiyor.
+
+## v2.5.0
 
 ### Yenilikler
 

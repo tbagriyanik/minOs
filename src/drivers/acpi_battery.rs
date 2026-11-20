@@ -105,6 +105,47 @@ static mut SSDT_COUNT: usize = 0;
 static mut SSDT_VADDRS: [u64; 16] = [0; 16];
 static mut SSDT_LENS: [usize; 16] = [0; 16];
 
+/// FADT'den çıkarılan güç yönetimi kayıtçısı bilgisi.
+/// `acpi_power` sürücüsü gerçek PM1a/RESET yazımları için kullanır.
+#[derive(Clone, Copy, Default)]
+pub struct FadtPowerRegs {
+    /// PM1a kontrol blok adresi (FADT @64); 0 = yok.
+    pub pm1a_cnt_blk: u32,
+    /// PM1a kontrol blok uzunluğu bayt (FADT @89); 0 = bilinmiyor.
+    pub pm1_cnt_len: u8,
+    /// RESET_REG destekleniyor mu (FADT flags bit 10, @112).
+    pub reset_reg_sup: bool,
+    /// RESET_REG adres uzayı (GAS @116): 0 = sistem I/O, 1 = sistem belleği.
+    pub reset_space: u8,
+    /// RESET_REG bit genişliği (GAS @117).
+    pub reset_bit_width: u8,
+    /// RESET_REG bit ofseti (GAS @118).
+    pub reset_bit_offset: u8,
+    /// RESET_REG erişim boyutu (GAS @119): 1=bayt, 2=kelime, 3=dword, 4=qword.
+    pub reset_access: u8,
+    /// RESET_REG adresi (GAS @120, u64).
+    pub reset_addr: u64,
+    /// RESET_VALUE (FADT @128).
+    pub reset_value: u8,
+}
+
+static mut FADT_PM_REGS: FadtPowerRegs = FadtPowerRegs {
+    pm1a_cnt_blk: 0,
+    pm1_cnt_len: 0,
+    reset_reg_sup: false,
+    reset_space: 0,
+    reset_bit_width: 0,
+    reset_bit_offset: 0,
+    reset_access: 0,
+    reset_addr: 0,
+    reset_value: 0,
+};
+
+/// FADT güç kayıtçısı bilgisini döndürür (tablo taraması yapılmamışsa sıfır alanlı).
+pub fn fadt_power_regs() -> FadtPowerRegs {
+    unsafe { FADT_PM_REGS }
+}
+
 // ---------------------------------------------------------------------------
 // Limine RSDP İsteği
 // ---------------------------------------------------------------------------
@@ -328,6 +369,25 @@ unsafe fn inspect_acpi_table(table_vaddr: u64) {
                         DSDT_LEN = (dsdt_hdr.length - 36) as usize;
                     }
                 }
+            }
+
+            // Güç yönetimi kayıtları (ACPI FADT sabit ofsetleri):
+            // PM1a_CNT_BLK @64, PM1_CNT_LEN @89, FLAGS @112,
+            // RESET_REG GAS @116 (adres @120), RESET_VALUE @128.
+            // `acpi_power` bunları gerçek güç kapatma/sıfırlama için kullanır.
+            if hdr.length >= 90 {
+                FADT_PM_REGS.pm1a_cnt_blk = (fadt_ptr.add(64) as *const u32).read_unaligned();
+                FADT_PM_REGS.pm1_cnt_len = fadt_ptr.add(89).read();
+            }
+            if hdr.length >= 129 {
+                FADT_PM_REGS.reset_reg_sup =
+                    (fadt_ptr.add(112) as *const u32).read_unaligned() & (1 << 10) != 0;
+                FADT_PM_REGS.reset_space = fadt_ptr.add(116).read();
+                FADT_PM_REGS.reset_bit_width = fadt_ptr.add(117).read();
+                FADT_PM_REGS.reset_bit_offset = fadt_ptr.add(118).read();
+                FADT_PM_REGS.reset_access = fadt_ptr.add(119).read();
+                FADT_PM_REGS.reset_addr = (fadt_ptr.add(120) as *const u64).read_unaligned();
+                FADT_PM_REGS.reset_value = fadt_ptr.add(128).read();
             }
         }
         b"SSDT" if SSDT_COUNT < 16 => {

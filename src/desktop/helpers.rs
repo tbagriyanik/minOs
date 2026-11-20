@@ -63,6 +63,23 @@ pub fn terminate_window_process(idx: usize) -> bool {
 
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
 pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
+    // Sürücü hatası: ilgili uygulama güvenli biçimde pasifleşir; kullanıcıya
+    // nedeni toast ile bildirilir (ör. ağ/sürücü hatası → tarayıcı açılmaz).
+    if let Some(reason) = crate::drivers::status::blocked_reason(app_id, crate::gui::ui_english()) {
+        crate::boot::console::serial_print("[APP-BLOCK] app=");
+        crate::boot::console::serial_print_dec(app_id as u64);
+        crate::boot::console::serial_print(" reason=");
+        crate::boot::console::serial_print(reason);
+        crate::boot::console::serial_print("\n");
+        compositor.push_toast(
+            gui::ToastKind::Warning,
+            gui::ui_text("Sürücü Hatası", "Driver Error"),
+            reason,
+            crate::boot::time::monotonic_ms(),
+            5000,
+        );
+        return;
+    }
     if let Some(idx) = compositor.launch_app_window(app_id) {
         if let Some(win) = compositor.windows[idx].as_mut() {
             win.is_open = true;
@@ -71,6 +88,10 @@ pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
         }
         ensure_window_process(idx, app_id);
         compositor.focus_window(idx);
+
+        // Klavye kısayolları toast bildirimi göster
+        show_app_shortcuts_toast(compositor, app_id);
+
         if app_id == 16 {
             crate::boot::console::serial_print("[FPS3D] Uygulama açıldı / Application opened\n");
         }
@@ -78,6 +99,111 @@ pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
             crate::boot::console::serial_print("[CITY] Uygulama açıldı / Application opened\n");
         }
     }
+}
+
+/// Uygulama açıldığında temel klavye kısayollarını toast olarak gösterir.
+fn show_app_shortcuts_toast(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
+    let (title, message) = match app_id {
+        0 => (
+            // Dosya Yöneticisi
+            gui::ui_text("Dosya Yöneticisi", "File Manager"),
+            gui::ui_text(
+                "F2: Yeniden Adlandır | F5: Yenile | Del: Sil | Ctrl+N: Yeni | Enter: Aç",
+                "F2: Rename | F5: Refresh | Del: Delete | Ctrl+N: New | Enter: Open",
+            ),
+        ),
+        1 => (
+            // Sistem Ayarları
+            gui::ui_text("Sistem Ayarları", "System Settings"),
+            gui::ui_text(
+                "Tab: Sekme Değiştir | Sol/Sağ: Değer Değiştir | Enter: Onayla",
+                "Tab: Switch Tab | Left/Right: Change Value | Enter: Confirm",
+            ),
+        ),
+        2 => (
+            // Not Defteri
+            gui::ui_text("Not Defteri", "Notepad"),
+            gui::ui_text(
+                "Ctrl+S: Kaydet | Ctrl+O: Aç | Ctrl+N: Yeni | Ctrl+Z: Geri Al | Ctrl+F: Bul",
+                "Ctrl+S: Save | Ctrl+O: Open | Ctrl+N: New | Ctrl+Z: Undo | Ctrl+F: Find",
+            ),
+        ),
+        3 => (
+            // Web Tarayıcısı
+            gui::ui_text("Web Tarayıcısı", "Web Browser"),
+            gui::ui_text(
+                "Ctrl+L: Adres | F5: Yenile | Ctrl+Shift+D: DevTools | Alt+←/→: Geri/İleri",
+                "Ctrl+L: Address | F5: Reload | Ctrl+Shift+D: DevTools | Alt+←/→: Back/Fwd",
+            ),
+        ),
+        4 => (
+            // Resim Görüntüleyici
+            gui::ui_text("Resim Görüntüleyici", "Image Viewer"),
+            gui::ui_text(
+                "+/-: Yakınlaştır/Uzaklaştır | 0: Sıfırla | Fare Tekerleği: Zoom | ESC: Kapat",
+                "+/-: Zoom In/Out | 0: Reset | Mouse Wheel: Zoom | ESC: Close",
+            ),
+        ),
+        5 => (
+            // Müzik Çalar
+            gui::ui_text("Müzik Çalar", "Music Player"),
+            gui::ui_text(
+                "Space: Oynat/Duraklat | ←/→: Önceki/Sonraki | ↑/↓: Ses",
+                "Space: Play/Pause | ←/→: Prev/Next | ↑/↓: Volume",
+            ),
+        ),
+        6 => (
+            // Video Oynatıcı
+            gui::ui_text("Video Oynatıcı", "Video Player"),
+            gui::ui_text(
+                "Space: Oynat/Duraklat | ←/→: İleri/Geri Sar | F: Tam Ekran",
+                "Space: Play/Pause | ←/→: Seek | F: Fullscreen",
+            ),
+        ),
+        7 => (
+            // Görev Yöneticisi
+            gui::ui_text("Görev Yöneticisi", "Task Manager"),
+            gui::ui_text(
+                "F5: Yenile | Del: İşlemi Sonlandır | ↑/↓: Gezin",
+                "F5: Refresh | Del: End Process | ↑/↓: Navigate",
+            ),
+        ),
+        8 => (
+            // Hesap Makinesi
+            gui::ui_text("Hesap Makinesi", "Calculator"),
+            gui::ui_text(
+                "Sayı tuşları | + - * / | Enter: Hesapla | Esc: Temizle",
+                "Number keys | + - * / | Enter: Calculate | Esc: Clear",
+            ),
+        ),
+        9 => (
+            // Çizim Tahtası
+            gui::ui_text("Çizim Tahtası", "Paint"),
+            gui::ui_text(
+                "C: Temizle | E: Silgi Aç/Kapat | Sol Tık: Çiz | Kaydet: Ctrl+S",
+                "C: Clear | E: Toggle Eraser | Left Click: Draw | Save: Ctrl+S",
+            ),
+        ),
+        10 => (
+            // Terminal
+            gui::ui_text("Terminal", "Terminal"),
+            gui::ui_text(
+                "help: Komutlar | Tab: Tamamla | Yukarı/Aşağı: Geçmiş | Ctrl+C: İptal",
+                "help: Commands | Tab: Complete | Up/Down: History | Ctrl+C: Cancel",
+            ),
+        ),
+        14 => (
+            // Kontrol Paneli
+            gui::ui_text("Kontrol Paneli", "Control Panel"),
+            gui::ui_text(
+                "Tab: Sekme | Sol/Sağ: Sekme Değiştir | Enter: Seç | Esc: Kapat",
+                "Tab: Tab | Left/Right: Switch Tab | Enter: Select | Esc: Close",
+            ),
+        ),
+        _ => return,
+    };
+    let now = crate::boot::time::monotonic_ms();
+    compositor.push_toast(gui::ToastKind::Info, title, message, now, 5000);
 }
 
 pub fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {

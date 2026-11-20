@@ -1686,14 +1686,7 @@ impl PackageManagerApp {
             _ => None,
         };
         if let Some(r) = focus_rect {
-            fb.draw_rounded_rect_outline(
-                r.0.saturating_sub(2),
-                r.1.saturating_sub(2),
-                r.2.saturating_add(4),
-                r.3.saturating_add(4),
-                6,
-                Color::ACCENT_BLUE,
-            );
+            MinGuiCompositor::draw_focus_ring(fb, r.0, r.1, r.2, r.3);
         }
     }
 }

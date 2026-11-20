@@ -213,6 +213,15 @@ pub fn init() -> bool {
     }
 }
 
+/// Aygıt tablosunu sıfırlayıp PCI barını yeniden tarar.
+/// Kontrol Paneli "Yeniden Tara" eylemi tarafından çağrılır.
+pub fn rescan() -> bool {
+    unsafe {
+        INITIALIZED = false;
+    }
+    init()
+}
+
 // ---------------------------------------------------------------------------
 // PCI Bus Taraması
 // ---------------------------------------------------------------------------

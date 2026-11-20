@@ -646,6 +646,8 @@ pub struct Button {
     label: &'static str,
     bg: u32,
     pressed: bool,
+    enabled: bool,
+    selected: bool,
 }
 
 impl Button {
@@ -656,11 +658,25 @@ impl Button {
             label,
             bg: Color::ACCENT_BLUE,
             pressed: false,
+            enabled: true,
+            selected: false,
         }
     }
 
     pub fn bg(mut self, color: u32) -> Self {
         self.bg = color;
+        self
+    }
+
+    /// Düğme devre dışı bırakılırsa odaklanamaz, tıklanamaz ve koyulaştırılmış çizer.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Seçili (etkin/geçiş) durumu: odak halkasından bağımsız, kalıcı bir seçişaret.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
         self
     }
 
@@ -670,6 +686,22 @@ impl Button {
 
     pub fn label(&self) -> &'static str {
         self.label
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn set_selected(&mut self, selected: bool) {
+        self.selected = selected;
+    }
+
+    pub fn is_selected(&self) -> bool {
+        self.selected
     }
 }
 
@@ -687,20 +719,54 @@ impl Widget for Button {
     }
 
     fn draw(&self, fb: &mut Framebuffer, ctx: &DrawCtx) {
-        let bg = if self.pressed {
+        let r = self.rect.tuple();
+
+        if !self.enabled {
+            // Devre dışı: koyulaştırılmış zemin, süslü olmayan metin, etkileşim yok.
+            let bg = MinGuiCompositor::shade(self.bg, -90);
+            let border = MinGuiCompositor::shade(Color::BORDER, -60);
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg);
+            fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, border);
+            let tw = MinGuiCompositor::text_width(self.label, 1).saturating_sub(1);
+            let tx = r.0 + r.2.saturating_sub(tw) / 2;
+            let ty = r.1 + r.3.saturating_sub(MinGuiCompositor::text_height()) / 2;
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                tx,
+                ty,
+                self.label,
+                Color::TEXT_MUTED,
+                (
+                    r.0 + 2,
+                    r.1 + 1,
+                    r.2.saturating_sub(4),
+                    r.3.saturating_sub(2),
+                ),
+            );
+            return;
+        }
+
+        let bg = if self.selected {
+            MinGuiCompositor::shade(self.bg, 15)
+        } else if self.pressed {
             MinGuiCompositor::shade(self.bg, -20)
         } else {
             self.bg
         };
         let hovered = ctx.is_hovered(self.id);
-        MinGuiCompositor::draw_button(
-            fb,
-            self.rect.tuple(),
-            bg,
-            self.label,
-            Color::TEXT_MAIN,
-            hovered,
-        );
+        MinGuiCompositor::draw_button(fb, r, bg, self.label, Color::TEXT_MAIN, hovered);
+
+        // Seçili durum: odak halkasından bağımsız, yeşil seçişaret çerçevesi.
+        if self.selected {
+            fb.draw_rounded_rect_outline(
+                r.0.saturating_sub(1),
+                r.1.saturating_sub(1),
+                r.2.saturating_add(2),
+                r.3.saturating_add(2),
+                6,
+                Color::ACCENT_GREEN,
+            );
+        }
     }
 
     fn measure(&self, _cross_extent: usize, axis: Axis) -> usize {
@@ -711,10 +777,17 @@ impl Widget for Button {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
     }
 
     fn on_key(&mut self, key: Key) -> WidgetEvent {
+        if !self.enabled {
+            return WidgetEvent::Ignored;
+        }
         if key.is_activate() {
             WidgetEvent::Clicked(self.id)
         } else {
@@ -723,6 +796,9 @@ impl Widget for Button {
     }
 
     fn on_pointer(&mut self, event: PointerEvent) -> WidgetEvent {
+        if !self.enabled {
+            return WidgetEvent::Ignored;
+        }
         match event.kind {
             PointerKind::Down => {
                 self.pressed = true;

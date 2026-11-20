@@ -301,11 +301,11 @@ pub fn read_sector(lba: u64, buffer: &mut [u8]) -> bool {
             return false;
         }
 
-        // TODO: NVMe üzerinden LBA okuma
-        // Submission Entry hazırla
-        // Completion Queue'dan cevap al
+        // Submission/Completion queue DMA belleği henüz
+        // uygulanmadı; sahte başarı yerine false döner.
+        let _ = (lba, buffer);
 
-        true
+        false
     }
 }
 
@@ -316,9 +316,10 @@ pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
             return false;
         }
 
-        // TODO: NVMe üzerinden LBA yazma
+        // NVMe yazma yolu da aynı queue altyapısını gerektirir.
+        let _ = (lba, buffer);
 
-        true
+        false
     }
 }
 

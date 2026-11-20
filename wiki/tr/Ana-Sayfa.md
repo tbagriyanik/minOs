@@ -1,6 +1,6 @@
 # minOs Wiki – Hoş Geldiniz
 
-minOs (Sarman Edition) v2.5.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
+minOs (Sarman Edition) v2.6.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
 
 > 📄 **Proje:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Dil:** [English](../en/)
@@ -23,7 +23,7 @@ minOs (Sarman Edition) v2.5.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 ---
 
-## Durum Özeti (v2.5.0)
+## Durum Özeti (v2.6.0)
 
 | Ölçüm | Değer |
 | :--- | :--- |
@@ -39,6 +39,7 @@ minOs (Sarman Edition) v2.5.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 ## Özellik Özetleri
 
+- **Sürücü Görünürlüğü ve Hata Ayıklama:** `drivers::status` her donanım sürücüsünü `Ready` / `Unavailable` (donanım yok veya profilde devre dışı) / `Error` (başlatma hatası) olarak kararlı hata kodlarıyla kaydeder; başlatma süresi ve sonucu seri günlüğe yazılır (`[DRIVER-STATUS]`/`[DRIVER-INIT]`). Kontrol Paneli **Sürücüler** sekmesi 11 sürücünün durumunu, ağ (adaptör/MAC/link/IP), grafik (framebuffer çözünürlük/format), ses (aygıt/örnekleme hızı/DMA) ve depolama (tür/kapasite) ayrıntılarını gösterir ve **Yeniden Tara** içerir. Sürücüsü hatalı uygulamalar açılışta güvenli biçimde engellenir.
 - **Bellek Yönetimi:** `munmap` gerçek sayfa kaldırma yapar — gerçekleşmiş çerçeveler kaynak defteri üzerinden PMM'e iade edilir, boşalan PT/PD/PDPT sayfa tablosu çerçeveleri geri kazanılır, tembel sayfalar fiziksel bellek harcamaz ve 16 kayıtlı bölge tablosu doluyken ortadan bölme atomik olarak reddedilir. Süreç çıkışı ve fork hata yolları COW/paylaşımlı çerçeve referanslarını doğru bırakır (bayat kayıt ve erken iade yok).
 - **TLS 1.3 HTTPS:** Tarayıcı `https://` bağlantılarını tamamlar; yaprak ve ara sertifika süreleri, CA BasicConstraints/pathLen ve varsa KeyUsage/EKU uzantıları doğrulanır. Host TLS testlerinde doğrulama kestirmesi kaldırılmıştır.
 - **Tarayıcı Motoru:** Progresif (SOF2) JPEG çözme, `@font-face` kural ayrıştırma ve `@keyframes` renk/opaklık animasyonu.

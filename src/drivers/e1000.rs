@@ -10,7 +10,7 @@
 
 use crate::drivers::net::{self, BusKind};
 use core::arch::asm;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 // ---------------------------------------------------------------------------
 // I/O port yardımcıları (PCI için)
@@ -442,6 +442,16 @@ pub fn is_ready() -> bool {
     // PCI taraması kart bulamadığında NE2000 (ISA/PnP) sürücüsü devreye
     // girebilir; `transmit`/`receive`/`poll` bu durumda NE2000'ye yönlenir.
     net::active_bus() == BusKind::IsaPnp && crate::drivers::ne2000::is_ready()
+}
+
+/// `init` sonucunun sınıflandırması (sürücü durum ekranı için):
+/// 0 = çalışmadı, 1 = donanım yok, 2 = hazır, 3 = DMA tahsisi başarısız,
+/// 4 = başlatma hatası.
+static INIT_OUTCOME: AtomicU8 = AtomicU8::new(0);
+
+/// Son `init` çağrısının sınıflandırılmış sonucu.
+pub fn init_outcome() -> u8 {
+    INIT_OUTCOME.load(Ordering::Relaxed)
 }
 
 /// Reports physical Ethernet link state.
@@ -1037,6 +1047,16 @@ unsafe fn init_tx_ring() {
 
 /// Ham bir Ethernet çerçevesini etkin ağ kartı üzerinden iletir.
 pub fn transmit(packet: &[u8]) -> bool {
+    let ok = transmit_raw(packet);
+    if ok {
+        crate::kernel::diag::inc_net_tx(packet.len() as u64);
+    } else {
+        crate::kernel::diag::inc_net_tx_err();
+    }
+    ok
+}
+
+fn transmit_raw(packet: &[u8]) -> bool {
     if !is_ready() || packet.len() > TX_BUF_SIZE {
         return false;
     }
@@ -1206,6 +1226,7 @@ pub fn poll() {
         if n == 0 {
             break;
         }
+        crate::kernel::diag::inc_net_rx(n as u64);
         crate::drivers::netstack::on_packet(&buf[..n]);
         // NE2000: döngü, tampon bitene kadar `receive` içinde sınırlanır.
         if net::active_bus() == BusKind::IsaPnp && !crate::drivers::ne2000::has_pending() {
@@ -1221,6 +1242,7 @@ pub fn poll() {
 pub fn init(pmm_dma_phys: Option<u64>) {
     let Some(phys) = pmm_dma_phys else {
         e1000_print("[NET] DMA ring havuzu ayrılamadı; PCI ağ sürücüsü başlatılmadı.\n");
+        INIT_OUTCOME.store(3, Ordering::Relaxed);
         return;
     };
 
@@ -1343,6 +1365,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 e1000_print(
                     "[NET] Ag adaptoru (Intel / VMware / Realtek / Broadcom) PCI'da bulunamadi.\n",
                 );
+                INIT_OUTCOME.store(1, Ordering::Relaxed);
                 return;
             }
         };
@@ -1362,7 +1385,8 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             } else {
                 0
             };
-            let _ = crate::drivers::ne2000::init_pci(io_base);
+            let ok = crate::drivers::ne2000::init_pci(io_base);
+            INIT_OUTCOME.store(if ok { 2 } else { 4 }, Ordering::Relaxed);
             return;
         }
 
@@ -1589,6 +1613,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 if init_rtl8139(bus, dev, func, base_phys as u16) {
                     e1000_print("[NET] Realtek RTL8139 RX/TX hazir, link acildi.\n");
                 } else {
+                    INIT_OUTCOME.store(4, Ordering::Relaxed);
                     return;
                 }
             }
@@ -1598,6 +1623,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         net::set_bus(BusKind::Pci);
 
         E1000_READY.store(true, Ordering::Relaxed);
+        INIT_OUTCOME.store(2, Ordering::Relaxed);
     }
 }
 fn e1000_print(s: &str) {

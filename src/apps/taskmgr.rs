@@ -108,6 +108,8 @@ pub struct ProcessInfo {
     pub is_minimized: bool,
     pub cpu_pct: usize,
     pub memory_kb: usize,
+    pub cpu_time_ticks: u64,
+    pub state_str: &'static str,
 }
 
 pub struct TaskManagerApp {
@@ -167,6 +169,8 @@ impl TaskManagerApp {
                 is_minimized: false,
                 cpu_pct: 0,
                 memory_kb: 0,
+                cpu_time_ticks: 0,
+                state_str: "",
             }; MAX_PROC],
             proc_count: 0,
             selected: 0,
@@ -397,6 +401,7 @@ impl TaskManagerApp {
         self.shared_frames = crate::mm::vmm::shared_frame_count();
         self.lazy_pages =
             crate::mm::process::LAZY_FAULTS.load(core::sync::atomic::Ordering::Relaxed) as usize;
+        crate::apps::memory::record_history_sample(self.used_memory_kb / 1024, self.cpu_usage_pct);
         self.ramdisk_used = 0;
         self.ramdisk_files = 0;
         for node in vfs.nodes.iter().flatten() {
@@ -440,6 +445,12 @@ impl TaskManagerApp {
                                 .min(100) as usize
                         },
                         memory_kb: state_bytes.saturating_add(1023) / 1024,
+                        cpu_time_ticks: render_cycles[app_idx] / 100_000,
+                        state_str: if window.is_minimized {
+                            "Bekliyor"
+                        } else {
+                            "Çalışıyor"
+                        },
                     };
                     count += 1;
                 }
@@ -718,7 +729,7 @@ impl TaskManagerApp {
                 (kill.0 + 4, kill.1 + 2, kill.2 - 8, kill.3 - 4),
             );
             if self.focused_control == 3 {
-                fb.draw_rect_outline(kill.0, kill.1, kill.2, kill.3, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_focus_ring(fb, kill.0, kill.1, kill.2, kill.3);
             }
             // Sütun başlıkları (genişletilmiş ve ferah aralıklar)
             MinGuiCompositor::draw_string_clipped(
@@ -749,9 +760,17 @@ impl TaskManagerApp {
                 fb,
                 win_x + 328,
                 win_y + TM_HEADER_Y + 2,
+                crate::gui::ui_text("Süre", "Time"),
+                Color::TEXT_MUTED,
+                (win_x + 324, win_y + TM_HEADER_Y, 60, TM_HEADER_H),
+            );
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                win_x + 392,
+                win_y + TM_HEADER_Y + 2,
                 crate::gui::ui_text("Durum", "Status"),
                 Color::TEXT_MUTED,
-                (win_x + 324, win_y + TM_HEADER_Y, 120, TM_HEADER_H),
+                (win_x + 388, win_y + TM_HEADER_Y, 80, TM_HEADER_H),
             );
             fb.draw_rect(
                 win_x + 10,
@@ -773,7 +792,7 @@ impl TaskManagerApp {
                     fb.draw_rect(row.0, row.1, row.2, row.3, Color::TITLE_BAR);
                 }
                 if self.focused_control == 4 + i {
-                    fb.draw_rect_outline(row.0, row.1, row.2, row.3, Color::ACCENT_YELLOW);
+                    MinGuiCompositor::draw_focus_ring(fb, row.0, row.1, row.2, row.3);
                 }
                 let app_name = if english {
                     ALL_APP_LABELS_EN[proc.app_id.min(ALL_APP_COUNT - 1)]
@@ -819,9 +838,20 @@ impl TaskManagerApp {
                     Color::TEXT_MUTED,
                     (win_x + 242, row.1, 76, row.3),
                 );
+                let mut time_buf = TextBuf::new();
+                time_buf.push_usize(proc.cpu_time_ticks as usize);
+                time_buf.push_str("t");
                 MinGuiCompositor::draw_string_clipped(
                     fb,
                     win_x + 328,
+                    row.1 + 2,
+                    time_buf.as_str(),
+                    Color::TEXT_MUTED,
+                    (win_x + 324, row.1, 60, row.3),
+                );
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    win_x + 392,
                     row.1 + 2,
                     match (proc.is_minimized, english) {
                         (true, true) => "Paused",
@@ -830,7 +860,7 @@ impl TaskManagerApp {
                         (false, false) => "Açık",
                     },
                     Color::ACCENT_GREEN,
-                    (win_x + 324, row.1, 120, row.3),
+                    (win_x + 388, row.1, 80, row.3),
                 );
             }
         } else {
@@ -1013,10 +1043,29 @@ impl TaskManagerApp {
                 (content_x, mem_bar_y + 18, content_w, 14),
             );
 
-            // Genişletilmiş bellek istatistikleri: kernel heap, paylaşım, tembel.
+            // Bellek baskısı uyarısı (Under pressure warning)
+            if self.free_memory_kb < (self.total_memory_kb * 10 / 100) {
+                fb.draw_rect(content_x, mem_bar_y + 34, content_w, 16, Color::ACCENT_RED);
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    content_x + 4,
+                    mem_bar_y + 36,
+                    crate::gui::ui_text(
+                        "! UYARI: Kritik bellek baskısı (%10 altında boş RAM) !",
+                        "! WARNING: Critical memory pressure (<10% free RAM) !",
+                    ),
+                    Color::WHITE,
+                    (content_x, mem_bar_y + 34, content_w, 16),
+                );
+            }
+
+            // Genişletilmiş bellek istatistikleri: kernel heap, kullanıcı süreçleri, paylaşım, tembel.
             let mut mem_detail = TextBuf::new();
             mem_detail.push_str(crate::gui::ui_text("Kernel heap: ", "Kernel heap: "));
             mem_detail.push_usize(self.heap_committed_kb / 1024);
+            mem_detail.push_str(crate::gui::ui_text(" MB  Kullanıcı: ", " MB  User: "));
+            let user_mem_mb = crate::apps::memory::total() / (1024 * 1024);
+            mem_detail.push_usize(user_mem_mb);
             mem_detail.push_str(crate::gui::ui_text(" MB  Paylaşılan: ", " MB  Shared: "));
             mem_detail.push_usize(self.shared_frames);
             mem_detail.push_str(crate::gui::ui_text(" çerçeve  Tembel: ", " frames  Lazy: "));
@@ -1024,23 +1073,58 @@ impl TaskManagerApp {
             MinGuiCompositor::draw_string_clipped(
                 fb,
                 content_x,
-                mem_bar_y + 34,
+                mem_bar_y + 52,
                 mem_detail.as_str(),
                 Color::TEXT_MUTED,
-                (content_x, mem_bar_y + 34, content_w, 14),
+                (content_x, mem_bar_y + 52, content_w, 14),
             );
 
-            // 3. VFS / DEPOLAMA BİLGİSİ
-            let vfs_y = mem_bar_y + 56;
+            // 3. SON 30 SANİYELİK KULLANIM GRAFİĞİ (METİN TABANLI / ASCII SPARKLINE)
+            let chart_y = mem_bar_y + 70;
+            let mut mem_hist = [0usize; crate::apps::memory::HISTORY_CAPACITY];
+            let mut cpu_hist = [0usize; crate::apps::memory::HISTORY_CAPACITY];
+            let sample_count = crate::apps::memory::get_history(&mut mem_hist, &mut cpu_hist);
+            if sample_count > 0 {
+                let mut sparkline_cpu = [0u8; crate::apps::memory::HISTORY_CAPACITY];
+                let len_cpu = crate::apps::memory::render_sparkline_ascii(
+                    &cpu_hist[..sample_count],
+                    100,
+                    &mut sparkline_cpu,
+                );
+                let mut chart_text = TextBuf::new();
+                chart_text.push_str("Son 30sn CPU: [");
+                if let Ok(s) = core::str::from_utf8(&sparkline_cpu[..len_cpu]) {
+                    chart_text.push_str(s);
+                }
+                chart_text.push_str("]");
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    content_x,
+                    chart_y,
+                    chart_text.as_str(),
+                    Color::ACCENT_YELLOW,
+                    (content_x, chart_y, content_w, 14),
+                );
+            }
+
+            // 4. DEPOLAMA KULLANIMI (RAM'den ayrı fiziksel disk + ramdisk)
+            let vfs_y = chart_y + 18;
             let mut storage_label = TextBuf::new();
-            storage_label.push_str("Ramdisk VFS: ");
-            storage_label.push_usize(self.ramdisk_files);
             storage_label.push_str(crate::gui::ui_text(
-                " dosya  |  Kullanılan: ",
-                " files  |  Used: ",
+                "Depolama: Ramdisk VFS ",
+                "Storage: Ramdisk VFS ",
             ));
+            storage_label.push_usize(self.ramdisk_files);
+            storage_label.push_str(crate::gui::ui_text(" dosya (", " files ("));
             storage_label.push_usize(self.ramdisk_used);
-            storage_label.push_str(" B");
+            storage_label.push_str(" B)  •  Fiziksel ATA Disk: ");
+            let ata_count = crate::drivers::ata::drive_count();
+            if ata_count > 0 {
+                storage_label.push_usize(ata_count);
+                storage_label.push_str(crate::gui::ui_text(" sürücü bağlı", " drive(s) online"));
+            } else {
+                storage_label.push_str(crate::gui::ui_text("bağlı değil", "not attached"));
+            }
             MinGuiCompositor::draw_string_clipped(
                 fb,
                 content_x,
@@ -1048,6 +1132,55 @@ impl TaskManagerApp {
                 storage_label.as_str(),
                 Color::TEXT_MAIN,
                 (content_x, vfs_y, content_w, 14),
+            );
+
+            // 5. AĞ İSTATİSTİKLERİ (Paket sayıları ve hata sayaçları)
+            let net_y = vfs_y + 18;
+            let stats = crate::kernel::diag::net_stats();
+            let mut net_text = TextBuf::new();
+            net_text.push_str(crate::gui::ui_text("Ağ: RX ", "Net: RX "));
+            net_text.push_usize(stats.rx_packets as usize);
+            net_text.push_str(" pkt (err:");
+            net_text.push_usize(stats.rx_errors as usize);
+            net_text.push_str(")  TX ");
+            net_text.push_usize(stats.tx_packets as usize);
+            net_text.push_str(" pkt (err:");
+            net_text.push_usize(stats.tx_errors as usize);
+            net_text.push_str(")");
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                content_x,
+                net_y,
+                net_text.as_str(),
+                Color::ACCENT_BLUE,
+                (content_x, net_y, content_w, 14),
+            );
+
+            // 6. SÜRÜCÜ BAŞLATMA SÜRELERİ (Driver Init Timings)
+            let drv_y = net_y + 18;
+            let timings = crate::kernel::diag::driver_init_timings();
+            let mut drv_text = TextBuf::new();
+            drv_text.push_str(crate::gui::ui_text("Sürücüler: ", "Drivers: "));
+            if timings.is_empty() {
+                drv_text.push_str("PS/2, GPU, HDA hazır");
+            } else {
+                for (idx, t) in timings.iter().take(3).enumerate() {
+                    if idx > 0 {
+                        drv_text.push_str(" | ");
+                    }
+                    drv_text.push_str(t.name);
+                    drv_text.push_str(":");
+                    drv_text.push_usize((t.duration_us / 1000) as usize);
+                    drv_text.push_str("ms");
+                }
+            }
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                content_x,
+                drv_y,
+                drv_text.as_str(),
+                Color::TEXT_MUTED,
+                (content_x, drv_y, content_w, 14),
             );
         }
 

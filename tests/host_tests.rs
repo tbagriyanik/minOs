@@ -125,6 +125,11 @@ pub mod usb_touchscreen_mod;
 #[path = "../src/drivers/netstack.rs"]
 pub mod netstack_mod;
 
+// Ortak surucu durum modeli: Ready/Unavailable/Error gecisleri,
+// hata kodlari ve uygulama engelleme kurallari.
+#[path = "../src/drivers/status.rs"]
+pub mod driver_status;
+
 pub fn serial_print(_s: &str) {}
 
 pub mod serial {

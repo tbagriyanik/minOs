@@ -840,6 +840,11 @@ impl MinGuiCompositor {
         let (cx, cy, base_cb, _) = win.close_rect();
         let hover_close = in_rect(mx, my, win.close_hit_rect());
         let pressed_close = mouse.left_button && hover_close;
+        // Başlık düğmelerine ipucu: yalnızca odaklı (en üstteki) pencerede
+        // önerilir; alttaki pencereler yanlış tooltip üretmez.
+        if win.is_focused && hover_close {
+            self.tooltip_offer(win.close_hit_rect(), ui_text("Kapat", "Close"));
+        }
         let press_inset = if pressed_close { 2 } else { 0 };
         let (cx, cy, cb) = (
             cx + press_inset,
@@ -886,6 +891,16 @@ impl MinGuiCompositor {
         let (mxr, myr, base_mb, _) = win.max_rect();
         let hover_max = in_rect(mx, my, win.max_hit_rect());
         let pressed_max = mouse.left_button && hover_max;
+        if win.is_focused && hover_max {
+            self.tooltip_offer(
+                win.max_hit_rect(),
+                if win.is_maximized {
+                    ui_text("Önceki boyuta dön", "Restore")
+                } else {
+                    ui_text("Büyüt", "Maximize")
+                },
+            );
+        }
         let max_inset = if pressed_max { 2 } else { 0 };
         let (mxr, myr, mb) = (
             mxr + max_inset,
@@ -1030,6 +1045,9 @@ impl MinGuiCompositor {
         let (nx, ny, base_nb, _) = win.min_rect();
         let hover_min = in_rect(mx, my, win.min_hit_rect());
         let pressed_min = mouse.left_button && hover_min;
+        if win.is_focused && hover_min {
+            self.tooltip_offer(win.min_hit_rect(), ui_text("Küçült", "Minimize"));
+        }
         let min_inset = if pressed_min { 2 } else { 0 };
         let (nx, ny, nb) = (
             nx + min_inset,

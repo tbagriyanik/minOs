@@ -2,6 +2,96 @@
 
 Komut istemi, masaüstü kısayolları ve kaynak ağacı referansı.
 
+## ⚡ 5 Dakikalık Hızlı Başlangıç
+
+> **Yeni başlıyorsanız buradan başlayın!** Bu kılavuz minOs'u QEMU'da çalıştırıp ilk komutları denemeniz için 5 dakika sürer.
+
+### 1. Depoyu Klonlayın ve Derleyin
+
+```powershell
+git clone https://github.com/tbagriyanik/minos.git
+cd minos
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+```
+
+> **İpucu:** Sadece ISO oluşturmak için `.\build_iso.ps1` kullanın. Host testleri için `.\test_host.ps1`.
+
+### 2. Masaüstüne Hoş Geldiniz!
+
+- **Hoş Geldin ekranı** açılışta gelir. 5 kısayol butonu vardır: **Başlangıç**, **Dosyalar**, **Ayarlar**, **Terminal**, **Yardım**.
+- **Fare** ve **klavye** (USB HID) çalışır. `Super` tuşu (Windows/Cmd) masaüstü kısayolları için kullanılır.
+- **Başlat Menüsü:** `Super` tuşuna basın veya sol alt köşedeki **minOs** logosuna tıklayın. Ok tuşlarıyla gezin, `Enter` ile açın.
+
+### 3. İlk Terminal Komutlarınız
+
+Terminal'i açın: `Super` → **Terminal** yazın → `Enter` (veya `Super+E` sonra `cmd` yazın).
+
+```bash
+# Nerede olduğunu gör
+pwd
+
+# Dosya sistemi kökünü listele
+ls /
+
+# Ev dizinine git ve dosya oluştur
+cd ~
+touch merhaba.txt
+write merhaba.txt "Merhaba minOs!"
+cat merhaba.txt
+
+# Yardım al
+help
+help ls        # komut-specific yardım
+```
+
+### 4. Uygulama Açma
+
+```bash
+# Doğrudan uygulama adı yazın
+files        # Dosya Yöneticisi
+notepad      # Not Defteri
+calc         # Hesap Makinesi
+browser      # Web Tarayıcısı
+settings     # Sistem Ayarları
+```
+
+veya terminalden: `open files`, `open browser`
+
+### 5. Temel Masaüstü Kısayolları
+
+| Kısayol | İşlem |
+|---------|-------|
+| `Super` | Başlat menüsü |
+| `Super+E` | Dosya Yöneticisi |
+| `Super+D` | Masaüstünü göster/gizle |
+| `Alt+Tab` | Pencere değiştir |
+| `Super+←/→` | Sanal masaüstü değiştir |
+| `F5` | Yenile (dosya listesi, sayfa, paketler) |
+| `F12` / `PrintScreen` | Ekran görüntüsü |
+| `Ctrl+Alt+Del` | Görev Yöneticisi |
+
+### 6. Ağ Testi (varsa)
+
+```bash
+ipconfig          # IP adresinizi görün
+ping 8.8.8.8      # İnternet bağlantısını test edin
+curl http://example.com
+```
+
+### 7. Sistem Bilgisi
+
+```bash
+fetch             # ASCII art + sistem özeti
+mem               # Bellek kullanımı
+disks             # Bağlı diskler
+```
+
+---
+
+**Sonraki adımlar:** Bu rehberin geri kalanında tüm komutlar, masaüstü kısayolları, kurtarma konsolu ve proje yapısı detaylı anlatılmıştır. `docs/building.md` derleme seçenekleri için, `docs/features.md` özellikler ve yol haritası için bakınız.
+
+---
+
 ## 💻 Komut İstemi (MinShell) Desteklenen Komutlar
 
 MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`Tab`) ve dinamik çıktı kaydırma desteğiyle aşağıdaki komutları destekler:
@@ -161,7 +251,7 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 17 Kasım 2026 (v2.5.0)
+> Son güncelleme: 17 Kasım 2026 (v2.6.0)
 | Ölçüt | Değer |
 | :--- | :--- |
 | **Toplam Rust Kaynak Dosyası** | 223 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |

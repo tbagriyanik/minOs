@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 ---
 
-## Code Statistics (v2.5.0)
+## Code Statistics (v2.6.0)
 
 | Metric | Value |
 | :--- | :--- |

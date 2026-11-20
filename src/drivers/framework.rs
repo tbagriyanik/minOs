@@ -83,9 +83,21 @@ impl DriverRegistry {
                 continue;
             }
             entry.state = DriverState::Probed;
-            match entry.driver.init() {
-                Ok(()) => entry.state = DriverState::Ready,
-                Err(_) => entry.state = DriverState::Failed,
+            let t0 = crate::monotonic_ms();
+            let res = entry.driver.init();
+            let duration_us = (crate::monotonic_ms().saturating_sub(t0)).saturating_mul(1000);
+            match res {
+                Ok(()) => {
+                    entry.state = DriverState::Ready;
+                    // Sürücü adı heap String olduğundan statik sızıntı yerine bilinen adı eşle veya sızıntı yap
+                    let name_static = alloc::boxed::Box::leak(entry.name.clone().into_boxed_str());
+                    crate::kernel::diag::record_driver_init(name_static, duration_us, true);
+                }
+                Err(_) => {
+                    entry.state = DriverState::Failed;
+                    let name_static = alloc::boxed::Box::leak(entry.name.clone().into_boxed_str());
+                    crate::kernel::diag::record_driver_init(name_static, duration_us, false);
+                }
             }
         }
     }

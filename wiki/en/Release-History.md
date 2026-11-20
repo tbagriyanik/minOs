@@ -4,7 +4,14 @@ minOs release notes and future plans.
 
 ---
 
-## v2.5.0 (Current)
+## v2.6.0 (Current)
+
+### What's New
+
+- **Driver Visibility & Debugging:** A shared driver status model (`drivers::status`) records every hardware driver as `Ready` / `Unavailable` (hardware absent or disabled by boot profile) / `Error` (init failure) with a stable error code and short description; init duration and result are logged to serial. The Control Panel gained a **Drivers** tab showing all 11 driver statuses plus network (adapter/MAC/link/IP), graphics (framebuffer resolution/format), audio (device/sample rate/DMA) and storage (type/capacity/readiness) details, with a **Rescan** button. NIC and HDA drivers now distinguish "no hardware" from "init failure"; apps that depend on a failed driver are safely blocked at launch.
+- **🛡️ File Manager & Installer Confirmation Dialogs:** Creating a new file/folder, renaming and deleting (move to Recycle Bin or permanent delete) now require a labeled confirmation window — Enter confirms, Esc cancels. The Installation Wizard's `Format` and `One-Click Install` steps ask for the same confirmation.
+
+## v2.5.0
 
 ### What's New
 

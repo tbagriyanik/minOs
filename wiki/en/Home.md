@@ -1,6 +1,6 @@
 # minOs Wiki – Welcome
 
-minOs (Sarman Edition) v2.5.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
+minOs (Sarman Edition) v2.6.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
 
 > 📄 **Project:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Language:** [English](/)| [Türkçe](../tr/)
@@ -23,7 +23,7 @@ minOs (Sarman Edition) v2.5.0 is a standalone 64-bit (`x86_64`) operating system
 
 ---
 
-## Status Summary (v2.5.0)
+## Status Summary (v2.6.0)
 
 | Metric | Value |
 | :--- | :--- |
@@ -40,6 +40,7 @@ minOs (Sarman Edition) v2.5.0 is a standalone 64-bit (`x86_64`) operating system
 
 ## Feature Highlights
 
+- **Driver Visibility & Debugging:** `drivers::status` records every hardware driver as `Ready` / `Unavailable` (hardware absent or disabled by boot profile) / `Error` (init failure) with stable error codes; init duration and result are logged to serial (`[DRIVER-STATUS]`/`[DRIVER-INIT]`). The Control Panel **Drivers** tab shows all 11 driver statuses plus adapter/MAC/link/IP, framebuffer resolution/format, audio device/sample-rate/DMA and storage type/capacity details, with a **Rescan** button. Apps depending on a failed driver are blocked safely at launch.
 - **Memory Management:** `munmap` performs real page teardown — realized frames return to the PMM via the resource ledger, emptied PT/PD/PDPT page-table frames are reclaimed, lazy pages cost no physical memory, and middle splits are rejected atomically when the 16-entry region table is full. Process exit and fork-failure paths release COW/shared-frame references correctly (no stale entries or premature frees).
 - **TLS 1.3 HTTPS:** Browser validates leaf and intermediate certificate validity, CA BasicConstraints/pathLen and any KeyUsage/EKU extensions; host TLS tests exercise the same validation path.
 - **Browser Engine:** Progressive (SOF2) JPEG decoding, `@font-face` rule parsing and `@keyframes` color/opacity animation.

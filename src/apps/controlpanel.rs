@@ -1,24 +1,35 @@
 //! Kontrol Paneli (Control Panel)
 //!
-//! Sistem, ağ ve sürüm bilgilerini canlı çekirdek API'lerinden okuyup gösteren
-//! salt okunur panel; alt kısımdaki düğme ile tema değiştirilebilir.
+//! Sistem, ağ, depolama ve sistem izleme bilgilerini canlı çekirdek API'lerinden
+//! okuyup gösteren salt okunur panel; alt kısımdaki düğme ile tema değiştirilebilir.
 //! Eski sürümdeki sabit/sahte değerler (128 MB RAM, sabit 1280x720, çelişkili
 //! ağ durumu) yerine gerçek veriler kullanılır.
 
 use crate::drivers::keyboard::KeyboardLayout;
 use crate::drivers::rtc::DateTime;
+use crate::drivers::status::DriverId;
 use crate::drivers::video::Framebuffer;
 use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-/// Sekme sayısı: Sistem, Ağ, Hakkında, Testler.
-pub const TAB_COUNT: usize = 4;
+/// Sekme sayısı: Sistem, Ağ, Hakkında, Testler, İzleme, Sürücüler.
+pub const TAB_COUNT: usize = 6;
+
+/// Sistem izleme ekranının kendi render süresi (µs). Kullanım ekranının
+/// kendisini yavaşlattığını ölçmek için kullanılır.
+static MONITOR_RENDER_US: AtomicU64 = AtomicU64::new(0);
+
+/// İzleme ekranının son ölçülen render süresini döndürür (µs).
+pub fn monitor_render_us() -> u64 {
+    MONITOR_RENDER_US.load(Ordering::Relaxed)
+}
 
 static ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
 static REFRESHED_AT_MS: AtomicU64 = AtomicU64::new(0);
 /// Klavye (Tab / Shift+Tab) ile gezilen odaklı denetim:
 /// 0..TAB_COUNT sekmeler, TAB_COUNT "Ayarlar" düğmesi,
-/// TAB_COUNT+1 "Ağ Testi" (yalnız Ağ sekmesi), TAB_COUNT+2 "Performans Testi" (yalnız Testler sekmesi).
+/// TAB_COUNT+1 "Ağ Testi" (yalnız Ağ sekmesi), "Performans Testi" (yalnız Testler
+/// sekmesi) veya "Yeniden Tara" (yalnız Sürücüler sekmesi).
 static FOCUSED_CONTROL: AtomicUsize = AtomicUsize::new(0);
 /// 0: bos, 1: yanit bekleniyor, 2: basarili, 3: basarisiz.
 static NET_TEST_STATE: AtomicUsize = AtomicUsize::new(0);
@@ -27,6 +38,11 @@ static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
 // --- Performans testi (Testler sekmesi) ---
 
 use crate::apps::perfbench::{self, PerfRates};
+
+// Sistem izleme için çekirdek tanılama ve bellek profili erişimi.
+use crate::apps::memory::{get_history, history_len, render_sparkline_ascii};
+use crate::kernel::diag;
+use crate::kernel::heap::profile as heap_profile;
 
 /// Performans testinin aşamaları.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -81,6 +97,16 @@ static PERF_GFX_US: AtomicU64 = AtomicU64::new(0);
 
 /// Kare teslim ölçümünün süresi (3 saniye).
 const PERF_DURATION_US: u64 = 3_000_000;
+
+/// Depolama sürücüsü satırı: algılama, ad ve (varsa) kapasite sorguları.
+/// Sürücüler tablosunda her satır için kullanılır.
+#[derive(Clone, Copy)]
+struct StorageDriver {
+    id: DriverId,
+    detected: fn() -> bool,
+    name_tr: fn() -> &'static str,
+    capacity_bytes: fn() -> u64,
+}
 
 pub fn perf_phase() -> PerfPhase {
     match PERF_PHASE.load(Ordering::Relaxed) {
@@ -372,7 +398,11 @@ pub fn select_tab(tab: usize) {
 /// sonda etkin sekmeye özgü tek düğme (TAB_COUNT+1). Ağ sekmesinde bu
 /// düğme "Ağ Testi", Testler sekmesinde "Performans Testi" olur.
 fn focusable_count() -> usize {
-    TAB_COUNT + 1 + usize::from(active_tab() == 1) + usize::from(active_tab() == 3)
+    TAB_COUNT
+        + 1
+        + usize::from(active_tab() == 1)
+        + usize::from(active_tab() == 3)
+        + usize::from(active_tab() == 5)
 }
 
 /// Odaklı denetim indeksini döndürür.
@@ -430,6 +460,9 @@ pub fn focused_rect(
     if f == TAB_COUNT + 1 && active_tab() == 3 {
         return Some(perf_btn_rect(win_x, win_y, win_w, win_h));
     }
+    if f == TAB_COUNT + 1 && active_tab() == 5 {
+        return Some(rescan_btn_rect(win_x, win_y, win_w, win_h));
+    }
     None
 }
 
@@ -439,6 +472,7 @@ pub enum CpAction {
     OpenSettings,
     NetTest,
     PerfTest,
+    RescanDrivers,
 }
 
 /// Odaklı denetimi etkinleştirir; ana eylemler `event_loop` tarafından yürütülür.
@@ -456,6 +490,9 @@ pub fn activate_focused() -> CpAction {
     }
     if f == TAB_COUNT + 1 && active_tab() == 3 {
         return CpAction::PerfTest;
+    }
+    if f == TAB_COUNT + 1 && active_tab() == 5 {
+        return CpAction::RescanDrivers;
     }
     CpAction::None
 }
@@ -559,6 +596,22 @@ pub fn net_test_btn_rect(
     (anchor.0, anchor.1, bw, anchor.3)
 }
 
+/// "Yeniden Tara" düğmesinin tıklanabilir dikdörtgeni (Sürücüler sekmesi).
+pub fn rescan_btn_rect(
+    win_x: usize,
+    win_y: usize,
+    win_w: usize,
+    win_h: usize,
+) -> (usize, usize, usize, usize) {
+    perf_btn_rect(win_x, win_y, win_w, win_h)
+}
+
+/// Sürücüleri yeniden tarar (donanıma dokunmayan güvenli algılama turu).
+pub fn rescan_drivers() {
+    crate::boot::devices::rescan_drivers();
+    refresh();
+}
+
 fn draw_row(
     fb: &mut Framebuffer,
     x: usize,
@@ -577,6 +630,22 @@ fn draw_row(
         crate::gui::sp(20),
     );
     MinGuiCompositor::draw_string_clipped(fb, value_x, y, value, color, clip);
+}
+
+/// Kart başlığı çubuğu: ilgili satır grubunu bir başlıkla görsel olarak ayırır.
+/// Dönen değer, başlık çubuğunun altındaki ilk satırın y konumudur.
+fn draw_section(fb: &mut Framebuffer, x: usize, y: usize, w: usize, title: &str) -> usize {
+    let h = sp(20);
+    fb.draw_rect(x, y, w, h, Color::TITLE_BAR_INACTIVE);
+    fb.draw_rect_outline(x, y, w, h, Color::BORDER);
+    MinGuiCompositor::draw_string(
+        fb,
+        x + sp(8),
+        y + (h.saturating_sub(MinGuiCompositor::text_height())) / 2,
+        title,
+        Color::ACCENT_BLUE,
+    );
+    y.saturating_add(h).saturating_add(sp(6))
 }
 
 fn push_time(buf: &mut TextBuf, now: &DateTime) {
@@ -630,8 +699,15 @@ pub fn render_content(
     kbd_layout: KeyboardLayout,
 ) {
     poll_network_test();
-    let names_tr = ["Sistem", "Ağ", "Hakkında", "Testler"];
-    let names_en = ["System", "Network", "About", "Tests"];
+    let names_tr = ["Sistem", "Ağ", "Hakkında", "Testler", "İzleme", "Sürücüler"];
+    let names_en = [
+        "System",
+        "Network",
+        "About",
+        "Tests",
+        "Monitoring",
+        "Drivers",
+    ];
 
     for i in 0..TAB_COUNT {
         let r = tab_rect(win_x, win_y, win_w, i);
@@ -682,6 +758,237 @@ pub fn render_content(
 
     match active_tab() {
         0 => {
+            // === Üst kısım: Durum kartları (RAM, Disk, Sürücüler) ===
+            let card_w = row_w / 3;
+            let card_h = sp(72);
+            let gap = sp(8);
+            let cards_y = panel_y + 12;
+
+            // RAM Kartı
+            let ram_card_x = left;
+            fb.draw_rect(ram_card_x, cards_y, card_w, card_h, Color::WINDOW_BG);
+            fb.draw_rect_outline(ram_card_x, cards_y, card_w, card_h, Color::BORDER);
+
+            let total_mb = total_ram_bytes / (1024 * 1024);
+            let used_mb = used_ram_bytes / (1024 * 1024);
+            let free_mb = total_mb.saturating_sub(used_mb);
+            let ram_percent = if total_mb > 0 {
+                (used_mb * 100).checked_div(total_mb).unwrap_or(0)
+            } else {
+                0
+            };
+
+            let ram_title = crate::gui::ui_text("🧠 RAM", "🧠 RAM");
+            MinGuiCompositor::draw_string(
+                fb,
+                ram_card_x + sp(8),
+                cards_y + sp(6),
+                ram_title,
+                Color::ACCENT_BLUE,
+            );
+
+            let mut ram_val = TextBuf::new();
+            ram_val.push_usize(used_mb as usize);
+            ram_val.push_str(" / ");
+            ram_val.push_usize(total_mb as usize);
+            ram_val.push_str(" MB");
+            MinGuiCompositor::draw_string(
+                fb,
+                ram_card_x + sp(8),
+                cards_y + sp(24),
+                ram_val.as_str(),
+                Color::TEXT_MAIN,
+            );
+
+            let mut ram_free = TextBuf::new();
+            ram_free.push_str(crate::gui::ui_text("Boş: ", "Free: "));
+            ram_free.push_usize(free_mb as usize);
+            ram_free.push_str(" MB  ");
+            ram_free.push_str(crate::gui::ui_text("%", "%"));
+            ram_free.push_usize(ram_percent as usize);
+            MinGuiCompositor::draw_string(
+                fb,
+                ram_card_x + sp(8),
+                cards_y + sp(40),
+                ram_free.as_str(),
+                if ram_percent >= 90 {
+                    Color::ACCENT_RED
+                } else if ram_percent >= 70 {
+                    Color::ACCENT_YELLOW
+                } else {
+                    Color::ACCENT_GREEN
+                },
+            );
+
+            // RAM doluluk çubuğu
+            let bar_x = ram_card_x + sp(8);
+            let bar_y = cards_y + card_h - sp(18);
+            let bar_w = card_w - sp(16);
+            fb.draw_rect(bar_x, bar_y, bar_w, sp(10), Color::DARK_BG);
+            let fill = bar_w.saturating_mul(ram_percent.min(100) as usize) / 100;
+            let bar_color = if ram_percent >= 90 {
+                Color::ACCENT_RED
+            } else if ram_percent >= 70 {
+                Color::ACCENT_YELLOW
+            } else {
+                Color::ACCENT_GREEN
+            };
+            fb.draw_rect(bar_x, bar_y, fill, sp(10), bar_color);
+
+            // Disk Kartı
+            let disk_card_x = ram_card_x + card_w + gap;
+            fb.draw_rect(disk_card_x, cards_y, card_w, card_h, Color::WINDOW_BG);
+            fb.draw_rect_outline(disk_card_x, cards_y, card_w, card_h, Color::BORDER);
+
+            let sectors = crate::drivers::ata::drive_capacity_sectors(0);
+            let disk_mb = sectors.saturating_mul(512) / (1024 * 1024);
+
+            let disk_title = crate::gui::ui_text("💾 Disk", "💾 Disk");
+            MinGuiCompositor::draw_string(
+                fb,
+                disk_card_x + sp(8),
+                cards_y + sp(6),
+                disk_title,
+                Color::ACCENT_GREEN,
+            );
+
+            let mut disk_val = TextBuf::new();
+            if sectors == 0 {
+                disk_val.push_str(crate::gui::ui_text("Sürücü yok", "No drive"));
+            } else {
+                disk_val.push_usize(disk_mb as usize);
+                disk_val.push_str(" MB");
+            }
+            MinGuiCompositor::draw_string(
+                fb,
+                disk_card_x + sp(8),
+                cards_y + sp(24),
+                disk_val.as_str(),
+                if sectors == 0 {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MAIN
+                },
+            );
+
+            let mut disk_detail = TextBuf::new();
+            if sectors > 0 {
+                disk_detail.push_str(crate::gui::ui_text(
+                    "ATA0 • FAT32/ext4",
+                    "ATA0 • FAT32/ext4",
+                ));
+            } else {
+                disk_detail.push_str(crate::gui::ui_text("Bağlı değil", "Not connected"));
+            }
+            MinGuiCompositor::draw_string(
+                fb,
+                disk_card_x + sp(8),
+                cards_y + sp(40),
+                disk_detail.as_str(),
+                Color::TEXT_MUTED,
+            );
+
+            // Disk çubuğu (sadece kapasite gösterimi)
+            let disk_bar_x = disk_card_x + sp(8);
+            let disk_bar_y = cards_y + card_h - sp(18);
+            let disk_bar_w = card_w - sp(16);
+            fb.draw_rect(disk_bar_x, disk_bar_y, disk_bar_w, sp(10), Color::DARK_BG);
+            if sectors > 0 {
+                fb.draw_rect(
+                    disk_bar_x,
+                    disk_bar_y,
+                    disk_bar_w,
+                    sp(10),
+                    Color::ACCENT_GREEN,
+                );
+            }
+
+            // Sürücüler Kartı
+            let drv_card_x = disk_card_x + card_w + gap;
+            fb.draw_rect(drv_card_x, cards_y, card_w, card_h, Color::WINDOW_BG);
+            fb.draw_rect_outline(drv_card_x, cards_y, card_w, card_h, Color::BORDER);
+
+            use crate::drivers::status;
+            let (n_ready, n_unavail, n_err, n_other) = status::summary();
+
+            let drv_title = crate::gui::ui_text("⚙️ Sürücüler", "⚙️ Drivers");
+            MinGuiCompositor::draw_string(
+                fb,
+                drv_card_x + sp(8),
+                cards_y + sp(6),
+                drv_title,
+                Color::ACCENT_PINK,
+            );
+
+            let mut drv_val = TextBuf::new();
+            drv_val.push_str(crate::gui::ui_text("Hazır: ", "Ready: "));
+            drv_val.push_usize(n_ready);
+            drv_val.push_str("  ");
+            drv_val.push_str(crate::gui::ui_text("Kullanılamıyor: ", "Unavail: "));
+            drv_val.push_usize(n_unavail);
+            MinGuiCompositor::draw_string(
+                fb,
+                drv_card_x + sp(8),
+                cards_y + sp(24),
+                drv_val.as_str(),
+                Color::TEXT_MAIN,
+            );
+
+            let mut drv_err = TextBuf::new();
+            drv_err.push_str(crate::gui::ui_text("Hata: ", "Error: "));
+            drv_err.push_usize(n_err);
+            if n_other > 0 {
+                drv_err.push_str("  ");
+                drv_err.push_str(crate::gui::ui_text("Bilinmeyen: ", "Unknown: "));
+                drv_err.push_usize(n_other);
+            }
+            MinGuiCompositor::draw_string(
+                fb,
+                drv_card_x + sp(8),
+                cards_y + sp(40),
+                drv_err.as_str(),
+                if n_err > 0 {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MUTED
+                },
+            );
+
+            // Sürücüler çubuğu
+            let drv_bar_x = drv_card_x + sp(8);
+            let drv_bar_y = cards_y + card_h - sp(18);
+            let drv_bar_w = card_w - sp(16);
+            fb.draw_rect(drv_bar_x, drv_bar_y, drv_bar_w, sp(10), Color::DARK_BG);
+            let total_drv = n_ready + n_unavail + n_err + n_other;
+            if total_drv > 0 {
+                let ready_w = drv_bar_w
+                    .saturating_mul(n_ready)
+                    .checked_div(total_drv)
+                    .unwrap_or(0);
+                let unavail_w = drv_bar_w
+                    .saturating_mul(n_unavail)
+                    .checked_div(total_drv)
+                    .unwrap_or(0);
+                let err_w = drv_bar_w
+                    .saturating_mul(n_err)
+                    .checked_div(total_drv)
+                    .unwrap_or(0);
+                let mut x = drv_bar_x;
+                if ready_w > 0 {
+                    fb.draw_rect(x, drv_bar_y, ready_w, sp(10), Color::ACCENT_GREEN);
+                    x += ready_w;
+                }
+                if unavail_w > 0 {
+                    fb.draw_rect(x, drv_bar_y, unavail_w, sp(10), Color::ACCENT_YELLOW);
+                    x += unavail_w;
+                }
+                if err_w > 0 {
+                    fb.draw_rect(x, drv_bar_y, err_w, sp(10), Color::ACCENT_RED);
+                }
+            }
+
+            // Kartlar altına boşluk
+            let mut y = cards_y + card_h + sp(16);
             draw_row(
                 fb,
                 left,
@@ -718,6 +1025,8 @@ pub fn render_content(
                 Color::ACCENT_GREEN,
             );
             y += step;
+
+            y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Bellek", "Memory"));
 
             let total_mb = total_ram_bytes / (1024 * 1024);
             let used_mb = used_ram_bytes / (1024 * 1024);
@@ -759,6 +1068,45 @@ pub fn render_content(
             };
             fb.draw_rect(bar_x, y - 4, fill, 8, bar_color);
             y += step;
+
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Depolama", "Storage"),
+            );
+            let sectors = crate::drivers::ata::drive_capacity_sectors(0);
+            let megabytes = sectors.saturating_mul(512) / (1024 * 1024);
+            let mut storage = TextBuf::new();
+            if sectors == 0 {
+                storage.push_str(crate::gui::ui_text("Sürücü bulunamadı", "Drive not found"));
+            } else {
+                storage.push_usize(megabytes as usize);
+                storage.push_str(" MB");
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Disk:", "Disk:"),
+                storage.as_str(),
+                if sectors == 0 {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MAIN
+                },
+            );
+            y += step;
+
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Ekran · Tema · Klavye", "Display · Theme · Keyboard"),
+            );
 
             let mut screen = TextBuf::new();
             screen.push_usize(fb.width);
@@ -802,6 +1150,14 @@ pub fn render_content(
             );
             y += step;
 
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Süre / Tarih", "Uptime / Date"),
+            );
+
             let mut info = TextBuf::new();
             push_uptime(&mut info, (crate::monotonic_ms() / 1000) as usize);
             info.push_str(" • ");
@@ -819,6 +1175,8 @@ pub fn render_content(
             );
         }
         1 => {
+            y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Ağ", "Network"));
+
             let nic_ok = crate::drivers::e1000::is_ready();
             let mut nic = TextBuf::new();
             if nic_ok {
@@ -962,6 +1320,8 @@ pub fn render_content(
                     false,
                 )
             };
+            y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Ses", "Audio"));
+
             draw_row(
                 fb,
                 left,
@@ -976,6 +1336,8 @@ pub fn render_content(
                 },
             );
             y += step;
+
+            y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Test", "Test"));
 
             let (net_test, net_color) = match NET_TEST_STATE.load(Ordering::Relaxed) {
                 1 => (
@@ -1150,6 +1512,632 @@ pub fn render_content(
                 );
             }
         }
+        4 => {
+            // İzleme (Monitoring) sekmesi: sistem genelinin canlı özeti.
+            let render_start = crate::monotonic_ms();
+
+            y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Bellek", "Memory"));
+
+            let total_mb = total_ram_bytes / (1024 * 1024);
+            let used_mb = used_ram_bytes / (1024 * 1024);
+            let free_mb = total_mb.saturating_sub(used_mb);
+            let free_pct = if total_mb > 0 {
+                (free_mb * 100).checked_div(total_mb).unwrap_or(0)
+            } else {
+                0
+            };
+            let under_pressure = free_pct < 10;
+
+            // Bellek baskısı uyarısı.
+            if under_pressure {
+                let warn = crate::gui::ui_text(
+                    "UYARI: Bellek baskısı! Boş RAM %10'ın altına düştü.",
+                    "WARNING: Memory pressure! Free RAM below 10%.",
+                );
+                fb.draw_rect(left, y, row_w, sp(20), Color::ACCENT_RED);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    left + sp(8),
+                    y + (sp(20).saturating_sub(MinGuiCompositor::text_height())) / 2,
+                    warn,
+                    Color::WHITE,
+                );
+                y += sp(20) + sp(6);
+            }
+
+            let mut ram = TextBuf::new();
+            ram.push_usize(used_mb as usize);
+            ram.push_str(" / ");
+            ram.push_usize(total_mb as usize);
+            ram.push_str(" MB (");
+            ram.push_usize(free_pct as usize);
+            ram.push_str("% ");
+            ram.push_str(crate::gui::ui_text("boş", "free"));
+            ram.push_str(")");
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Toplam / Boş RAM:", "Total / Free RAM:"),
+                ram.as_str(),
+                if under_pressure {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MAIN
+                },
+            );
+            y += step;
+
+            // Kernel heap.
+            let heap = heap_profile();
+            let heap_committed_kb = heap.committed_bytes / 1024;
+            let heap_mapped_kb = heap.mapped_bytes / 1024;
+            let mut heap_txt = TextBuf::new();
+            heap_txt.push_usize(heap_committed_kb as usize);
+            heap_txt.push_str(" / ");
+            heap_txt.push_usize(heap_mapped_kb as usize);
+            heap_txt.push_str(" KB (commit / mapped)");
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Kernel Heap:", "Kernel Heap:"),
+                heap_txt.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // Disk (RAM'den ayrı gösterilir).
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Depolama", "Storage"),
+            );
+            let sectors = crate::drivers::ata::drive_capacity_sectors(0);
+            let disk_mb = sectors.saturating_mul(512) / (1024 * 1024);
+            let mut disk_txt = TextBuf::new();
+            if sectors == 0 {
+                disk_txt.push_str(crate::gui::ui_text("Sürücü bulunamadı", "Drive not found"));
+            } else {
+                disk_txt.push_usize(disk_mb as usize);
+                disk_txt.push_str(" MB");
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Disk:", "Disk:"),
+                disk_txt.as_str(),
+                if sectors == 0 {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MAIN
+                },
+            );
+            y += step;
+
+            // Ağ paket ve hata sayaçları.
+            y = draw_section(fb, left, y, row_w, crate::gui::ui_text("Ağ", "Network"));
+            let net = diag::net_stats();
+            let mut net_txt = TextBuf::new();
+            net_txt.push_str(crate::gui::ui_text("Paket G/Ç:", "Packets RX/TX:"));
+            net_txt.push_usize(net.rx_packets as usize);
+            net_txt.push_str(" / ");
+            net_txt.push_usize(net.tx_packets as usize);
+            net_txt.push_str("  ");
+            net_txt.push_str(crate::gui::ui_text("Bayt G/Ç:", "Bytes RX/TX:"));
+            net_txt.push_usize(net.rx_bytes as usize);
+            net_txt.push_str(" / ");
+            net_txt.push_usize(net.tx_bytes as usize);
+            draw_row(fb, left, y, row_w, "", net_txt.as_str(), Color::TEXT_MAIN);
+            y += step;
+
+            let mut err_txt = TextBuf::new();
+            err_txt.push_str(crate::gui::ui_text("Hata G/Ç:", "Errors RX/TX:"));
+            err_txt.push_usize(net.rx_errors as usize);
+            err_txt.push_str(" / ");
+            err_txt.push_usize(net.tx_errors as usize);
+            err_txt.push_str("  ");
+            err_txt.push_str(crate::gui::ui_text("Düşürülen:", "Dropped:"));
+            err_txt.push_usize(net.dropped as usize);
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                "",
+                err_txt.as_str(),
+                if net.rx_errors > 0 || net.tx_errors > 0 || net.dropped > 0 {
+                    Color::ACCENT_YELLOW
+                } else {
+                    Color::TEXT_MAIN
+                },
+            );
+            y += step;
+
+            // Sürücü başlatma süreleri.
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Sürücü Başlatma", "Driver Init"),
+            );
+            let timings = diag::driver_init_timings();
+            if timings.is_empty() {
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    crate::gui::ui_text("Veri yok", "No data"),
+                    "",
+                    Color::TEXT_MUTED,
+                );
+                y += step;
+            } else {
+                for t in timings.iter() {
+                    let mut t_txt = TextBuf::new();
+                    t_txt.push_str(t.name);
+                    t_txt.push_str(": ");
+                    t_txt.push_usize(t.duration_us as usize);
+                    t_txt.push_str(" µs");
+                    if !t.ok {
+                        t_txt.push_str(" ");
+                        t_txt.push_str(crate::gui::ui_text("BAŞARISIZ", "FAILED"));
+                    }
+                    draw_row(
+                        fb,
+                        left,
+                        y,
+                        row_w,
+                        "",
+                        t_txt.as_str(),
+                        if t.ok {
+                            Color::TEXT_MAIN
+                        } else {
+                            Color::ACCENT_RED
+                        },
+                    );
+                    y += step;
+                }
+            }
+
+            // Son 30 saniyelik kullanım grafiği (metin tabanlı sparkline).
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Kullanım Geçmişi (30s)", "Usage History (30s)"),
+            );
+            let hist_len = history_len();
+            if hist_len == 0 {
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    crate::gui::ui_text("Henüz örnek yok", "No samples yet"),
+                    "",
+                    Color::TEXT_MUTED,
+                );
+                y += step;
+            } else {
+                let mut mem_vals = [0usize; crate::apps::memory::HISTORY_CAPACITY];
+                let mut cpu_vals = [0usize; crate::apps::memory::HISTORY_CAPACITY];
+                let count = get_history(&mut mem_vals, &mut cpu_vals);
+
+                let mut max_mem = 0usize;
+                for &val in &mem_vals[..count] {
+                    max_mem = max_mem.max(val);
+                }
+                let mut spark = [0u8; crate::apps::memory::HISTORY_CAPACITY];
+                let n = render_sparkline_ascii(&mem_vals[..count], max_mem, &mut spark);
+                let spark_str = core::str::from_utf8(&spark[..n]).unwrap_or("");
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    crate::gui::ui_text("RAM:", "RAM:"),
+                    spark_str,
+                    Color::ACCENT_BLUE,
+                );
+                y += step;
+
+                let mut max_cpu = 0usize;
+                for &val in &cpu_vals[..count] {
+                    max_cpu = max_cpu.max(val);
+                }
+                let n = render_sparkline_ascii(&cpu_vals[..count], max_cpu.max(1), &mut spark);
+                let spark_str = core::str::from_utf8(&spark[..n]).unwrap_or("");
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    crate::gui::ui_text("CPU:", "CPU:"),
+                    spark_str,
+                    Color::ACCENT_GREEN,
+                );
+                y += step;
+            }
+
+            // İzleme ekranının kendi render süresi (sistemi yavaşlatmadığını ölçer).
+            let render_us = (crate::monotonic_ms().saturating_sub(render_start)) * 1000;
+            MONITOR_RENDER_US.store(render_us, Ordering::Relaxed);
+            let mut perf_txt = TextBuf::new();
+            perf_txt.push_str(crate::gui::ui_text(
+                "Bu ekranın render süresi:",
+                "This screen's render time:",
+            ));
+            perf_txt.push_usize(render_us as usize);
+            perf_txt.push_str(" µs");
+            draw_row(fb, left, y, row_w, "", perf_txt.as_str(), Color::TEXT_MUTED);
+        }
+        5 => {
+            // Sürücüler sekmesi: ortak durum modeli (Ready/Unavailable/Error)
+            // kayıt tablosu + alt sistem ayrıntıları + "Yeniden Tara".
+            use crate::drivers::status::{self, DriverId, DriverPhase, Severity};
+
+            let eng = crate::gui::ui_english();
+
+            // Özet satırı.
+            let (n_ready, n_unavail, n_err, n_other) = status::summary();
+            let mut sum = TextBuf::new();
+            sum.push_str(crate::gui::ui_text("Hazır: ", "Ready: "));
+            sum.push_usize(n_ready);
+            sum.push_str("  ");
+            sum.push_str(crate::gui::ui_text("Kullanılamıyor: ", "Unavailable: "));
+            sum.push_usize(n_unavail);
+            sum.push_str("  ");
+            sum.push_str(crate::gui::ui_text("Hata: ", "Error: "));
+            sum.push_usize(n_err);
+            if n_other > 0 {
+                sum.push_str("  ");
+                sum.push_str(crate::gui::ui_text("Bilinmiyor: ", "Unknown: "));
+                sum.push_usize(n_other);
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                "",
+                sum.as_str(),
+                if n_err > 0 {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MAIN
+                },
+            );
+            y += step;
+
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Donanım Sürücüleri", "Hardware Drivers"),
+            );
+
+            for id in DriverId::ALL {
+                let e = status::entry(id);
+                let mut val = TextBuf::new();
+                val.push_str(e.phase.label(eng));
+                val.push_str(" • ");
+                val.push_usize(e.elapsed_ms as usize);
+                val.push_str(" ms");
+                if e.phase == DriverPhase::Error {
+                    val.push_str(" • ");
+                    val.push_str(status::error_desc(e.error_code, eng));
+                }
+                if !e.detail.is_empty() {
+                    val.push_str(" — ");
+                    val.push_str(e.detail);
+                }
+                let color = match e.phase.severity() {
+                    Severity::Ok => Color::ACCENT_GREEN,
+                    Severity::Warn => Color::ACCENT_YELLOW,
+                    Severity::Fail => Color::ACCENT_RED,
+                    Severity::Info => Color::TEXT_MUTED,
+                };
+                draw_row(fb, left, y, row_w, id.label(eng), val.as_str(), color);
+                y += step;
+            }
+
+            // --- Alt sistem ayrıntıları -------------------------------------
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Ağ Ayrıntıları", "Network Details"),
+            );
+
+            let mut nic = TextBuf::new();
+            if crate::drivers::e1000::is_ready() {
+                nic.push_str(crate::drivers::e1000::nic_label(eng));
+            } else {
+                nic.push_str(crate::gui::ui_text("Adaptör yok", "No adapter"));
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Adaptör:", "Adapter:"),
+                nic.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // MAC adresi: "52:54:00:12:34:56" biçiminde.
+            let mut mac = TextBuf::new();
+            if crate::drivers::e1000::is_ready() {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                let m = unsafe { crate::drivers::e1000::MAC_ADDR };
+                for (i, b) in m.iter().enumerate() {
+                    if i > 0 {
+                        mac.push_str(":");
+                    }
+                    mac.push_byte(HEX[(*b >> 4) as usize]);
+                    mac.push_byte(HEX[(*b & 0x0F) as usize]);
+                }
+            } else {
+                mac.push_str("-");
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("MAC:", "MAC:"),
+                mac.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            let mut link = TextBuf::new();
+            link.push_str(if crate::drivers::e1000::is_ready() {
+                if crate::drivers::e1000::link_up() {
+                    crate::gui::ui_text("Bağlı (link up)", "Connected (link up)")
+                } else {
+                    crate::gui::ui_text("Kopuk (link down)", "Disconnected (link down)")
+                }
+            } else {
+                crate::gui::ui_text("Yok", "None")
+            });
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Bağlantı:", "Link:"),
+                link.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            let mut ip = TextBuf::new();
+            if crate::drivers::e1000::is_ready() {
+                push_ip(&mut ip, crate::drivers::netstack::local_ip());
+                ip.push_str("  ");
+                ip.push_str(crate::gui::ui_text("DHCP:", "DHCP:"));
+                ip.push_str(if crate::drivers::netstack::dhcp_ready() {
+                    crate::gui::ui_text("hazır", "ready")
+                } else {
+                    crate::gui::ui_text("bekliyor", "pending")
+                });
+            } else {
+                ip.push_str("-");
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("IP adresi:", "IP address:"),
+                ip.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // --- Grafik -----------------------------------------------------
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Grafik Ayrıntıları", "Graphics Details"),
+            );
+            let mut res = TextBuf::new();
+            res.push_usize(fb.width);
+            res.push_str("x");
+            res.push_usize(fb.height);
+            res.push_str("  ");
+            res.push_str(crate::gui::ui_text("Format:", "Format:"));
+            res.push_str(match fb.bpp {
+                32 => "32bpp XRGB8888",
+                24 => "24bpp RGB888",
+                16 => "16bpp RGB565",
+                8 => "8bpp Indexed",
+                _ => "?bpp",
+            });
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Framebuffer:", "Framebuffer:"),
+                res.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // --- Ses ---------------------------------------------------------
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Ses Ayrıntıları", "Audio Details"),
+            );
+            let mut dev = TextBuf::new();
+            if crate::drivers::hda::is_ready() {
+                dev.push_str("Intel HDA");
+            } else {
+                dev.push_str(crate::gui::ui_text(
+                    "PC Speaker (yedek)",
+                    "PC Speaker (fallback)",
+                ));
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Aygıt:", "Device:"),
+                dev.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            let mut rate = TextBuf::new();
+            if crate::drivers::hda::is_ready() {
+                rate.push_str("48000 Hz / 16-bit / Stereo");
+            } else {
+                rate.push_str("-");
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Örnekleme:", "Sample rate:"),
+                rate.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            let mut dma = TextBuf::new();
+            if crate::drivers::hda::is_ready() {
+                dma.push_str(if crate::drivers::hda::is_dma_stalled() {
+                    crate::gui::ui_text("Takıldı", "Stalled")
+                } else if crate::drivers::hda::is_dma_progressing() {
+                    crate::gui::ui_text("İlerliyor", "Progressing")
+                } else {
+                    crate::gui::ui_text("Beklemede", "Standby")
+                });
+            } else {
+                dma.push_str(crate::gui::ui_text("Pasif", "Inactive"));
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("DMA:", "DMA:"),
+                dma.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // --- Depolama ----------------------------------------------------
+            y = draw_section(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Depolama Ayrıntıları", "Storage Details"),
+            );
+
+            // ATA/ATAPI: model + kapasite.
+            let mut ata_txt = TextBuf::new();
+            if crate::drivers::ata::drive_count() > 0 {
+                let model = crate::drivers::ata::model_of(0);
+                if !model.is_empty() {
+                    if let Ok(m) = core::str::from_utf8(model) {
+                        ata_txt.push_str(m.trim_end_matches('\0').trim());
+                        ata_txt.push_str("  ");
+                    }
+                }
+                let mb = crate::drivers::ata::drive_capacity_sectors(0).saturating_mul(512)
+                    / (1024 * 1024);
+                ata_txt.push_usize(mb as usize);
+                ata_txt.push_str(" MB");
+            } else {
+                ata_txt.push_str(crate::gui::ui_text("Aygıt yok", "No device"));
+            }
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("ATA/ATAPI:", "ATA/ATAPI:"),
+                ata_txt.as_str(),
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // Diğer disk denetleyicileri: ad + (varsa) kapasite.
+            let storage_rows: [StorageDriver; 4] = [
+                StorageDriver {
+                    id: DriverId::Ahci,
+                    detected: crate::drivers::ahci::is_detected,
+                    name_tr: crate::drivers::ahci::name_tr,
+                    capacity_bytes: || 0,
+                },
+                StorageDriver {
+                    id: DriverId::Nvme,
+                    detected: crate::drivers::nvme::is_detected,
+                    name_tr: crate::drivers::nvme::name_tr,
+                    capacity_bytes: || 0,
+                },
+                StorageDriver {
+                    id: DriverId::Sdmmc,
+                    detected: crate::drivers::sdmmc::is_detected,
+                    name_tr: crate::drivers::sdmmc::name_tr,
+                    capacity_bytes: crate::drivers::sdmmc::capacity,
+                },
+                StorageDriver {
+                    id: DriverId::VirtioBlk,
+                    detected: crate::drivers::virtio_blk::is_detected,
+                    name_tr: crate::drivers::virtio_blk::name_tr,
+                    capacity_bytes: crate::drivers::virtio_blk::capacity,
+                },
+            ];
+            for row in storage_rows {
+                let mut t = TextBuf::new();
+                if (row.detected)() {
+                    t.push_str((row.name_tr)());
+                    let cap = (row.capacity_bytes)();
+                    if cap > 0 {
+                        t.push_str("  ");
+                        t.push_usize((cap / (1024 * 1024)) as usize);
+                        t.push_str(" MB");
+                    }
+                } else {
+                    t.push_str(crate::gui::ui_text("Algılanmadı", "Not detected"));
+                }
+                draw_row(
+                    fb,
+                    left,
+                    y,
+                    row_w,
+                    row.id.label(eng),
+                    t.as_str(),
+                    Color::TEXT_MAIN,
+                );
+                y += step;
+            }
+        }
         _ => {
             draw_row(
                 fb,
@@ -1300,14 +2288,21 @@ pub fn render_content(
         );
     }
 
+    // Yeniden Tara düğmesi (Sürücüler sekmesinde görünür).
+    if active_tab() == 5 {
+        let (bx, by, bw, bh) = rescan_btn_rect(win_x, win_y, win_w, win_h);
+        fb.draw_rect(bx, by, bw, bh, Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(
+            fb,
+            bx + sp(12),
+            by + (bh.saturating_sub(MinGuiCompositor::text_height())) / 2,
+            crate::gui::ui_text("Sürücüleri Yeniden Tara", "Rescan Drivers"),
+            MinGuiCompositor::text_on(Color::ACCENT_BLUE),
+        );
+    }
+
     // Klavye odağı (Tab) göstergesi: odaklı denetimin çevresine halka çiz.
     if let Some(r) = focused_rect(win_x, win_y, win_w, win_h) {
-        fb.draw_rect_outline(
-            r.0.saturating_sub(1),
-            r.1.saturating_sub(1),
-            r.2.saturating_add(2),
-            r.3.saturating_add(2),
-            Color::ACCENT_BLUE,
-        );
+        MinGuiCompositor::draw_focus_ring(fb, r.0, r.1, r.2, r.3);
     }
 }

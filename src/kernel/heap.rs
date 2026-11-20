@@ -593,7 +593,27 @@ static TRACK_HITS: AtomicU64 = AtomicU64::new(0);
 static TRACK_MISSES: AtomicU64 = AtomicU64::new(0);
 static TRACK_PEAK: AtomicU64 = AtomicU64::new(0);
 
+/// Tahsis takibi çalışma zamanı anahtarı. Teşhis amaçlıdır; her tahsis ve
+/// tahsisat kaldırmada SpinMutex + atomik işlemler ekler. Hata ayıklama
+/// derlemelerinde açık, release'te kapalı başlar; `set_tracking_enabled`
+/// ile çalışma zamanında değiştirilebilir.
+static TRACKING_ENABLED: AtomicBool = AtomicBool::new(cfg!(debug_assertions));
+
+/// Tahsis takibini açar/kapatır. Kapatıldığında `track_find` `None`,
+/// `track_stats` sıfır döner; bekleyen kayıtlar sayılmaz.
+pub fn set_tracking_enabled(enabled: bool) {
+    TRACKING_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Tahsis takibinin açık olup olmadığını döndürür.
+pub fn tracking_enabled() -> bool {
+    TRACKING_ENABLED.load(Ordering::Relaxed)
+}
+
 fn track_insert(ptr: *mut u8, layout: &Layout, tier: AllocTier) {
+    if !TRACKING_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let mut table = TRACKER.lock();
     let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
     let entry = &mut table[idx];
@@ -613,6 +633,9 @@ fn track_insert(ptr: *mut u8, layout: &Layout, tier: AllocTier) {
 }
 
 fn track_remove(ptr: *mut u8, layout: &Layout) -> Option<AllocTier> {
+    if !TRACKING_ENABLED.load(Ordering::Relaxed) {
+        return None;
+    }
     let mut table = TRACKER.lock();
     let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
     let entry = &mut table[idx];
@@ -637,6 +660,9 @@ fn track_remove(ptr: *mut u8, layout: &Layout) -> Option<AllocTier> {
 
 /// Adresin tracker kaydını döndürür (teşhis; `(size, align, tier)`).
 pub fn track_find(ptr: u64) -> Option<(u32, u32, u8)> {
+    if !TRACKING_ENABLED.load(Ordering::Relaxed) {
+        return None;
+    }
     let table = TRACKER.lock();
     let idx = ((ptr as usize) >> 4) & (TRACKER_SLOTS - 1);
     let entry = &table[idx];
@@ -647,12 +673,19 @@ pub fn track_find(ptr: u64) -> Option<(u32, u32, u8)> {
     }
 }
 
-/// Heap taşıması sonrası tracker'ı sıfırlar (eski adres kayıtları geçersiz).
+/// Heap taşıması veya takip sıfırlaması sonrası tracker'ı temizler
+/// (eski adres kayıtları ve sayaçlar geçersiz).
 fn tracker_reset() {
     let mut table = TRACKER.lock();
     for entry in table.iter_mut() {
         entry.used = false;
     }
+    for counter in TRACK_LIVE.iter() {
+        counter.store(0, Ordering::Relaxed);
+    }
+    TRACK_HITS.store(0, Ordering::Relaxed);
+    TRACK_MISSES.store(0, Ordering::Relaxed);
+    TRACK_PEAK.store(0, Ordering::Relaxed);
 }
 
 /// Tahsis takibi özeti (teşhis; `heap::profile` içinde de raporlanır).
@@ -933,6 +966,13 @@ fn populate_range(start: u64, len: usize) -> bool {
 /// sayfalarla eşlenir; böylece heap kullanımı yalnızca gerçekten yazılan
 /// sayfalar için fiziksel bellek harcar.
 fn bind_window_page(virt: u64, frame: u64) {
+    let _ = try_bind_window_page(virt, frame);
+}
+
+/// `bind_window_page`'in sonucu bildiren sürümü: eşleme başarısızsa
+/// `false` döner (çerçeve yine iade edilir). Taşıma gibi hata durumunda
+/// geri alma gereken yollarda kullanılır.
+fn try_bind_window_page(virt: u64, frame: u64) -> bool {
     let mut space = crate::mm::vmm::AddressSpace::current();
     let mut guard = crate::mm::try_lock_memory();
     match guard.as_mut() {
@@ -945,12 +985,35 @@ fn bind_window_page(virt: u64, frame: u64) {
                     crate::mm::vmm::PageFlags::PRESENT | crate::mm::vmm::PageFlags::WRITABLE,
                     pmm,
                 )
-                .is_err()
+                .is_ok()
             {
+                true
+            } else {
                 free_frame(frame);
+                false
             }
         }
-        None => free_frame(frame),
+        None => {
+            free_frame(frame);
+            false
+        }
+    }
+}
+
+/// `base_virt`'ten itibaren `count` adet 4 KiB pencere sayfasını söker ve
+/// karşılık gelen fiziksel çerçeveleri PMM'e iade eder. Yalnızca taşıma
+/// gibi işlem ortasında hata alan yollarda kullanılır.
+fn unmap_window_pages(base_virt: u64, count: usize) {
+    let mut space = crate::mm::vmm::AddressSpace::current();
+    let mut guard = crate::mm::try_lock_memory();
+    if let Some(g) = guard.as_mut() {
+        let pmm = &mut g.get().pmm;
+        for index in 0..count {
+            let virt = base_virt + (index as u64) * 4096;
+            if let Some(frame) = space.unmap_page(virt) {
+                pmm.free_frame(frame);
+            }
+        }
     }
 }
 
@@ -1165,40 +1228,71 @@ fn relocate_locked() -> bool {
         return true;
     }
     let pages = old_size.div_ceil(4096);
-    if pages > 256 {
-        // Tek seferde en fazla 1 MiB taşıma (yeterli; açılışta heap ~16 MiB).
+    if pages == 0 {
         return false;
-    }
-    let mut frames = [0u64; 256];
-    let mut taken = 0usize;
-    for _ in 0..pages {
-        let Some(frame) = alloc_frame() else {
-            for frame in frames.iter().take(taken) {
-                free_frame(*frame);
-            }
-            return false;
-        };
-        frames[taken] = frame;
-        taken += 1;
     }
     if !LAZY.lock().enabled {
         LAZY.lock().enabled = true;
     }
-    for (index, frame) in frames.iter().enumerate().take(taken) {
-        let virt = HEAP_WINDOW_BASE + (index as u64) * 4096;
-        zero_frame(*frame);
-        bind_window_page(virt, *frame);
-        // SAFETY: hem eski statik tampon hem yeni pencere geçerli, sayfa hizalı
-        // ve sayısı `taken` ile aynı.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                (old_base + (index as u64) * 4096) as *const u8,
-                virt as *mut u8,
-                4096.min(old_size - index * 4096),
-            );
+    // 1 MiB (256 sayfa) parçalar halinde taşı. Açılışta heap 16 MiB'tır;
+    // eski `pages > 256` sınırı tüm sayfaları tek seferde istediği için
+    // heap'in hiçbir zaman yeşil alana taşınamamasına yol açıyordu.
+    const RELOC_CHUNK: usize = 256;
+    let mut done = 0usize;
+    let mut mapped_total = 0usize;
+    while done < pages {
+        let chunk = (pages - done).min(RELOC_CHUNK);
+        let mut frames = [0u64; RELOC_CHUNK];
+        let mut taken = 0usize;
+        for _ in 0..chunk {
+            let Some(frame) = alloc_frame() else {
+                break;
+            };
+            frames[taken] = frame;
+            taken += 1;
         }
+        if taken < chunk {
+            // Parça çerçevelerini iade et ve önceki parçaların eşlemesini sök.
+            for frame in frames.iter().take(taken) {
+                free_frame(*frame);
+            }
+            unmap_window_pages(HEAP_WINDOW_BASE, mapped_total);
+            return false;
+        }
+        let mut bound = 0usize;
+        let mut failed = false;
+        for (index, frame) in frames.iter().enumerate().take(taken) {
+            let page_index = done + index;
+            let virt = HEAP_WINDOW_BASE + (page_index as u64) * 4096;
+            zero_frame(*frame);
+            if !try_bind_window_page(virt, *frame) {
+                // Başarısız çerçeve try_bind tarafından iade edildi; geriye
+                // kalanlar hâlâ bizde.
+                failed = true;
+                break;
+            }
+            bound = index + 1;
+            // SAFETY: hem eski statik tampon hem yeni pencere geçerli, sayfa
+            // hizalı ve `page_index` sayfa indeksi `pages` içinde.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (old_base + (page_index as u64) * 4096) as *const u8,
+                    virt as *mut u8,
+                    4096.min(old_size - page_index * 4096),
+                );
+            }
+        }
+        if failed {
+            for frame in frames.iter().take(taken).skip(bound + 1) {
+                free_frame(*frame);
+            }
+            unmap_window_pages(HEAP_WINDOW_BASE, mapped_total + bound);
+            return false;
+        }
+        mapped_total += taken;
+        MAPPED_BYTES.fetch_add((taken * 4096) as u64, Ordering::Relaxed);
+        done += taken;
     }
-    MAPPED_BYTES.fetch_add((taken * 4096) as u64, Ordering::Relaxed);
     HEAP_WINDOW.store(HEAP_MAX_SIZE as u64, Ordering::Relaxed);
     HEAP_BASE.store(HEAP_WINDOW_BASE, Ordering::Relaxed);
     unsafe {
@@ -1208,7 +1302,7 @@ fn relocate_locked() -> bool {
     // sözleşmesi tahsislerden önce yapıldığından hepsi boş sıfırlanır.
     slab_reset();
     tracker_reset();
-    serial_print("[KHEAP] Heap sanal penceresi etkin: base=0x");
+    serial_print("[KHEAP] Heap sanal penceresi etkin: base=");
     crate::boot::console::serial_print_hex(HEAP_WINDOW_BASE);
     serial_print(" max_kb=");
     serial_print_dec(HEAP_MAX_SIZE as u64 / 1024);
@@ -1342,6 +1436,12 @@ pub fn test_heap_growth() -> bool {
 pub fn test_tiered_alloc() -> bool {
     serial_print("[TIER-TEST] --- Asamali tahsis yonlendirme testi ---\n");
 
+    // Takip release'te kapalı başlar; katman etiketi doğrulaması için
+    // test süresince açılır ve bitince eski duruma döndürülür.
+    let was_tracking = tracking_enabled();
+    set_tracking_enabled(true);
+    tracker_reset();
+
     let tier_of = |ptr: *mut u8| track_find(ptr as u64).map(|(_, _, t)| t);
 
     // 1. Slab: 32 bayt / 8 hizalı istek 16/32/64 sınıflarından birine düşer.
@@ -1379,5 +1479,6 @@ pub fn test_tiered_alloc() -> bool {
         serial_print(if heap_ok { "OK" } else { "FAIL" });
         serial_print("\n");
     }
+    set_tracking_enabled(was_tracking);
     slab_ok && large_ok && heap_ok
 }

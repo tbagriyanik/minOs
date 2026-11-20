@@ -30,7 +30,9 @@ pub struct MemoryMapEntry {
 pub const PAGE_SIZE: u64 = 4096;
 
 /// Maksimum takip edilebilir kullanılabilir fiziksel bellek bölgesi sayısı.
-pub const MAX_USABLE_REGIONS: usize = 16;
+/// Gerçek donanımda ACPI/firmware delikleri usable haritayı parçalara böler;
+/// 16 kayıt bazı makinelerde son RAM bölgelerini düşürüyordu.
+pub const MAX_USABLE_REGIONS: usize = 64;
 
 /// 2 MiB büyük sayfa (huge page) boyutu ve hizalama maskesi.
 pub const BIG_PAGE_SIZE: u64 = 2 * 1024 * 1024;
@@ -171,8 +173,10 @@ pub struct PageCacheStats {
 }
 
 /// Statik bitmap ile yönetilen maksimum fiziksel sayfa çerçevesi sayısı:
-/// 65,536 çerçeve * 4KB = 256 MB yönetilebilir kullanılabilir RAM.
-pub const MAX_FRAMES: usize = 65536;
+/// 262,144 çerçeve * 4KB = 1 GiB yönetilebilir kullanılabilir RAM.
+/// Önceki 256 MiB sınırı, 512 MB varsayılan / 8 GB HighEnd QEMU profillerinde
+/// belleğin büyük bölümünü kullanılmaz bırakıyordu.
+pub const MAX_FRAMES: usize = 262_144;
 const BITMAP_WORDS: usize = MAX_FRAMES / 64;
 
 #[derive(Debug, Clone, Copy)]
@@ -223,6 +227,19 @@ pub struct PhysicalMemoryManager {
     cache_flushes: u64,
 }
 
+/// Bir bitmap word'ünün (64 çerçeve) bellek bölgesi dağılımı.
+/// Kelime başına tek sorguyla bölge elemesi yapılır; yanlış bölgedeki
+/// kelimeler aday taramasına hiç girmez.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordZone {
+    /// Kelime yönetilen çerçeve aralığının tamamen dışında.
+    Invalid,
+    /// Kelimenin tamamı tek bellekk bölgesinde.
+    Uniform(MemoryZone),
+    /// Kelime bir bölge sınırını kesiyor; adaylar tek tek denetlenir.
+    Straddles,
+}
+
 impl PhysicalMemoryManager {
     pub const fn new() -> Self {
         Self {
@@ -251,18 +268,7 @@ impl PhysicalMemoryManager {
 
     /// Boş bir çerçevenin fiziksel adresini döndürür (bitmap'i değiştirmez).
     fn peek_free_frame(&self) -> Option<u64> {
-        let max = self.total_managed_frames;
-        for i in 0..max {
-            let frame_idx = (self.next_search_frame + i) % max;
-            let word_idx = frame_idx / 64;
-            if word_idx >= BITMAP_WORDS {
-                break;
-            }
-            if (self.bitmap[word_idx] & (1u64 << (frame_idx % 64))) == 0 {
-                return self.frame_index_to_address(frame_idx);
-            }
-        }
-        None
+        self.locate_free_frame(None).map(|(_, _, addr)| addr)
     }
 
     /// Bitmap'te `phys` çerçevesini kullanımda olarak işaretler.
@@ -634,36 +640,147 @@ impl PhysicalMemoryManager {
         }
     }
 
-    /// Bitmap'ten yalnızca `zone` bölgesindeki bir çerçeveyi ayırır.
-    fn take_bitmap_frame_zone_locked(&mut self, zone: MemoryZone) -> Option<u64> {
+    /// `word_idx` kelimesinin bölge dağılımını döndürür. Adresler bölge
+    /// sınırlarında monoton olduğundan ilk/son çerçevenin bölgesi kelimenin
+    /// tamamını temsil eder; farklıysa kelime sınırı keser.
+    fn word_zone(&self, word_idx: usize) -> WordZone {
+        let max = self.total_managed_frames;
+        let first = word_idx * 64;
+        if first >= max || word_idx >= BITMAP_WORDS {
+            return WordZone::Invalid;
+        }
+        let last = (first + 63).min(max - 1);
+        let (Some(a0), Some(a1)) = (
+            self.frame_index_to_address(first),
+            self.frame_index_to_address(last),
+        ) else {
+            return WordZone::Invalid;
+        };
+        let z0 = zone_for_address(a0);
+        if z0 == zone_for_address(a1) {
+            WordZone::Uniform(z0)
+        } else {
+            WordZone::Straddles
+        }
+    }
+
+    /// `word_idx` kelimesindeki `free` maskeli adayları dolaşır; `zone`
+    /// filtresine uyan ilk çerçeveyi `(bit, adres)` olarak döndürür.
+    /// Bitmap'e dokunmaz; işaretleme [`claim_frame`](Self::claim_frame)
+    /// iledir.
+    fn find_in_word(
+        &self,
+        word_idx: usize,
+        mut free: u64,
+        zone: Option<MemoryZone>,
+    ) -> Option<(usize, u64)> {
+        if free == 0 {
+            return None;
+        }
+        match self.word_zone(word_idx) {
+            WordZone::Invalid => None,
+            WordZone::Uniform(wz) => {
+                // Kelimenin tamamı tek bölgede: istenen bölge farklıysa
+                // aday taramadan kelime toptan atlanır.
+                if zone.is_some_and(|z| z != wz) {
+                    return None;
+                }
+                while free != 0 {
+                    let bit = free.trailing_zeros() as usize;
+                    free &= free - 1;
+                    let frame_idx = word_idx * 64 + bit;
+                    if frame_idx >= self.total_managed_frames {
+                        break;
+                    }
+                    if let Some(address) = self.frame_index_to_address(frame_idx) {
+                        return Some((bit, address));
+                    }
+                }
+                None
+            }
+            WordZone::Straddles => {
+                // Bölge sınırını kesen kelime: aday başına bölge denetimi.
+                while free != 0 {
+                    let bit = free.trailing_zeros() as usize;
+                    free &= free - 1;
+                    let frame_idx = word_idx * 64 + bit;
+                    if frame_idx >= self.total_managed_frames {
+                        break;
+                    }
+                    let Some(address) = self.frame_index_to_address(frame_idx) else {
+                        continue;
+                    };
+                    if zone.is_none_or(|z| zone_for_address(address) == z) {
+                        return Some((bit, address));
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// `next_search_frame`'den başlayarak dairesel sırada `zone` bölgesindeki
+    /// ilk boş çerçeveyi `(word_idx, bit, adres)` olarak bulur. `zone == None`
+    /// tüm bölgeleri kabul eder. Tamamen dolu kelimeler 64 çerçeve birden
+    /// atlanır; yanlış bölgedeki kelimeler tek `word_zone` sorgusuyla elenir.
+    /// Bitmap'i değiştirmez.
+    fn locate_free_frame(&self, zone: Option<MemoryZone>) -> Option<(usize, usize, u64)> {
         let max = self.total_managed_frames;
         if max == 0 {
             return None;
         }
-        for i in 0..max {
-            let frame_idx = (self.next_search_frame + i) % max;
-            let Some(address) = self.frame_index_to_address(frame_idx) else {
-                continue;
-            };
-            if zone_for_address(address) != zone {
-                continue;
+        let word_count = max.div_ceil(64).min(BITMAP_WORDS);
+        let start_word = (self.next_search_frame / 64).min(word_count - 1);
+        let start_bit = self.next_search_frame % 64;
+
+        // Kelimedeki geçerli (yönetilen aralık içindeki) serbest bitler.
+        let free_mask = |w: usize| -> u64 {
+            let mut free = !self.bitmap[w];
+            let first = w * 64;
+            if first + 64 > max {
+                // Kelime sonu yönetilen aralığı aşıyor: taşan bitleri kes.
+                // Burada `max - first < 64` garanti (yukarıdaki koşul).
+                free &= (1u64 << (max - first)) - 1;
             }
-            let word_idx = frame_idx / 64;
-            let bit_idx = frame_idx % 64;
-            if word_idx >= BITMAP_WORDS {
-                break;
-            }
-            if (self.bitmap[word_idx] & (1u64 << bit_idx)) == 0 {
-                self.bitmap[word_idx] |= 1u64 << bit_idx;
-                self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
-                self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
-                self.zone_free_frames[zone.index()] =
-                    self.zone_free_frames[zone.index()].saturating_sub(1);
-                self.next_search_frame = (frame_idx + 1) % max;
-                return Some(address);
+            free
+        };
+
+        // 1) Başlangıç kelimesinin kalan yüksek bitleri.
+        let high = free_mask(start_word) & (u64::MAX << start_bit);
+        if let Some((bit, addr)) = self.find_in_word(start_word, high, zone) {
+            return Some((start_word, bit, addr));
+        }
+        // 2) Sonraki kelimeler dairesel sırada (start_word hariç, bir kez).
+        for step in 1..word_count {
+            let w = (start_word + step) % word_count;
+            if let Some((bit, addr)) = self.find_in_word(w, free_mask(w), zone) {
+                return Some((w, bit, addr));
             }
         }
+        // 3) Başlangıç kelimesinin düşük bitleri (dairesel sırada en son).
+        let low = free_mask(start_word) & ((1u64 << start_bit) - 1);
+        if let Some((bit, addr)) = self.find_in_word(start_word, low, zone) {
+            return Some((start_word, bit, addr));
+        }
         None
+    }
+
+    /// `locate_free_frame` adayını bitmap'te işaretler ve muhasebeyi
+    /// günceller. `PMM_LOCK` tutulurken çağrılmalıdır.
+    fn claim_frame(&mut self, word_idx: usize, bit: usize, address: u64) {
+        self.bitmap[word_idx] |= 1u64 << bit;
+        self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
+        self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+        let zone = zone_for_address(address).index();
+        self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
+        self.next_search_frame = (word_idx * 64 + bit + 1) % self.total_managed_frames.max(1);
+    }
+
+    /// Bitmap'ten yalnızca `zone` bölgesindeki bir çerçeveyi ayırır.
+    fn take_bitmap_frame_zone_locked(&mut self, zone: MemoryZone) -> Option<u64> {
+        let (word_idx, bit, address) = self.locate_free_frame(Some(zone))?;
+        self.claim_frame(word_idx, bit, address);
+        Some(address)
     }
 
     fn update_low_watermark(&mut self) {
@@ -677,38 +794,15 @@ impl PhysicalMemoryManager {
     /// `allocate_frame` yolundan farklı olarak önbellek kullanmaz; bitişik
     /// blok tahsisi gibi toplu işlemlerin temelidir.
     fn allocate_frame_locked(&mut self) -> Option<u64> {
-        let max = self.total_managed_frames;
-        if max == 0 {
+        if self.total_managed_frames == 0 {
             return None;
         }
-
-        // next_search_frame'den başlayarak döngüsel ara
-        for i in 0..max {
-            let frame_idx = (self.next_search_frame + i) % max;
-            let word_idx = frame_idx / 64;
-            let bit_idx = frame_idx % 64;
-
-            if word_idx >= BITMAP_WORDS {
-                break;
-            }
-
-            let word = self.bitmap[word_idx];
-            if (word & (1u64 << bit_idx)) == 0 {
-                let Some(address) = self.frame_index_to_address(frame_idx) else {
-                    break;
-                };
-                // Çerçeve boş, tahsis et!
-                self.bitmap[word_idx] |= 1u64 << bit_idx;
-                self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
-                self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
-                let zone = zone_for_address(address).index();
-                self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
-                self.next_search_frame = (frame_idx + 1) % max;
-                self.alloc_requests = self.alloc_requests.saturating_add(1);
-                self.update_low_watermark();
-
-                return Some(address);
-            }
+        if let Some((word_idx, bit, address)) = self.locate_free_frame(None) {
+            // Çerçeve boş, tahsis et!
+            self.claim_frame(word_idx, bit, address);
+            self.alloc_requests = self.alloc_requests.saturating_add(1);
+            self.update_low_watermark();
+            return Some(address);
         }
 
         self.failed_requests = self.failed_requests.saturating_add(1);
@@ -895,51 +989,72 @@ impl PhysicalMemoryManager {
             return None;
         }
 
-        // Bitişik boş çerçeve bloğu ara
-        let mut start_idx = 0usize;
-        'outer: while start_idx + count <= max {
-            // Bölge sınırını aşmamalı (aynı UsableRegion içinde kalmalı)
-            let start_addr = self.frame_index_to_address(start_idx)?;
-            let end_addr = start_addr + (count as u64) * PAGE_SIZE;
-
-            // start_addr ve end_addr aynı bölgede mi?
-            let in_same_region = self.usable_regions[..self.region_count]
-                .iter()
-                .any(|r| start_addr >= r.base && end_addr <= (r.base + r.length));
-
-            if !in_same_region {
-                start_idx += 1;
-                continue 'outer;
+        // Blok tek bir kullanılabilir bölgede kalmalıdır. Bölgeler çerçeve
+        // indeksinde ardışıktır; her bölgenin indeks aralığında ayrı ayrı
+        // taramak hem bölge denetimini O(1)'e indirir hem de tam dolu
+        // word'lerin 64 çerçeve birden atlanmasını sağlar.
+        let mut base_idx = 0usize;
+        for region_i in 0..self.region_count {
+            // `UsableRegion` Copy'dir; dilim borrow'u yerine anlık kopya
+            // alınır böylece döngü içinde `&mut self` çağrıları serbesttir.
+            let region = self.usable_regions[region_i];
+            let region_frames = (region.length / PAGE_SIZE) as usize;
+            let region_start = base_idx;
+            let region_end = base_idx.saturating_add(region_frames).min(max);
+            base_idx = region_end;
+            if region_end <= region_start {
+                continue;
             }
-
-            for offset in 0..count {
-                let idx = start_idx + offset;
-                let word_idx = idx / 64;
-                let bit_idx = idx % 64;
-                if word_idx >= BITMAP_WORDS || (self.bitmap[word_idx] & (1u64 << bit_idx)) != 0 {
-                    // Dolu çerçeveye denk gelindi, sonrasından aramaya devam et
+            let mut start_idx = region_start;
+            while start_idx + count <= region_end {
+                // Kelimenin tamamı doluysa hiçbir bitişik blok başlayamaz.
+                let word_idx = start_idx / 64;
+                if word_idx < BITMAP_WORDS && self.bitmap[word_idx] == u64::MAX {
+                    start_idx = (word_idx + 1) * 64;
+                    continue;
+                }
+                // `count` bitişik boş bit ara. Dolu bite denk gelinince
+                // `idx + 1`'e atlanır: aradaki hiçbir başlangıç noktası da
+                // aynı dolu biti kendi penceresine katar.
+                let mut blocked_at = None;
+                for offset in 0..count {
+                    let idx = start_idx + offset;
+                    let wi = idx / 64;
+                    let bi = idx % 64;
+                    if wi >= BITMAP_WORDS || (self.bitmap[wi] & (1u64 << bi)) != 0 {
+                        blocked_at = Some(idx);
+                        break;
+                    }
+                }
+                if let Some(idx) = blocked_at {
                     start_idx = idx + 1;
-                    continue 'outer;
+                    continue;
+                }
+                {
+                    let Some(start_addr) = self.frame_index_to_address(start_idx) else {
+                        start_idx += 1;
+                        continue;
+                    };
+                    // Bitişik blok bulundu, tüm bitleri işaretle
+                    for offset in 0..count {
+                        let idx = start_idx + offset;
+                        let wi = idx / 64;
+                        let bi = idx % 64;
+                        self.bitmap[wi] |= 1u64 << bi;
+                        let zone =
+                            zone_for_address(start_addr + (offset as u64) * PAGE_SIZE).index();
+                        self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
+                        self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+                    }
+
+                    let total_bytes = (count as u64) * PAGE_SIZE;
+                    self.free_memory_bytes = self.free_memory_bytes.saturating_sub(total_bytes);
+                    self.contiguous_requests = self.contiguous_requests.saturating_add(1);
+                    self.update_low_watermark();
+
+                    return Some(start_addr);
                 }
             }
-
-            // Bitişik blok bulundu, tüm bitleri işaretle
-            for offset in 0..count {
-                let idx = start_idx + offset;
-                let word_idx = idx / 64;
-                let bit_idx = idx % 64;
-                self.bitmap[word_idx] |= 1u64 << bit_idx;
-                let zone = zone_for_address(start_addr + (offset as u64) * PAGE_SIZE).index();
-                self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
-                self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
-            }
-
-            let total_bytes = (count as u64) * PAGE_SIZE;
-            self.free_memory_bytes = self.free_memory_bytes.saturating_sub(total_bytes);
-            self.contiguous_requests = self.contiguous_requests.saturating_add(1);
-            self.update_low_watermark();
-
-            return Some(start_addr);
         }
 
         self.failed_requests = self.failed_requests.saturating_add(1);

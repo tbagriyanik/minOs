@@ -26,10 +26,15 @@ static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
 
 // --- Performans testi (Testler sekmesi) ---
 
+use crate::apps::perfbench::{self, PerfRates};
+
 /// Performans testinin aşamaları.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PerfPhase {
     Idle,
+    /// Donanım mikro-benchmark'ları çalışıyor (CPU / bellek / grafik).
+    Benchmark,
+    /// Kare teslim hızı ve kararlılığı ölçülüyor.
     Collecting,
     Finished,
 }
@@ -37,107 +42,286 @@ pub enum PerfPhase {
 /// Performans testi sonuçları.
 #[derive(Clone, Copy, Default)]
 pub struct PerfResults {
+    /// Gözlenen kare teslim hızı.
     pub fps: u32,
-    pub frame_ms: u32,
-    pub timer_jitter_us: u32,
+    /// Grafik dolgu hızından türetilen render kapasitesi.
+    pub capacity_fps: u32,
+    /// Kare süresi standart sapması (µs).
+    pub jitter_us: u32,
+    /// CPU hızı (Mops/s).
+    pub cpu_mops: u32,
+    /// Bellek bant genişliği (MB/s).
     pub mem_mbps: u32,
-    pub math_kops: u32,
+    /// Grafik dolgu hızı (Mpix/s).
+    pub gfx_mpix: u32,
+    /// 0..100 arası toplam puan.
     pub score: u32,
 }
 
 static PERF_PHASE: AtomicUsize = AtomicUsize::new(0);
-static PERF_TICK: AtomicU32 = AtomicU32::new(0);
-static PERF_RESULTS: AtomicU64 = AtomicU64::new(0);
 static PERF_SAMPLES: AtomicU32 = AtomicU32::new(0);
-static PERF_ACCUM_US: AtomicU64 = AtomicU64::new(0);
-static PERF_LAST_US: AtomicU64 = AtomicU64::new(0);
-static BENCH_CHECKS: AtomicU32 = AtomicU32::new(0);
-static BENCH_STEPS: AtomicU32 = AtomicU32::new(0);
+static PERF_SUM_US: AtomicU64 = AtomicU64::new(0);
+static PERF_SUM_SQ_US: AtomicU64 = AtomicU64::new(0);
+static PERF_SKIP_FIRST: AtomicU32 = AtomicU32::new(0);
+static PERF_TARGET_US: AtomicU64 = AtomicU64::new(0);
+static PERF_CPU_MOPS: AtomicU32 = AtomicU32::new(0);
+static PERF_MEM_MBPS: AtomicU32 = AtomicU32::new(0);
+static PERF_GFX_MPIX: AtomicU32 = AtomicU32::new(0);
+static PERF_FPS: AtomicU32 = AtomicU32::new(0);
+static PERF_CAP_FPS: AtomicU32 = AtomicU32::new(0);
+static PERF_JITTER_US: AtomicU32 = AtomicU32::new(0);
+static PERF_SCORE: AtomicU32 = AtomicU32::new(0);
+static PERF_PARTS: AtomicU32 = AtomicU32::new(0);
+/// İş yükü sağlık toplamı: derleyicinin ölçümü optimize edip silmesini engeller.
+static PERF_CHECKSUM: AtomicU64 = AtomicU64::new(0);
+/// Ham ölçüm süreleri (µs) — teşhis ve kalibrasyon için.
+static PERF_CPU_US: AtomicU64 = AtomicU64::new(0);
+static PERF_MEM_US: AtomicU64 = AtomicU64::new(0);
+static PERF_GFX_US: AtomicU64 = AtomicU64::new(0);
 
-/// Performans testinin süresi (~3 sn, 33 ms kare ile).
-const PERF_TICKS: u32 = 90;
+/// Kare teslim ölçümünün süresi (3 saniye).
+const PERF_DURATION_US: u64 = 3_000_000;
 
 pub fn perf_phase() -> PerfPhase {
     match PERF_PHASE.load(Ordering::Relaxed) {
-        1 => PerfPhase::Collecting,
-        2 => PerfPhase::Finished,
+        1 => PerfPhase::Benchmark,
+        2 => PerfPhase::Collecting,
+        3 => PerfPhase::Finished,
         _ => PerfPhase::Idle,
     }
 }
 
-/// Testi başlatır (3 saniye örnekleme).
+/// Testi başlatır: önce donanım mikro-benchmark'ları, ardından 3 saniyelik
+/// kare teslim ölçümü yapılır.
 pub fn start_perf_test() {
     PERF_PHASE.store(1, Ordering::Relaxed);
-    PERF_TICK.store(0, Ordering::Relaxed);
     PERF_SAMPLES.store(0, Ordering::Relaxed);
-    PERF_ACCUM_US.store(0, Ordering::Relaxed);
-    PERF_LAST_US.store(0, Ordering::Relaxed);
-    BENCH_CHECKS.store(0, Ordering::Relaxed);
-    BENCH_STEPS.store(0, Ordering::Relaxed);
-    PERF_RESULTS.store(0, Ordering::Relaxed);
+    PERF_SUM_US.store(0, Ordering::Relaxed);
+    PERF_SUM_SQ_US.store(0, Ordering::Relaxed);
+    PERF_SKIP_FIRST.store(0, Ordering::Relaxed);
+    PERF_TARGET_US.store(0, Ordering::Relaxed);
+    PERF_CPU_MOPS.store(0, Ordering::Relaxed);
+    PERF_MEM_MBPS.store(0, Ordering::Relaxed);
+    PERF_GFX_MPIX.store(0, Ordering::Relaxed);
+    PERF_FPS.store(0, Ordering::Relaxed);
+    PERF_CAP_FPS.store(0, Ordering::Relaxed);
+    PERF_JITTER_US.store(0, Ordering::Relaxed);
+    PERF_SCORE.store(0, Ordering::Relaxed);
+    PERF_PARTS.store(0, Ordering::Relaxed);
+    PERF_CHECKSUM.store(0, Ordering::Relaxed);
+}
+
+/// Geçen süreyi mikrosaniye olarak döndürür (TSC tabanlı).
+fn now_us() -> u64 {
+    let cycles = crate::boot::time::read_cpu_cycles();
+    let per_us = unsafe { crate::boot::time::TSC_CYCLES_PER_US }.max(1);
+    cycles / per_us
 }
 
 /// Bir kare süresini örnekler. Örnek alındıysa (ilerleme veya sonuç
 /// güncellendiyse) `true` döner; arayüzün yeniden çizilmesi için kullanılır.
-pub fn perf_sample(frame_us: u64) -> bool {
-    if perf_phase() != PerfPhase::Collecting {
-        return false;
+///
+/// `target_us` olay döngüsünün o anki kare hedef aralığıdır (16 ms veya
+/// 33 ms); yalnızca bilgilendirme amaçlıdır.
+pub fn perf_sample(frame_us: u64, target_us: u64) -> bool {
+    match perf_phase() {
+        PerfPhase::Idle | PerfPhase::Finished => return false,
+        PerfPhase::Benchmark => {
+            run_benchmarks();
+            PERF_PHASE.store(2, Ordering::Relaxed);
+            PERF_SAMPLES.store(0, Ordering::Relaxed);
+            PERF_SUM_US.store(0, Ordering::Relaxed);
+            PERF_SUM_SQ_US.store(0, Ordering::Relaxed);
+            // Benchmark bloğu bir kare süresine eklendiği için ilk aralık
+            // atlanır; aksi halde ortalama kare süresi yapay olarak şişer.
+            PERF_SKIP_FIRST.store(1, Ordering::Relaxed);
+            PERF_TARGET_US.store(target_us, Ordering::Relaxed);
+            return true;
+        }
+        PerfPhase::Collecting => {}
     }
-    let samples = PERF_SAMPLES.fetch_add(1, Ordering::Relaxed) + 1;
-    PERF_ACCUM_US.fetch_add(frame_us, Ordering::Relaxed);
-    PERF_LAST_US.store(frame_us, Ordering::Relaxed);
-    let tick = PERF_TICK.fetch_add(1, Ordering::Relaxed) + 1;
-    let checks = crate::apps::game_core::bench_checkers_ai(1, 1);
-    BENCH_CHECKS.fetch_add(checks, Ordering::Relaxed);
-    let steps = crate::apps::game_core::bench_puzzle_work(16, tick as u64);
-    BENCH_STEPS.fetch_add(steps, Ordering::Relaxed);
-    if tick >= PERF_TICKS {
-        let samples = samples.max(1);
-        let accum = PERF_ACCUM_US.load(Ordering::Relaxed);
-        let avg_us = (accum / samples as u64).max(1);
-        let fps = (1_000_000 / avg_us).min(9_999) as u32;
-        let timer_jitter_us = avg_us.abs_diff(16_000).min(0xFFFF) as u32;
-        let (mbps, _math_kops) = measure_memory();
-        let score = score_of(fps, timer_jitter_us, mbps);
-        let packed = ((fps as u64) << 32) | ((timer_jitter_us as u64) << 16) | (score as u64);
-        PERF_RESULTS.store(packed, Ordering::Relaxed);
-        PERF_PHASE.store(2, Ordering::Relaxed);
+
+    if PERF_SKIP_FIRST.load(Ordering::Relaxed) == 1 {
+        PERF_SKIP_FIRST.store(0, Ordering::Relaxed);
+        return true;
+    }
+
+    PERF_SAMPLES.fetch_add(1, Ordering::Relaxed);
+    PERF_SUM_US.fetch_add(frame_us, Ordering::Relaxed);
+    PERF_SUM_SQ_US.fetch_add(frame_us.saturating_mul(frame_us), Ordering::Relaxed);
+
+    if PERF_SUM_US.load(Ordering::Relaxed) >= PERF_DURATION_US {
+        finish_perf_test();
     }
     true
 }
 
-fn measure_memory() -> (u32, u32) {
-    let mut buf = alloc::vec![0u32; 65_536];
-    let start = crate::monotonic_ms();
-    for (i, slot) in buf.iter_mut().enumerate() {
-        *slot = (i as u32).wrapping_mul(2_654_435_761);
-    }
-    let mut acc = 0u32;
-    for _ in 0..4 {
-        for &v in buf.iter() {
-            acc = acc.wrapping_add(v.rotate_left(5) ^ 1);
+/// Donanım mikro-benchmark'ları: CPU, bellek ve grafik hızı.
+///
+/// Her iş yükü, zamanlayıcı granülaritesi sonucu bozmasın diye en az
+/// `perfbench::MIN_BENCH_US` mikrosaniye sürecek şekilde tekrarlanır.
+fn run_benchmarks() {
+    let mut mem_buf: alloc::vec::Vec<u32> = alloc::vec![0u32; perfbench::MEM_BYTES / 4];
+    let mut gfx_buf: alloc::vec::Vec<u32> = alloc::vec![0u32; perfbench::GFX_PIXELS];
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+
+    // CPU
+    let t0 = now_us();
+    let mut cpu_iters = 0u64;
+    let mut cpu_sum = 0u64;
+    loop {
+        cpu_sum ^= perfbench::cpu_workload(&mut state, perfbench::CPU_CHUNK);
+        cpu_iters = cpu_iters.saturating_add(perfbench::CPU_CHUNK);
+        if now_us().saturating_sub(t0) >= perfbench::MIN_BENCH_US {
+            break;
+        }
+        if cpu_iters >= 50_000_000 {
+            break;
         }
     }
-    let elapsed_ms = crate::monotonic_ms().saturating_sub(start).max(1) as u32;
-    let mbps = (1usize.saturating_mul(1280) / elapsed_ms as usize).min(60_000) as u32;
-    let math_kops = acc & 0xFFFF;
-    (mbps.max(1), math_kops)
+    let cpu_us = now_us().saturating_sub(t0).max(1);
+
+    // Bellek
+    let t1 = now_us();
+    let mut mem_passes = 0u32;
+    let mut mem_sum = 0u64;
+    loop {
+        mem_sum ^= perfbench::mem_workload(&mut mem_buf, perfbench::MEM_PASSES);
+        mem_passes = mem_passes.saturating_add(perfbench::MEM_PASSES);
+        if now_us().saturating_sub(t1) >= perfbench::MIN_BENCH_US {
+            break;
+        }
+        if mem_passes >= 64 {
+            break;
+        }
+    }
+    let mem_us = now_us().saturating_sub(t1).max(1);
+
+    // Grafik
+    let t2 = now_us();
+    let mut gfx_passes = 0u32;
+    let mut gfx_sum = 0u64;
+    loop {
+        gfx_sum ^= perfbench::gfx_workload(&mut gfx_buf, perfbench::GFX_PASSES);
+        gfx_passes = gfx_passes.saturating_add(perfbench::GFX_PASSES);
+        if now_us().saturating_sub(t2) >= perfbench::MIN_BENCH_US {
+            break;
+        }
+        if gfx_passes >= 64 {
+            break;
+        }
+    }
+    let gfx_us = now_us().saturating_sub(t2).max(1);
+
+    // Sonuçlar kullanılmadığında iş yükü optimize edilip silinebilir;
+    // sağlık toplamı bir atomik değişkene yazılarak bu engellenir.
+    PERF_CHECKSUM.store(cpu_sum ^ mem_sum ^ gfx_sum, Ordering::Relaxed);
+
+    PERF_CPU_US.store(cpu_us, Ordering::Relaxed);
+    PERF_MEM_US.store(mem_us, Ordering::Relaxed);
+    PERF_GFX_US.store(gfx_us, Ordering::Relaxed);
+
+    PERF_CPU_MOPS.store(
+        perfbench::PerfRates::cpu_mops(cpu_iters, cpu_us),
+        Ordering::Relaxed,
+    );
+    PERF_MEM_MBPS.store(
+        perfbench::PerfRates::mem_mbps(
+            (perfbench::MEM_BYTES as u64) * u64::from(mem_passes),
+            mem_us,
+        ),
+        Ordering::Relaxed,
+    );
+    PERF_GFX_MPIX.store(
+        perfbench::PerfRates::gfx_mpix(
+            (perfbench::GFX_PIXELS as u64) * u64::from(gfx_passes),
+            gfx_us,
+        ),
+        Ordering::Relaxed,
+    );
 }
 
-fn score_of(fps: u32, jitter_us: u32, mbps: u32) -> u32 {
-    let fps_score = fps.min(60) * 100 / 60;
-    let jitter_score = 100u32.saturating_sub(jitter_us.min(20_000) / 200);
-    let mem_score = mbps.min(10_000) / 100;
-    (fps_score * 50 + jitter_score * 30 + mem_score * 20) / 100
+/// Ölçümü tamamlar ve sonuçları saklar.
+fn finish_perf_test() {
+    let samples = u64::from(PERF_SAMPLES.load(Ordering::Relaxed).max(1));
+    let sum = PERF_SUM_US.load(Ordering::Relaxed);
+    let sum_sq = PERF_SUM_SQ_US.load(Ordering::Relaxed);
+
+    let avg_us = (sum / samples).max(1);
+    let fps = (1_000_000 / avg_us).min(9_999) as u32;
+
+    // Standart sapma: sqrt(E[x²] - E[x]²). Paydamayı u128'e taşıyarak
+    // taşma olmadan hesaplanır.
+    let var_num = (sum_sq as u128) * (samples as u128) - (sum as u128) * (sum as u128);
+    let variance = (var_num / (samples as u128 * samples as u128)) as u64;
+    let jitter_us = perfbench::isqrt(variance) as u32;
+
+    let rates = PerfRates {
+        cpu_mops: PERF_CPU_MOPS.load(Ordering::Relaxed),
+        mem_mbps: PERF_MEM_MBPS.load(Ordering::Relaxed),
+        gfx_mpix: PERF_GFX_MPIX.load(Ordering::Relaxed),
+    };
+    let scores = perfbench::score(rates, fps, jitter_us);
+
+    PERF_FPS.store(fps, Ordering::Relaxed);
+    PERF_CAP_FPS.store(rates.capacity_fps(), Ordering::Relaxed);
+    PERF_JITTER_US.store(jitter_us, Ordering::Relaxed);
+    PERF_SCORE.store(scores.total, Ordering::Relaxed);
+    PERF_PARTS.store(
+        (scores.cpu << 24) | (scores.mem << 16) | (scores.gfx << 8) | scores.pacing,
+        Ordering::Relaxed,
+    );
+    PERF_PHASE.store(3, Ordering::Relaxed);
+
+    print_perf_serial(rates, fps, jitter_us, scores.total);
 }
 
+/// Sonuçları seri konsola yazar (test/otomasyon ve hata ayıklama için).
+fn print_perf_serial(rates: PerfRates, fps: u32, jitter_us: u32, score: u32) {
+    crate::boot::console::serial_print("[PERF] fps=");
+    crate::boot::console::serial_print_dec(u64::from(fps));
+    crate::boot::console::serial_print(" cap_fps=");
+    crate::boot::console::serial_print_dec(u64::from(rates.capacity_fps()));
+    crate::boot::console::serial_print(" cpu_mops=");
+    crate::boot::console::serial_print_dec(u64::from(rates.cpu_mops));
+    crate::boot::console::serial_print(" mem_mbps=");
+    crate::boot::console::serial_print_dec(u64::from(rates.mem_mbps));
+    crate::boot::console::serial_print(" gfx_mpix=");
+    crate::boot::console::serial_print_dec(u64::from(rates.gfx_mpix));
+    crate::boot::console::serial_print(" jitter_us=");
+    crate::boot::console::serial_print_dec(u64::from(jitter_us));
+    crate::boot::console::serial_print(" cpu_us=");
+    crate::boot::console::serial_print_dec(PERF_CPU_US.load(Ordering::Relaxed));
+    crate::boot::console::serial_print(" mem_us=");
+    crate::boot::console::serial_print_dec(PERF_MEM_US.load(Ordering::Relaxed));
+    crate::boot::console::serial_print(" gfx_us=");
+    crate::boot::console::serial_print_dec(PERF_GFX_US.load(Ordering::Relaxed));
+    crate::boot::console::serial_print(" score=");
+    crate::boot::console::serial_print_dec(u64::from(score));
+    crate::boot::console::serial_print("\n");
+}
+
+/// Son test sonuçlarını döndürür.
+pub fn perf_results() -> PerfResults {
+    PerfResults {
+        fps: PERF_FPS.load(Ordering::Relaxed),
+        capacity_fps: PERF_CAP_FPS.load(Ordering::Relaxed),
+        jitter_us: PERF_JITTER_US.load(Ordering::Relaxed),
+        cpu_mops: PERF_CPU_MOPS.load(Ordering::Relaxed),
+        mem_mbps: PERF_MEM_MBPS.load(Ordering::Relaxed),
+        gfx_mpix: PERF_GFX_MPIX.load(Ordering::Relaxed),
+        score: PERF_SCORE.load(Ordering::Relaxed),
+    }
+}
+
+/// Puan derecesi etiketi.
 fn perf_grade(score: u32) -> &'static str {
-    match score {
-        90..=u32::MAX => crate::gui::ui_text("Mükemmel", "Excellent"),
-        75..=89 => crate::gui::ui_text("Çok iyi", "Very good"),
-        55..=74 => crate::gui::ui_text("İyi", "Good"),
-        35..=54 => crate::gui::ui_text("Orta", "Fair"),
-        _ => crate::gui::ui_text("Zayıf", "Poor"),
+    match perfbench::grade(score) {
+        perfbench::Grade::Excellent => crate::gui::ui_text("Mükemmel", "Excellent"),
+        perfbench::Grade::VeryGood => crate::gui::ui_text("Çok iyi", "Very good"),
+        perfbench::Grade::Good => crate::gui::ui_text("İyi", "Good"),
+        perfbench::Grade::Fair => crate::gui::ui_text("Orta", "Fair"),
+        perfbench::Grade::Poor => crate::gui::ui_text("Zayıf", "Poor"),
     }
 }
 
@@ -183,6 +367,10 @@ pub fn select_tab(tab: usize) {
 }
 
 /// Odaklı denetim sayısı; yalnızca etkin sekmede görünen düğmeler sayılır.
+///
+/// Sekmeler 0..TAB_COUNT, ardından "Yenile" düğmesi (TAB_COUNT) ve en
+/// sonda etkin sekmeye özgü tek düğme (TAB_COUNT+1). Ağ sekmesinde bu
+/// düğme "Ağ Testi", Testler sekmesinde "Performans Testi" olur.
 fn focusable_count() -> usize {
     TAB_COUNT + 1 + usize::from(active_tab() == 1) + usize::from(active_tab() == 3)
 }
@@ -239,7 +427,7 @@ pub fn focused_rect(
     if f == TAB_COUNT + 1 && active_tab() == 1 {
         return Some(net_test_btn_rect(win_x, win_y, win_w, win_h));
     }
-    if f == TAB_COUNT + 2 && active_tab() == 3 {
+    if f == TAB_COUNT + 1 && active_tab() == 3 {
         return Some(perf_btn_rect(win_x, win_y, win_w, win_h));
     }
     None
@@ -266,7 +454,7 @@ pub fn activate_focused() -> CpAction {
     if f == TAB_COUNT + 1 && active_tab() == 1 {
         return CpAction::NetTest;
     }
-    if f == TAB_COUNT + 2 && active_tab() == 3 {
+    if f == TAB_COUNT + 1 && active_tab() == 3 {
         return CpAction::PerfTest;
     }
     CpAction::None
@@ -852,6 +1040,9 @@ pub fn render_content(
                 PerfPhase::Idle => {
                     crate::gui::ui_text("Performans testi hazır", "Performance test ready")
                 }
+                PerfPhase::Benchmark => {
+                    crate::gui::ui_text("Donanım ölçülüyor...", "Measuring hardware...")
+                }
                 PerfPhase::Collecting => crate::gui::ui_text("Ölçülüyor...", "Measuring..."),
                 PerfPhase::Finished => crate::gui::ui_text("Sonuç", "Result"),
             };
@@ -872,9 +1063,10 @@ pub fn render_content(
             let bar_w = row_w.min(360).min(bar_space);
             fb.draw_rect(bar_x, y - 4, bar_w, 8, Color::DARK_BG);
             let pct = match phase {
-                PerfPhase::Collecting => (PERF_TICK.load(Ordering::Relaxed) as usize * 100
-                    / PERF_TICKS as usize)
-                    .min(100),
+                PerfPhase::Benchmark => 5,
+                PerfPhase::Collecting => {
+                    (PERF_SUM_US.load(Ordering::Relaxed) * 100 / PERF_DURATION_US).min(100) as usize
+                }
                 PerfPhase::Finished => 100,
                 _ => 0,
             };
@@ -891,37 +1083,52 @@ pub fn render_content(
             }
 
             if phase == PerfPhase::Finished {
-                let bits = PERF_RESULTS.load(Ordering::Relaxed);
-                let fps = (bits >> 32) as u32;
-                let timer_jitter_us = ((bits >> 16) & 0xFFFF) as u32;
-                let score = (bits & 0xFFFF) as u32;
-                let frame_ms = 1000u32.checked_div(fps).unwrap_or(0);
+                let res = perf_results();
                 let mut r = TextBuf::new();
                 r.push_str(crate::gui::ui_text("Kare hızı: ", "Frame rate: "));
-                r.push_usize(fps as usize);
+                r.push_usize(res.fps as usize);
                 r.push_str(" FPS");
-                MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
-                y += step;
-                let mut r = TextBuf::new();
-                r.push_str(crate::gui::ui_text("Çerçeve süresi: ", "Frame time: "));
-                r.push_usize(frame_ms as usize);
-                r.push_str(" ms");
-                MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
+                draw_row(fb, left, y, row_w, "", r.as_str(), Color::TEXT_MAIN);
                 y += step;
                 let mut r = TextBuf::new();
                 r.push_str(crate::gui::ui_text(
-                    "Zamanlayıcı sapması: ",
-                    "Timer jitter: ",
+                    "Render kapasitesi: ",
+                    "Render capacity: ",
                 ));
-                r.push_usize(timer_jitter_us as usize);
-                r.push_str(" µs");
-                MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
+                r.push_usize(res.capacity_fps as usize);
+                r.push_str(" FPS");
+                draw_row(fb, left, y, row_w, "", r.as_str(), Color::TEXT_MAIN);
                 y += step;
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("CPU: ", "CPU: "));
+                r.push_usize(res.cpu_mops as usize);
+                r.push_str(" Mops/s");
+                draw_row(fb, left, y, row_w, "", r.as_str(), Color::TEXT_MAIN);
+                y += step;
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("Bellek: ", "Memory: "));
+                r.push_usize(res.mem_mbps as usize);
+                r.push_str(" MB/s");
+                draw_row(fb, left, y, row_w, "", r.as_str(), Color::TEXT_MAIN);
+                y += step;
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("Grafik: ", "Graphics: "));
+                r.push_usize(res.gfx_mpix as usize);
+                r.push_str(" Mpix/s");
+                draw_row(fb, left, y, row_w, "", r.as_str(), Color::TEXT_MAIN);
+                y += step;
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("Kare sapması: ", "Frame jitter: "));
+                r.push_usize(res.jitter_us as usize);
+                r.push_str(" µs");
+                draw_row(fb, left, y, row_w, "", r.as_str(), Color::TEXT_MAIN);
+                y += step;
+
                 let mut score_txt = TextBuf::new();
                 score_txt.push_str(crate::gui::ui_text("Puan: ", "Score: "));
-                score_txt.push_usize(score as usize);
+                score_txt.push_usize(res.score as usize);
                 score_txt.push_str(" / 100 - ");
-                score_txt.push_str(perf_grade(score));
+                score_txt.push_str(perf_grade(res.score));
                 MinGuiCompositor::draw_string_clipped(
                     fb,
                     left,
@@ -936,8 +1143,8 @@ pub fn render_content(
                     left,
                     y,
                     crate::gui::ui_text(
-                        "3 saniyelik test: CPU, bellek, çizim ve ses",
-                        "3 second test: CPU, memory, drawing and sound",
+                        "CPU, bellek ve grafik hızı ölçülür; ardından 3 saniye boyunca kare hızı ve kararlılık ölçülür.",
+                        "CPU, memory and graphics speed are measured, then frame rate and stability for 3 seconds.",
                     ),
                     Color::TEXT_MUTED,
                 );

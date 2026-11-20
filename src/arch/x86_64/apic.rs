@@ -21,7 +21,12 @@ static BSP_IDLE_HLT: AtomicBool = AtomicBool::new(false);
 
 /// APIC Timer Kesme Vektörü (IDT vektör 32)
 pub const APIC_TIMER_VECTOR: u8 = 0x20;
-pub const SCHEDULER_HZ: u32 = 1000;
+/// Zamanlayıcı tik frekansı. Her tik tam yazmaç + FPU (fxsave/fxrstor)
+/// kaydı ve Rust işleyicisi çalıştırır; 250 Hz (4 ms) 1000 Hz'e göre
+/// kesme yükünü 4× azaltır ve boşta HLT'yi derinleştirir. Duvar saati TSC
+/// tabanlı `monotonic_ms`'dir; bu değer yalnızca kuantum/kesme sıklığını
+/// belirler. 4 ms'lik üst sınır masaüstü tepkiselliği için yeterlidir.
+pub const SCHEDULER_HZ: u32 = 250;
 
 // Local APIC register offset'leri
 const LAPIC_TIMER_DIVIDE: u32 = 0x3E0;
@@ -157,10 +162,12 @@ fn calibrate_initial_count() -> u32 {
         // Ölçüm başarısız (timer saymıyor): eski varsayılanı koru.
         return 0x100000;
     }
-    // 1 periyot = 1/sn Hz. İstenen periyot 1 ms = tsc_per_us * 1000 TSC tick'i.
-    let period_ticks = tsc_per_us.saturating_mul(1_000);
-    let per_ms = (counts as u128).saturating_mul(period_ticks as u128) / tsc_delta as u128;
-    (per_ms.clamp(1, u32::MAX as u128) as u32).max(1)
+    // İstenen periyot = 1/SCHEDULER_HZ saniye. Eskiden burada 1_000 µs
+    // sabitti; SCHEDULER_HZ değişse bile tik 1 ms'de kalırdı.
+    let period_us = 1_000_000u64 / SCHEDULER_HZ.max(1) as u64;
+    let period_ticks = tsc_per_us.saturating_mul(period_us);
+    let per_tick = (counts as u128).saturating_mul(period_ticks as u128) / tsc_delta as u128;
+    (per_tick.clamp(1, u32::MAX as u128) as u32).max(1)
 }
 
 /// APIC Timer'ı başlatır ve IDT vektör 0x20'ye bağlar.

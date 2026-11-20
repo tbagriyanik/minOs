@@ -18,6 +18,7 @@ pub mod memory;
 pub mod musicplayer;
 pub mod notepad;
 pub mod paint;
+pub mod perfbench;
 pub mod pkg_deps;
 pub mod pkgmgr;
 pub mod registry;

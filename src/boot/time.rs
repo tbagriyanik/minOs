@@ -8,11 +8,15 @@ pub fn read_cpu_cycles() -> u64 {
     let low: u32;
     let high: u32;
     unsafe {
+        // `nomem` bilerek KULLANILMAZ: rdtsc bir bellek engeli (barrier)
+        // olarak davranmalıdır. `nomem` ile derleyici, zaman damgası okumasını
+        // belleğe yazan iş yüklerinin *önüne* taşıyabiliyor; boylece kısa
+        // ölçümler (benchmark, kare süresi) tamamen yanlış değer veriyordu.
         core::arch::asm!(
             "rdtsc",
             out("eax") low,
             out("edx") high,
-            options(nomem, nostack, preserves_flags),
+            options(nostack, preserves_flags),
         );
     }
     ((high as u64) << 32) | low as u64

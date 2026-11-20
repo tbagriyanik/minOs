@@ -415,7 +415,8 @@ pub fn request_preempt() {
     PREEMPT_REQUESTED.store(true, Ordering::Release);
 }
 
-pub const SCHEDULER_HZ: u64 = 1_000;
+/// APIC timer tik frekansı ile aynı tutulur (bkz. `arch::x86_64::apic`).
+pub const SCHEDULER_HZ: u64 = 250;
 pub fn scheduler_tick() {
     SCHEDULER_TICKS.fetch_add(1, Ordering::Relaxed);
     request_preempt();

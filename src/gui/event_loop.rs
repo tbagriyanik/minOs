@@ -125,27 +125,40 @@ fn publish_runtime_app_memory(
     publish_app_memory(16, core::mem::size_of_val(fps_3d_app), 0);
     publish_app_memory(17, core::mem::size_of_val(city_drive_app), 0);
 
-    let mut total = gui::TextBuf::new();
-    total.push_str("[APP-MEM] toplam=");
-    total.push_usize(apps::memory::total());
-    total.push_str(" bayt, guncelleme=");
-    total.push_usize(apps::memory::snapshot_seq() as usize);
-    serial_print(total.as_str());
-    serial_print("\n");
+    // Seri döküm pahalıdır: ~18 satır 115200 baud'da yüzlerce ms UART
+    // meşguliyeti ve SERIAL_LOCK tutma süresi demektir. Kayıt defteri her
+    // çağrıda güncellenir (Görev Yöneticisi bunu okur); `[APP-MEM]` seri
+    // satırları ilk çağrıda ve sonrasında en fazla 5 saniyede bir gönderilir.
+    // `test_qemu.ps1` işaret satırını başlangıçtaki tam dökümden yakalar.
+    static LAST_SERIAL_DUMP_MS: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(u64::MAX);
+    let now_ms = monotonic_ms();
+    let last_dump = LAST_SERIAL_DUMP_MS.load(core::sync::atomic::Ordering::Relaxed);
+    if last_dump == u64::MAX || now_ms.wrapping_sub(last_dump) >= 5_000 {
+        LAST_SERIAL_DUMP_MS.store(now_ms, core::sync::atomic::Ordering::Relaxed);
 
-    // `app=` ve `bytes=` alan sırası/düzeni `test_qemu.ps1` tarafından
-    // ayrıştırıldığı için korunur; uygulama adı sonda ek bilgi olarak verilir.
-    apps::memory::for_each(|app_id, bytes| {
-        let mut line = gui::TextBuf::new();
-        line.push_str("[APP-MEM] app=");
-        line.push_usize(app_id);
-        line.push_str(" bytes=");
-        line.push_usize(bytes);
-        line.push_str(" name=");
-        line.push_str(apps::memory::app_name(app_id));
-        serial_print(line.as_str());
+        let mut total = gui::TextBuf::new();
+        total.push_str("[APP-MEM] toplam=");
+        total.push_usize(apps::memory::total());
+        total.push_str(" bayt, guncelleme=");
+        total.push_usize(apps::memory::snapshot_seq() as usize);
+        serial_print(total.as_str());
         serial_print("\n");
-    });
+
+        // `app=` ve `bytes=` alan sırası/düzeni `test_qemu.ps1` tarafından
+        // ayrıştırıldığı için korunur; uygulama adı sonda ek bilgi olarak verilir.
+        apps::memory::for_each(|app_id, bytes| {
+            let mut line = gui::TextBuf::new();
+            line.push_str("[APP-MEM] app=");
+            line.push_usize(app_id);
+            line.push_str(" bytes=");
+            line.push_usize(bytes);
+            line.push_str(" name=");
+            line.push_str(apps::memory::app_name(app_id));
+            serial_print(line.as_str());
+            serial_print("\n");
+        });
+    }
 }
 
 /// Kapanış/yeniden başlatma akışı: görünür ilerleme, VFS senkronizasyonu,
@@ -716,6 +729,20 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
         }
+    }
+
+    // Önyükleme komut satırında `perftest` varsa Kontrol Paneli "Testler"
+    // sekmesi açılır ve performans testi otomatik başlatılır. Sonuç hem
+    // ekranda hem seri konsolda `[PERF]` satırı olarak yayınlanır; sanal
+    // makine ve gerçek PC doğrulaması için kullanılır.
+    if crate::boot::limine::limine_boot_cmdline()
+        .map(|c| crate::boot::limine::cmdline_has_token(c, "perftest"))
+        .unwrap_or(false)
+    {
+        compositor.launch_app_window(14);
+        apps::controlpanel::select_tab(3);
+        apps::controlpanel::start_perf_test();
+        serial_print("[BOOT] perftest=1: performans testi baslatildi.\n");
     }
 
     // Uygulama bazlı bellek raporu döngünün ilk turunda da yayınlanır; ancak
@@ -8683,7 +8710,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let _app_context = apps::guard::ContextScope::new(14, apps::guard::NO_WINDOW);
                 let delta = now_cycles.wrapping_sub(cp_last_cycles);
                 let delta_us = delta / unsafe { TSC_CYCLES_PER_US };
-                if apps::controlpanel::perf_sample(delta_us.min(1_000_000)) {
+                let target_us = frame_interval_ms.saturating_mul(1_000);
+                if apps::controlpanel::perf_sample(delta_us.min(1_000_000), target_us) {
                     force_render = true;
                 }
             }

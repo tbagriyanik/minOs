@@ -554,6 +554,10 @@ pub mod input_queue;
 mod host_mzram_tests;
 
 #[cfg(test)]
+#[path = "host_perf_tests.rs"]
+mod host_perf_tests;
+
+#[cfg(test)]
 #[path = "host_input_tests.rs"]
 mod host_input_tests;
 

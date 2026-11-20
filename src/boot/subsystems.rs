@@ -1,6 +1,6 @@
 use crate::arch;
 use crate::boot;
-use crate::boot::console::serial_print;
+use crate::boot::console::{serial_print, serial_print_dec};
 use crate::boot::devices::{GLOBAL_KEYBOARD, GLOBAL_MOUSE};
 use crate::boot::limine::*;
 use crate::drivers;
@@ -286,8 +286,12 @@ pub fn init_subsystems(
     // map'ler, ardından apic::init_timer() timer kayıtlarına güvenle yazabilir.
     arch::x86_64::smp::lapic_init();
     arch::x86_64::apic::init_timer();
-    serial_print("[APIC] 1000Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n");
-    serial_print("[SCHED] 1000Hz round-robin scheduler; network downloads yield cooperatively.\n");
+    serial_print("[APIC] ");
+    serial_print_dec(arch::x86_64::apic::SCHEDULER_HZ as u64);
+    serial_print("Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n");
+    serial_print("[SCHED] ");
+    serial_print_dec(arch::x86_64::apic::SCHEDULER_HZ as u64);
+    serial_print("Hz round-robin scheduler; network downloads yield cooperatively.\n");
 
     // Ring3 süreç zamanlayıcısı sınavı: yield, kernel-izolasyon ve yığın
     // taşması senaryolarını gerçek CR3/context-switch yoluyla doğrular.

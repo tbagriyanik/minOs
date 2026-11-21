@@ -49,7 +49,7 @@ use heapless::String as HeaplessString;
 use crate::drivers::http::header_value;
 use crate::drivers::video::Framebuffer;
 use crate::fs::vfs::VirtualFileSystem;
-use crate::gui::{Color, MinGuiCompositor};
+use crate::gui::{scaled_statusbar_h, Color, MinGuiCompositor};
 
 use css::{match_css_style, parse_css};
 use html::{
@@ -1524,11 +1524,12 @@ impl BrowserApp {
         win_w: usize,
         win_h: usize,
     ) -> (usize, usize, usize, usize) {
+        let sb_h = scaled_statusbar_h();
         (
             win_x + 6,
-            win_y + win_h.saturating_sub(24),
+            win_y + win_h.saturating_sub(sb_h),
             win_w.saturating_sub(12),
-            20,
+            sb_h,
         )
     }
 

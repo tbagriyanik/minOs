@@ -106,7 +106,10 @@ fn mouse_write(cmd: u8) {
 
 pub fn init() {
     if !present() {
-        crate::serial::print("[PS/2] 8042 denetleyicisi bulunamadi; PS/2 girdisi devre disi.\n");
+        crate::kdebug!(
+            "driver:ps2",
+            "[PS/2] 8042 denetleyicisi bulunamadi; PS/2 girdisi devre disi.\n"
+        );
         return;
     }
 
@@ -431,7 +434,10 @@ fn init_irq_mode() {
     }
 
     if routed == 0 {
-        crate::serial_print("[PS/2] IOAPIC yönlendirmesi kurulamadı; yoklama modu sürüyor.\n");
+        crate::kwarn!(
+            "driver:ps2",
+            "[PS/2] IOAPIC yönlendirmesi kurulamadı; yoklama modu sürüyor.\n"
+        );
         return;
     }
 
@@ -444,7 +450,10 @@ fn init_irq_mode() {
 
     enable_8042_irq_output();
     unsafe { IRQ_MODE = true };
-    crate::serial_print("[PS/2] Kesme modu etkin (IRQ1→0x30, IRQ12→0x31, IOAPIC).\n");
+    crate::kdebug!(
+        "driver:ps2",
+        "[PS/2] Kesme modu etkin (IRQ1→0x30, IRQ12→0x31, IOAPIC).\n"
+    );
 }
 
 /// IRQ işleyicisinin ortak gövdesi: çıkış arabelleğindeki baytları sınırlı

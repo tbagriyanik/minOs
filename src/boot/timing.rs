@@ -17,8 +17,6 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::boot::console::{serial_print, serial_print_dec};
-
 /// `begin()` çağrısındaki monotonik zaman (ms).
 static BOOT_ORIGIN_MS: AtomicU64 = AtomicU64::new(0);
 /// Son işaretin monotonik zamanı (ms).
@@ -42,7 +40,7 @@ pub fn begin() {
     BOOT_ORIGIN_MS.store(now, Ordering::Release);
     LAST_MARK_MS.store(now, Ordering::Release);
     TIMING_ENABLED.store(1, Ordering::Release);
-    serial_print("[BOOT-TIME] Timing started.\n");
+    kdebug!("boot-time", "[BOOT-TIME] Timing started.\n");
 }
 
 /// Açılıştan bu yana geçen süre (ms). Ölçüm başlamadıysa `0`.
@@ -71,21 +69,21 @@ impl PhaseTimer {
         let delta = now.saturating_sub(last);
         PHASE_COUNT.fetch_add(1, Ordering::AcqRel);
         MAX_PHASE_MS.fetch_max(delta, Ordering::AcqRel);
-        serial_print("[BOOT-TIME] ");
-        serial_print(label);
-        serial_print("=");
-        serial_print_dec(delta);
-        serial_print("ms toplam=");
-        serial_print_dec(now);
-        serial_print("ms\n");
+        kdebug!(
+            "boot-time",
+            "[BOOT-TIME] {}={}ms toplam={}ms\n",
+            label,
+            delta,
+            now
+        );
         if delta >= SLOW_PHASE_MS {
-            serial_print("[BOOT-TIME] WARNING slow phase: ");
-            serial_print(label);
-            serial_print("=");
-            serial_print_dec(delta);
-            serial_print("ms (esik=");
-            serial_print_dec(SLOW_PHASE_MS);
-            serial_print("ms)\n");
+            kwarn!(
+                "boot-time",
+                "[BOOT-TIME] WARNING slow phase: {}={}ms (esik={}ms)\n",
+                label,
+                delta,
+                SLOW_PHASE_MS
+            );
         }
     }
 
@@ -105,19 +103,24 @@ impl Default for PhaseTimer {
 /// en yavaş aşama ve bütçe durumu).
 pub fn report_total() {
     let total = since_boot_ms();
-    serial_print("[BOOT-TIME] SURUM=");
-    serial_print_dec(total);
-    serial_print("ms asama=");
-    serial_print_dec(PHASE_COUNT.load(Ordering::Acquire));
-    serial_print(" en-yavas=");
-    serial_print_dec(MAX_PHASE_MS.load(Ordering::Acquire));
-    serial_print("ms butce=");
-    serial_print_dec(BOOT_BUDGET_MS);
-    serial_print("ms durum=");
     if total <= BOOT_BUDGET_MS {
-        serial_print("OK\n");
+        kinfo!(
+            "boot-time",
+            "[BOOT-TIME] SURUM={}ms asama={} en-yavas={}ms butce={}ms durum=OK\n",
+            total,
+            PHASE_COUNT.load(Ordering::Acquire),
+            MAX_PHASE_MS.load(Ordering::Acquire),
+            BOOT_BUDGET_MS
+        );
     } else {
-        serial_print("ASIM\n");
+        kwarn!(
+            "boot-time",
+            "[BOOT-TIME] SURUM={}ms asama={} en-yavas={}ms butce={}ms durum=ASIM\n",
+            total,
+            PHASE_COUNT.load(Ordering::Acquire),
+            MAX_PHASE_MS.load(Ordering::Acquire),
+            BOOT_BUDGET_MS
+        );
     }
 }
 

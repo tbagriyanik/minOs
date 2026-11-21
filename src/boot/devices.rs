@@ -6,7 +6,6 @@
 //! sirasinda (hatlarin bildirmedigi suruculer) hem de Kontrol Paneli
 //! "Yeniden Tara" eyleminde ayni kod yolu kullanilir.
 
-use crate::boot::console::{serial_print, serial_print_dec};
 use crate::drivers;
 use crate::drivers::status::{self, DriverId, DriverPhase};
 
@@ -53,9 +52,9 @@ pub fn collect_driver_statuses() {
 /// DMA gerektiren hatlar (ag/ses/HID) yeniden baslatilmaz; yalnizca
 /// guvenli algilama ve durum sorgulari tekrarlanir.
 pub fn rescan_drivers() {
-    serial_print("[DRIVERS] Surucu yeniden taramasi baslatildi.\n");
+    kinfo!("boot", "[DRIVERS] Surucu yeniden taramasi baslatildi.\n");
     scan(true);
-    serial_print("[DRIVERS] Surucu yeniden taramasi tamamlandi.\n");
+    kinfo!("boot", "[DRIVERS] Surucu yeniden taramasi tamamlandi.\n");
 }
 
 fn scan(refresh: bool) {
@@ -276,13 +275,12 @@ fn refresh_input() {
 /// Surucu durum ozetini seri gunluge yazar (teshis icin).
 pub fn log_status_summary() {
     let (ready, unavailable, error, other) = status::summary();
-    serial_print("[DRIVER-STATUS] ozet: hazir=");
-    serial_print_dec(ready as u64);
-    serial_print(" kullanilamiyor=");
-    serial_print_dec(unavailable as u64);
-    serial_print(" hata=");
-    serial_print_dec(error as u64);
-    serial_print(" diger=");
-    serial_print_dec(other as u64);
-    serial_print("\n");
+    kinfo!(
+        "boot",
+        "[DRIVER-STATUS] ozet: hazir={} kullanilamiyor={} hata={} diger={}\n",
+        ready,
+        unavailable,
+        error,
+        other
+    );
 }

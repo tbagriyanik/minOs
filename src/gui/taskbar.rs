@@ -49,7 +49,7 @@ impl MinGuiCompositor {
     }
     /// Verilen X konumundaki görev çubuğu sekmesinin dikdörtgeni.
     pub fn taskbar_tab_rect_at(tab_x: usize, tb_y: usize) -> (usize, usize, usize, usize) {
-        let h = sp(26).min(taskbar_h().saturating_sub(8));
+        let h = sp(26).min(scaled_taskbar_h().saturating_sub(8));
         (tab_x, tb_y + 5, Self::taskbar_tab_width(), h)
     }
     /// "Masaüstü n/N" göstergesinin dikdörtgeni; sekmelerle tepsi arasında
@@ -84,7 +84,7 @@ impl MinGuiCompositor {
         let tb_y = Self::tray_layout(width, height).tb_y;
         Some((
             tray_x.saturating_sub(ws_w + sp(8)),
-            tb_y + taskbar_h().saturating_sub(text_h) / 2,
+            tb_y + scaled_taskbar_h().saturating_sub(text_h) / 2,
             ws_w,
             text_h,
         ))
@@ -118,11 +118,19 @@ impl MinGuiCompositor {
             0,
             tb_y,
             fb.width,
-            taskbar_h(),
+            scaled_taskbar_h(),
             Color::TASKBAR_BG,
             Self::shade(Color::TASKBAR_BG, 8),
         );
-        fb.draw_rounded_rect_alpha(0, tb_y, fb.width, taskbar_h(), 0, Color::TASKBAR_BG, 224);
+        fb.draw_rounded_rect_alpha(
+            0,
+            tb_y,
+            fb.width,
+            scaled_taskbar_h(),
+            0,
+            Color::TASKBAR_BG,
+            224,
+        );
         fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
 
         // Tepsi öğeleri için ortak hover / basılı / açık-panel geri bildirimi.
@@ -186,9 +194,9 @@ impl MinGuiCompositor {
             let inner_gap = sp(8);
             let block_w = icon_w + inner_gap + text_w;
             let block_x = l.start.0 + l.start.2.saturating_sub(block_w) / 2;
-            let icon_y = tb_y + taskbar_h().saturating_sub(icon_w) / 2;
+            let icon_y = tb_y + scaled_taskbar_h().saturating_sub(icon_w) / 2;
             let text_h = Self::text_height();
-            let text_y = tb_y + taskbar_h().saturating_sub(text_h) / 2;
+            let text_y = tb_y + scaled_taskbar_h().saturating_sub(text_h) / 2;
             Self::draw_cat_icon(fb, block_x, icon_y);
             Self::draw_string_shadow(
                 fb,
@@ -379,7 +387,7 @@ impl MinGuiCompositor {
         Self::draw_string(
             fb,
             l.kbd.0 + sp(30),
-            tb_y + (taskbar_h().saturating_sub(Self::text_height())) / 2,
+            tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
             kbd_tag,
             kbd_col,
         );
@@ -482,7 +490,7 @@ impl MinGuiCompositor {
             Self::draw_string(
                 fb,
                 l.network.0 + sp(28),
-                tb_y + (taskbar_h().saturating_sub(Self::text_height())) / 2,
+                tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
                 "eth0",
                 c,
             );
@@ -509,7 +517,7 @@ impl MinGuiCompositor {
                     l.desktop.0,
                     tb_y,
                     l.desktop.2,
-                    taskbar_h(),
+                    scaled_taskbar_h(),
                     Self::shade(Color::TITLE_BAR, 10),
                 );
             }
@@ -518,7 +526,7 @@ impl MinGuiCompositor {
                 l.desktop.0,
                 tb_y + sp(6),
                 1,
-                taskbar_h().saturating_sub(sp(12)),
+                scaled_taskbar_h().saturating_sub(sp(12)),
                 line_color,
             );
         }
@@ -534,7 +542,7 @@ impl MinGuiCompositor {
         Self::draw_string(
             fb,
             l.clock.0 + sp(8),
-            tb_y + (taskbar_h().saturating_sub(Self::text_height())) / 2,
+            tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
             clock.as_str(),
             if clock_hover {
                 Color::ACCENT_BLUE

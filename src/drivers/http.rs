@@ -390,9 +390,10 @@ pub(crate) fn require_cert_verified(session: &TlsSession, host: &[u8]) -> Result
             .cert_error()
             .map(|e| format!("{:?}", e))
             .unwrap_or_else(|| "bilinmeyen hata".to_string());
-        crate::serial_print(&format!(
+        crate::kerror!(
+            "net",
             "[HTTPS] {host_str}: sertifika doğrulama başarısız: {err_txt}\n"
-        ));
+        );
         return Err(E_CERT);
     }
 
@@ -410,10 +411,11 @@ pub(crate) fn require_cert_verified(session: &TlsSession, host: &[u8]) -> Result
                 &leaf_v, &issuer_v, &now,
             );
             if result.status == crate::drivers::crypto::revocation_core::RevocationStatus::Revoked {
-                crate::serial_print(&format!(
+                crate::kerror!(
+                    "net",
                     "[HTTPS] {}: sertifika iptal edilmiş (revoked), bağlantı reddedildi\n",
                     core::str::from_utf8(host).unwrap_or("")
-                ));
+                );
                 return Err(E_CERT);
             }
         }
@@ -972,8 +974,9 @@ pub fn fetch_once(
                     // aksi takdirde klasik HTTP/1.1 isteği gönderilir.
                     http2_used = session.negotiated_protocol().is_some_and(|p| p == b"h2");
                     if http2_used {
-                        crate::serial_print(
-                            "[HTTP] ALPN ile h2 negotiate edildi, HTTP/2 yığını kullanılıyor\n",
+                        crate::kdebug!(
+                            "net",
+                            "[HTTP] ALPN ile h2 negotiate edildi, HTTP/2 yığını kullanılıyor\n"
                         );
                         // http2_get kendi TCP/TLS bağlantısını kurar, bu yüzden sadece
                         // el sıkışması yapılmış mevcut bağlantıyı serbest bırakırız.
@@ -1433,9 +1436,7 @@ pub(crate) fn http_get_impl(
                 let v6_result = (|| -> Result<(u16, usize, usize), i32> {
                     let fd =
                         socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {
-                            crate::serial_print("[HTTPv6] socket oluşturulamadı: ");
-                            crate::serial_print(&e.to_string());
-                            crate::serial_print("\n");
+                            crate::kwarn!("net", "[HTTPv6] socket oluşturulamadı: {}\n", e);
                         })?;
                     let _ = socket::set_timeout(fd, 8000);
                     match socket::connect_v6(fd, v6, port) {
@@ -1638,7 +1639,7 @@ pub(crate) fn http_get_impl(
                     }
                     Err(_e) => {
                         // IPv6 yolu başarısız (TCP/TLS/HTTP hatası): IPv4'e düş.
-                        crate::serial_print("[HTTPv6] IPv6 yolu basarisiz, IPv4'e dusuluyor\n");
+                        crate::kwarn!("net", "[HTTPv6] IPv6 yolu basarisiz, IPv4'e dusuluyor\n");
                     }
                 }
             }
@@ -2365,8 +2366,11 @@ pub fn self_test() -> bool {
     if decode_chunked(&mut cbuf2, partial.len()).is_some() {
         ok = false; // yarım gövde reddedilmeli
     }
-    crate::serial_print("[HTTP-TEST] url/status/chunked self-check: ");
-    crate::serial_print(if ok { "BAŞARILI\n" } else { "BAŞARISIZ\n" });
+    crate::kinfo!(
+        "net",
+        "[HTTP-TEST] url/status/chunked self-check: {}\n",
+        if ok { "BAŞARILI" } else { "BAŞARISIZ" }
+    );
     ok
 }
 
@@ -2601,9 +2605,7 @@ impl WebSocketConnection {
                 if let Ok(v6) = socket::resolve_host_aaaa(&host) {
                     let fd6 =
                         socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {
-                            crate::serial_print("[WSv6] socket oluşturulamadı: ");
-                            crate::serial_print(&e.to_string());
-                            crate::serial_print("\n");
+                            crate::kwarn!("net", "[WSv6] socket oluşturulamadı: {}\n", e);
                         })?;
                     let _ = socket::set_timeout(fd6, 8000);
                     if socket::connect_v6(fd6, v6, port).is_ok() {
@@ -2622,9 +2624,7 @@ impl WebSocketConnection {
                 let ip = socket::resolve_host(&host)?;
                 let fd4 =
                     socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
-                        crate::serial_print("[WS] socket oluşturulamadı: ");
-                        crate::serial_print(&e.to_string());
-                        crate::serial_print("\n");
+                        crate::kwarn!("net", "[WS] socket oluşturulamadı: {}\n", e);
                     })?;
                 let _ = socket::set_timeout(fd4, 8000);
                 socket::connect(fd4, ip, port).inspect_err(|_e| {

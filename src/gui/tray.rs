@@ -15,10 +15,10 @@ impl MinGuiCompositor {
         net_available: bool,
         audio_available: bool,
     ) -> TrayLayout {
-        let tb_y = height.saturating_sub(taskbar_h());
+        let tb_y = height.saturating_sub(scaled_taskbar_h());
         let by = tb_y + 5;
         // Tray düğmeleri aktif font ölçeğine göre büyür.
-        let h = sp(26).min(taskbar_h().saturating_sub(8));
+        let h = sp(26).min(scaled_taskbar_h().saturating_sub(8));
         // "Masaüstünü Göster" şeridi en sağda (Windows benzeri ince dikey alan).
         let show_desktop_w = sp(10);
         let show_desktop_x = width.saturating_sub(show_desktop_w);
@@ -73,7 +73,7 @@ impl MinGuiCompositor {
             (0, 0, 0, 0)
         };
 
-        let desktop_rect = (show_desktop_x, tb_y, show_desktop_w, taskbar_h());
+        let desktop_rect = (show_desktop_x, tb_y, show_desktop_w, scaled_taskbar_h());
 
         TrayLayout {
             tb_y,

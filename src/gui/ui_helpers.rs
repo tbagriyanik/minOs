@@ -1,43 +1,61 @@
 //! Standardized UI helpers for consistent error/status handling across apps.
 
 use crate::drivers::video::Framebuffer;
-use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
+use crate::gui::{sp, Color, MinGuiCompositor, TextBuf, ToastKind};
 
-/// Standard toast notification helpers
+/// Standart toast bildirim yardımcıları.
+///
+/// Otomatik kapanma süreleri tür başına tek yerde tanımlıdır
+/// (`ToastKind::default_duration_ms`): bilgi/başarı 3 sn, uyarı 4 sn,
+/// hata 5 sn. Kullanıcı her bildirimi Esc veya ✕ ile kapatabilir.
+fn toast(
+    compositor: &mut crate::gui::MinGuiCompositor,
+    kind: ToastKind,
+    now_ms: u64,
+    title: &str,
+    msg: &str,
+) {
+    compositor.push_toast(kind, title, msg, now_ms, kind.default_duration_ms());
+}
+
+/// Hata bildirimi (kırmızı ✕, 5 sn).
 pub fn toast_error(
     compositor: &mut crate::gui::MinGuiCompositor,
     now_ms: u64,
     title: &str,
     msg: &str,
 ) {
-    compositor.push_toast(crate::gui::ToastKind::Error, title, msg, now_ms, 5000);
+    toast(compositor, ToastKind::Error, now_ms, title, msg);
 }
 
+/// Başarı bildirimi (yeşil ✓, 3 sn).
 pub fn toast_success(
     compositor: &mut crate::gui::MinGuiCompositor,
     now_ms: u64,
     title: &str,
     msg: &str,
 ) {
-    compositor.push_toast(crate::gui::ToastKind::Success, title, msg, now_ms, 3000);
+    toast(compositor, ToastKind::Success, now_ms, title, msg);
 }
 
+/// Uyarı bildirimi (sarı !, 4 sn).
 pub fn toast_warning(
     compositor: &mut crate::gui::MinGuiCompositor,
     now_ms: u64,
     title: &str,
     msg: &str,
 ) {
-    compositor.push_toast(crate::gui::ToastKind::Warning, title, msg, now_ms, 4000);
+    toast(compositor, ToastKind::Warning, now_ms, title, msg);
 }
 
+/// Bilgi bildirimi (mavi i, 3 sn).
 pub fn toast_info(
     compositor: &mut crate::gui::MinGuiCompositor,
     now_ms: u64,
     title: &str,
     msg: &str,
 ) {
-    compositor.push_toast(crate::gui::ToastKind::Info, title, msg, now_ms, 3000);
+    toast(compositor, ToastKind::Info, now_ms, title, msg);
 }
 
 /// Standard confirmation dialog rendering
@@ -122,8 +140,13 @@ impl ConfirmDialog {
         fb.draw_rect(win_x, win_y, win_w, win_h, Color::DARK_BG);
 
         // Dialog box
-        let dlg_w = win_w.min(480);
-        let dlg_h = sp(160);
+        let is_compact = win_w < 320 || win_h < 200;
+        let dlg_w = win_w.saturating_sub(16).min(480);
+        let dlg_h = if is_compact {
+            win_h.saturating_sub(16).min(sp(140)).max(100)
+        } else {
+            win_h.saturating_sub(24).min(sp(160)).max(120)
+        };
         let dlg_x = win_x + (win_w.saturating_sub(dlg_w)) / 2;
         let dlg_y = win_y + (win_h.saturating_sub(dlg_h)) / 2;
 
@@ -131,32 +154,51 @@ impl ConfirmDialog {
         fb.draw_rounded_rect_outline(dlg_x, dlg_y, dlg_w, dlg_h, 8, Color::ACCENT_YELLOW);
 
         // Title
+        let title_y = if is_compact {
+            dlg_y + 8
+        } else {
+            dlg_y + sp(16)
+        };
         MinGuiCompositor::draw_string(
             fb,
             dlg_x + (dlg_w.saturating_sub(MinGuiCompositor::text_width(self.title, 1))) / 2,
-            dlg_y + sp(16),
+            title_y,
             self.title,
             Color::ACCENT_RED,
         );
 
         // Message
-        MinGuiCompositor::draw_string(
+        let msg_y = if is_compact {
+            dlg_y + 28
+        } else {
+            dlg_y + sp(50)
+        };
+        MinGuiCompositor::draw_string_clipped(
             fb,
-            dlg_x + sp(20),
-            dlg_y + sp(50),
+            dlg_x + (if is_compact { 10 } else { sp(20) }),
+            msg_y,
             self.message,
             Color::TEXT_MAIN,
+            (dlg_x + 8, msg_y, dlg_w.saturating_sub(16), 18),
         );
 
         // Detail
+        let detail_y = if is_compact {
+            dlg_y + 46
+        } else {
+            dlg_y + sp(70)
+        };
         if let Some(detail) = self.detail {
-            MinGuiCompositor::draw_string(
-                fb,
-                dlg_x + sp(20),
-                dlg_y + sp(70),
-                detail,
-                Color::ACCENT_YELLOW,
-            );
+            if !is_compact || dlg_h >= 130 {
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    dlg_x + (if is_compact { 10 } else { sp(20) }),
+                    detail_y,
+                    detail,
+                    Color::ACCENT_YELLOW,
+                    (dlg_x + 8, detail_y, dlg_w.saturating_sub(16), 18),
+                );
+            }
         }
 
         // Instructions
@@ -166,13 +208,25 @@ impl ConfirmDialog {
         } else {
             "Enter/E=Evet, Esc/H=Hayır, Tab=Değiştir"
         };
-        MinGuiCompositor::draw_string(fb, dlg_x + sp(20), dlg_y + sp(95), hint, Color::TEXT_MUTED);
+        if !is_compact && dlg_h >= 150 {
+            MinGuiCompositor::draw_string(
+                fb,
+                dlg_x + sp(20),
+                dlg_y + sp(95),
+                hint,
+                Color::TEXT_MUTED,
+            );
+        }
 
         // Yes / No buttons
-        let btn_w = sp(80);
-        let btn_h = sp(28);
-        let btn_gap = sp(20);
-        let btn_y = dlg_y + dlg_h - btn_h - sp(16);
+        let btn_w = if is_compact {
+            64.min(dlg_w.saturating_sub(24) / 2)
+        } else {
+            sp(80)
+        };
+        let btn_h = if is_compact { 22 } else { sp(28) };
+        let btn_gap = if is_compact { 8 } else { sp(20) };
+        let btn_y = dlg_y + dlg_h.saturating_sub(btn_h + (if is_compact { 8 } else { sp(16) }));
         let total_btn_w = btn_w * 2 + btn_gap;
         let btn_start_x = dlg_x + (dlg_w.saturating_sub(total_btn_w)) / 2;
 
@@ -294,8 +348,13 @@ impl ProgressIndicator {
         fb.draw_rect(win_x, win_y, win_w, win_h, Color::DARK_BG);
 
         // Dialog box
-        let dlg_w = win_w.min(440);
-        let dlg_h = sp(130);
+        let is_compact = win_w < 320 || win_h < 200;
+        let dlg_w = win_w.saturating_sub(16).min(440);
+        let dlg_h = if is_compact {
+            win_h.saturating_sub(16).min(sp(110)).max(90)
+        } else {
+            win_h.saturating_sub(24).min(sp(130)).max(100)
+        };
         let dlg_x = win_x + (win_w.saturating_sub(dlg_w)) / 2;
         let dlg_y = win_y + (win_h.saturating_sub(dlg_h)) / 2;
 
@@ -308,28 +367,43 @@ impl ProgressIndicator {
         fb.draw_rounded_rect_outline(dlg_x, dlg_y, dlg_w, dlg_h, 8, border_color);
 
         // Title
+        let title_y = if is_compact {
+            dlg_y + 8
+        } else {
+            dlg_y + sp(14)
+        };
         MinGuiCompositor::draw_string(
             fb,
             dlg_x + (dlg_w.saturating_sub(MinGuiCompositor::text_width(self.title, 1))) / 2,
-            dlg_y + sp(14),
+            title_y,
             self.title,
             border_color,
         );
 
         // Message
-        MinGuiCompositor::draw_string(
+        let msg_y = if is_compact {
+            dlg_y + 26
+        } else {
+            dlg_y + sp(44)
+        };
+        MinGuiCompositor::draw_string_clipped(
             fb,
-            dlg_x + sp(20),
-            dlg_y + sp(44),
+            dlg_x + (if is_compact { 10 } else { sp(20) }),
+            msg_y,
             self.message,
             Color::TEXT_MAIN,
+            (dlg_x + 8, msg_y, dlg_w.saturating_sub(16), 18),
         );
 
         // Progress bar
-        let bar_x = dlg_x + sp(20);
-        let bar_y = dlg_y + sp(70);
-        let bar_w = dlg_w - sp(40);
-        let bar_h = sp(14);
+        let bar_x = dlg_x + (if is_compact { 10 } else { sp(20) });
+        let bar_y = if is_compact {
+            dlg_y + 48
+        } else {
+            dlg_y + sp(70)
+        };
+        let bar_w = dlg_w.saturating_sub(if is_compact { 20 } else { sp(40) });
+        let bar_h = if is_compact { 10 } else { sp(14) };
 
         fb.draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, 4, Color::DARK_BG);
         fb.draw_rounded_rect_outline(bar_x, bar_y, bar_w, bar_h, 4, Color::BORDER);
@@ -474,4 +548,137 @@ pub fn draw_inline_warning(fb: &mut Framebuffer, x: usize, y: usize, w: usize, m
 /// Focus ring wrapper for consistent keyboard navigation indication
 pub fn draw_focus_ring_std(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
     MinGuiCompositor::draw_focus_ring(fb, x, y, w, h);
+}
+
+/// Boş durum (Empty State) kartı / ekranı çizim fonksiyonu.
+/// Dosya yok, seçim yok, ağ yok, resim yüklenemedi gibi durumlarda
+/// simge + açıklayıcı başlık/mesaj + aksiyon butonu ("Yenile", "Tekrar dene", "Klasör oluştur").
+pub fn draw_empty_state(
+    fb: &mut Framebuffer,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    icon_type: EmptyStateIcon,
+    title: &str,
+    subtitle: &str,
+    action_label: Option<&str>,
+    action_focused: bool,
+) -> Option<(usize, usize, usize, usize)> {
+    if w < 60 || h < 40 {
+        return None;
+    }
+
+    let is_compact = w < 240 || h < 160;
+    let card_pad_y = if is_compact { 6 } else { 16 };
+    let icon_sz = if is_compact { 16 } else { 28 };
+    let center_x = x + w / 2;
+    let mut cur_y = y + card_pad_y;
+
+    // 1. Simge / İkon
+    let icon_x = center_x.saturating_sub(icon_sz / 2);
+    match icon_type {
+        EmptyStateIcon::Folder => {
+            let s = if is_compact { 1 } else { 2 };
+            crate::apps::filemanager::FileManagerApp::draw_folder_icon_sized(
+                fb, icon_x, cur_y, s, false,
+            );
+        }
+        EmptyStateIcon::NoSelection => {
+            // Seçim yok: soru/belge ikonu
+            let s = if is_compact { 1 } else { 2 };
+            crate::apps::filemanager::FileManagerApp::draw_file_icon_sized(
+                fb, icon_x, cur_y, s, "TXT",
+            );
+        }
+        EmptyStateIcon::NoNetwork => {
+            // Ağ yok: uyarı çubuğu / ağ kartı simgesi
+            fb.draw_rounded_rect(icon_x, cur_y, icon_sz, icon_sz, 4, Color::ACCENT_RED);
+            MinGuiCompositor::draw_string(
+                fb,
+                icon_x + (icon_sz.saturating_sub(8)) / 2,
+                cur_y + (icon_sz.saturating_sub(12)) / 2,
+                "X",
+                Color::WHITE,
+            );
+        }
+        EmptyStateIcon::ImageFailed => {
+            // Resim yüklenemedi
+            fb.draw_rounded_rect(icon_x, cur_y, icon_sz, icon_sz, 4, Color::DARK_BG);
+            fb.draw_rounded_rect_outline(icon_x, cur_y, icon_sz, icon_sz, 4, Color::ACCENT_RED);
+            MinGuiCompositor::draw_string(
+                fb,
+                icon_x + (icon_sz.saturating_sub(8)) / 2,
+                cur_y + (icon_sz.saturating_sub(12)) / 2,
+                "!",
+                Color::ACCENT_YELLOW,
+            );
+        }
+    }
+    cur_y += icon_sz + (if is_compact { 4 } else { 8 });
+
+    // 2. Başlık
+    if cur_y + 14 < y + h {
+        let tw = MinGuiCompositor::text_width(title, 1).min(w.saturating_sub(12));
+        let tx = center_x.saturating_sub(tw / 2);
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            tx,
+            cur_y,
+            title,
+            Color::TEXT_MAIN,
+            (x + 4, cur_y, w.saturating_sub(8), 16),
+        );
+        cur_y += 16;
+    }
+
+    // 3. Alt Mesaj (yeterli alan varsa)
+    if !is_compact && !subtitle.is_empty() && cur_y + 14 < y + h {
+        let sw = MinGuiCompositor::text_width(subtitle, 1).min(w.saturating_sub(16));
+        let sx = center_x.saturating_sub(sw / 2);
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            sx,
+            cur_y,
+            subtitle,
+            Color::TEXT_MUTED,
+            (x + 4, cur_y, w.saturating_sub(8), 14),
+        );
+        cur_y += 18;
+    }
+
+    // 4. Aksiyon Butonu
+    if let Some(lbl) = action_label {
+        let btn_h = if is_compact { 20 } else { 24 };
+        if cur_y + btn_h <= y + h {
+            let bw = (MinGuiCompositor::text_width(lbl, 1) + 20)
+                .min(w.saturating_sub(20))
+                .max(64);
+            let bx = center_x.saturating_sub(bw / 2);
+            let by = cur_y + (if is_compact { 4 } else { 8 });
+            let rect = (bx, by, bw, btn_h);
+            draw_standard_button(
+                fb,
+                bx,
+                by,
+                bw,
+                btn_h,
+                lbl,
+                Color::ACCENT_BLUE,
+                action_focused,
+            );
+            return Some(rect);
+        }
+    }
+
+    None
+}
+
+/// Boş durum ikon türleri
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum EmptyStateIcon {
+    Folder,
+    NoSelection,
+    NoNetwork,
+    ImageFailed,
 }

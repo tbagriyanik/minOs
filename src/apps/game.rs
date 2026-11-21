@@ -11,7 +11,7 @@
 //! üzerinden çalınır.
 
 use crate::drivers::video::Framebuffer;
-use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
+use crate::gui::{scaled_statusbar_h, sp, Color, MinGuiCompositor, TextBuf};
 
 use super::game_core::{self, Board, Move};
 
@@ -25,7 +25,9 @@ const TAB_Y: usize = 28;
 const TAB_H: usize = 24;
 const TAB_W: usize = 96;
 
-const STATUS_H: usize = 26;
+fn status_h() -> usize {
+    scaled_statusbar_h()
+}
 
 /// Ses efektleri: ana döngü bu kimliğe bakarak ton üretir.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -882,7 +884,7 @@ impl GameApp {
     /// Oyun alanı: sekmenin altında kalan kare alan.
     pub fn board_rect(win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
         let top = sp(TAB_Y + TAB_H + 8);
-        let avail_h = win_h.saturating_sub(top + sp(STATUS_H + 6) + sp(34));
+        let avail_h = win_h.saturating_sub(top + status_h() + sp(6) + sp(34));
         let avail_w = win_w.saturating_sub(sp(16));
         let side = avail_w.min(avail_h).max(sp(96));
         let x = sp(8) + avail_w.saturating_sub(side) / 2;
@@ -1271,15 +1273,16 @@ impl GameApp {
     }
 
     fn render_status(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
-        if h < sp(STATUS_H + 8) {
+        let sh = status_h();
+        if h < sh + sp(8) {
             return;
         }
-        let sy = y + h.saturating_sub(sp(STATUS_H + 4));
+        let sy = y + h.saturating_sub(sh + sp(4));
         fb.draw_rect(
             x + sp(4),
             sy,
             w.saturating_sub(sp(8)),
-            sp(STATUS_H),
+            sh,
             Color::TASKBAR_BG,
         );
         let mut left = TextBuf::new();
@@ -1336,7 +1339,7 @@ impl GameApp {
             sy + sp(7),
             left.as_str(),
             Color::TEXT_MAIN,
-            (x + sp(4), sy, w.saturating_sub(sp(8)), sp(STATUS_H)),
+            (x + sp(4), sy, w.saturating_sub(sp(8)), status_h()),
         );
         let hint = match self.tab {
             TAB_GAME => crate::gui::ui_text(
@@ -1359,7 +1362,7 @@ impl GameApp {
             sy + sp(7) + sp(14),
             hint,
             Color::TEXT_MUTED,
-            (x + sp(4), sy, w.saturating_sub(sp(8)), sp(STATUS_H)),
+            (x + sp(4), sy, w.saturating_sub(sp(8)), status_h()),
         );
     }
 

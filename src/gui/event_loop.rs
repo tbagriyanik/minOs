@@ -8,16 +8,17 @@ use crate::desktop;
 use crate::desktop::helpers::*;
 use crate::drivers;
 use crate::gui;
+use crate::gui::desktop_loop_state::DesktopLoopState;
+use crate::gui::event_render;
+use crate::gui::event_syscall;
+use crate::gui::event_window;
 use crate::handle_terminal_open_request;
-use crate::mm::process::{drain_gui_requests, GuiSyscallRequest};
-use crate::mm::uaccess;
-use crate::mm::vmm::AddressSpace;
 use crate::task;
 use crate::watchdog;
 use crate::{alloc_pmm_frame_global, MEMORY_MGR};
 
 /// Animasyonlu oyun pencerelerinin her tikinde yalnızca ilgili pencere
-/// bölgesini (gölge payı dahil) kirli işaretler. Böylece `force_render`'ın
+/// bölgesini (gölge payı dahil) kirli işaretler. Böylece `state.force_render`'ın
 /// tetiklediği tam ekran yeniden çizim yerine kirli-dikdörtgen çizimi
 /// yapılır; masaüstü arka planı ve diğer pencereler yeniden rasterize
 /// edilmez.
@@ -529,164 +530,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     // Etkileşim durumu
 
-    let mut last_mouse_x = mouse.x;
+    let mut state = DesktopLoopState::new(now);
 
-    let mut last_mouse_y = mouse.y;
-
-    let mut last_buttons = (mouse.left_button, mouse.right_button);
-
-    // Fare Tuşları (MouseKeys) sentetik tıklamaları: 0 = yok, 1 = basış bekliyor,
-    // 2 = basılı (bırakış sonraki turda üretilecek). Böylece tuş vuruşu gerçek
-    // bir fare bas/bırak dizisi gibi iki ayrı kenar (mouse_clicked/mouse_released)
-    // üretir ve düğme asla takılı kalmaz.
-    let mut mousekeys_click_left: u8 = 0;
-
-    let mut mousekeys_click_right: u8 = 0;
-
-    let mut pending_window_control: Option<(usize, u8)> = None;
-
-    let mut dragging_win: Option<usize> = None;
-
-    let mut resizing_win: Option<usize> = None;
-
-    let mut resize_edge: Option<gui::ResizeEdge> = None;
-
-    // Kenar yeniden boyutlandirma baslangicinda pencere geometrisi (sol/ust kenarlar icin)
-
-    let mut resize_orig: (usize, usize, usize, usize) = (0, 0, 0, 0);
-
-    let mut drag_offset_x = 0;
-
-    let mut drag_offset_y = 0;
-
-    // Aero Snap onizleme dikdortgeni: (x, y, w, h)
-
-    let mut active_snap_preview: Option<(usize, usize, usize, usize)> = None;
-
-    // Kaydirma cubugu surukleme: (idx, thumb_ust_ofset, thumb_h, track_h, content_h, view_h)
-
-    let mut vscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
-
-    // Yatay kaydirma cubugu surukleme:
-    // (idx, thumb_sol_ofset, thumb_w, track_w, content_w, view_w)
-    let mut hscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
-
-    let mut anim_tick: usize = 0;
-
-    let mut last_frame_ms = monotonic_ms();
-
-    let mut loop_counter: u64 = 0;
-
-    let mut last_clock_update_ms = monotonic_ms();
-
-    let mut game_perf_us: u64 = 0;
-
-    let mut last_music_beat: usize = 0;
-
-    // Muzik calar ilerleme cubugu icin gercek zaman tabani (ms).
-    let mut last_music_progress_ms = monotonic_ms();
-
-    // Video oynatıcı kare zaman tabanı (ms); ~30 FPS.
-    let mut last_video_frame_ms = monotonic_ms();
-
-    let mut cpu_sample_start = read_cpu_cycles();
-
-    let mut cpu_sample_total_cycles = 0u64;
-
-    let mut cpu_sample_active_cycles = 0u64;
-
-    let mut last_ap_heartbeats = [0u64; arch::x86_64::smp::MAX_CPUS];
-
-    for (c, slot) in last_ap_heartbeats.iter_mut().enumerate() {
-        *slot = arch::x86_64::smp::heartbeat(c);
-    }
-
-    let mut music_note: usize = 0;
-
-    let mut speaker_on = false;
-
-    // 3-Masa oyunu (dama/mayın/satranç) PC Speaker sesi için otomatik
-    // susturma zamanı; süresi dolduysa ses takılmasını önlemek için kapatılır.
-    let mut game_sound_until_ms: u64 = 0;
-
-    // FPS 3D oyun güncellemesi için zaman bütçesi (ms). Uygulama çok uzun
-    // sürerse sistem donmasını önlemek için atlanır ve uyarı gösterilir.
-    const GAME_UPDATE_BUDGET_MS: u64 = 30; // Stricter: 30ms for games
-    const GAME_BUDGET_MAX_STRIKES: u32 = 2; // Daha agresif: 2 kerede sonlandır
-
-    // FPS limit for games (30 FPS = ~33.33ms per frame).
-    const GAME_FPS_LIMIT_MS: u64 = 33;
-    // Raycasting oyunu 60 Hz hedefler: 33 ms taban, 16 ms'lik kare aralığıyla
-    // birleşince etkin hız ~15 FPS'e düşüyordu.
-    const FPS3D_FPS_LIMIT_MS: u64 = 16;
-    let mut last_game_tick_ms: u64 = monotonic_ms();
-    let mut last_fps3d_tick_ms: u64 = monotonic_ms();
-    let mut last_city_tick_ms: u64 = monotonic_ms();
-
-    // Bağımsız watchdog APIC zamanlayıcısından ilerler; ana döngü yalnızca
-    // etkinlik bildirir ve ertelenmiş dondurma olaylarını tüketir.
-    // Oyun bütçesi aşımı sayaçları (üst üste gelen aşım sayısı; bütche altında bir
-    // kare geldiğinde sıfırlanır). Yalnızca tekrarlayan aşımlar sonlandırmayı tetikler.
-    let mut game_budget_strikes: u32 = 0;
-    let mut fps3d_budget_strikes: u32 = 0;
-    // Tüm uygulamalar için render bütçesi aşımı sayaçları
-    let _app_render_strikes: [u32; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
-
-    // Track per-application render time (Cell allows interior mutability
-    // so the render closure can capture it immutably and still update values).
-    // Render bütçesi aşımı sadece seri konsola yazılır; uygulama otomatik
-    // kapatılmaz, böylece kullanıcı her zaman yeniden açabilir.
-    let app_render_time_ms: [core::cell::Cell<u64>; gui::MAX_WINDOWS] =
-        [const { core::cell::Cell::new(0) }; gui::MAX_WINDOWS];
-
-    // Uyarı zaten gösterildi mi? Sürekli toast spam'ini önler.
-    let mut cpu_warn_shown: bool = false;
-    let mut ram_warn_shown: bool = false;
-    const CPU_WARN_PCT: usize = 90;
-    const RAM_WARN_PCT: usize = 90;
-    let mut last_title_idx: Option<usize> = None;
-
-    let mut last_title_click_ms: u64 = 0;
-
-    // Not Defteri metin secimi surukleme durumu.
-
-    let mut notepad_dragging = false;
-    let mut browser_address_dragging = false;
-    let mut browser_page_dragging = false;
-    let mut browser_last_img_click: Option<(usize, usize)> = None;
-    let mut browser_last_img_click_ms: u64 = 0;
-    let mut terminal_dragging = false;
-    let mut start_search_dragging = false;
-
-    let mut image_drag_last: Option<(usize, usize)> = None;
-
-    let mut screenshot_counter: usize = 1;
-
-    let mut run_dialog_open = false;
-
-    let mut run_dialog_input = gui::TextBuf::new();
-
-    // Dosya / Klasor özellikler (Properties) Modali
-
-    let mut properties_open = false;
-
-    let mut properties_name = gui::TextBuf::new();
-
-    let mut properties_path = gui::TextBuf::new();
-
-    let mut properties_type = gui::TextBuf::new();
-
-    let mut properties_size = gui::TextBuf::new();
-
-    let mut properties_location = gui::TextBuf::new();
-
-    let mut app_render_cycles = [0u64; gui::MAX_WINDOWS];
-
+    // Uygulama bazlı bellek ölçümü: ilk turda da yayınla.
     taskmgr_app.update(
         &memory_mgr.pmm,
         &fs_mgr.vfs,
         &compositor.windows,
-        &app_render_cycles,
+        &state.app_render_cycles,
     );
 
     // Tam kare cizimi gui::frame::render_full_frame icinde yasar.
@@ -741,22 +592,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             &fps_game_app,
             &mut fps_3d_app,
             &mut city_drive_app,
-            &now,
+            &state.now,
             mouse,
             keyboard,
             memory_mgr.pmm.total_memory_bytes,
             memory_mgr.pmm.used_memory_bytes,
-            anim_tick,
-            &mut app_render_cycles,
-            &app_render_time_ms,
-            (run_dialog_open, &run_dialog_input),
+            state.anim_tick,
+            &mut state.app_render_cycles,
+            &state.app_render_time_ms,
+            (state.run_dialog_open, &mut state.run_dialog_input),
             (
-                properties_open,
-                &properties_name,
-                &properties_type,
-                &properties_size,
-                &properties_location,
-                &properties_path,
+                state.properties_open,
+                &state.properties_name,
+                &state.properties_type,
+                &state.properties_size,
+                &state.properties_location,
+                &state.properties_path,
             ),
             None,
             None,
@@ -772,20 +623,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         }
     }
 
-    let mut drag_prev_box: Option<(usize, usize, usize, usize)> = None;
+    state.last_workspace = compositor.active_workspace;
 
-    let mut drag_dirty_rect: Option<(usize, usize, usize, usize)> = None;
-
-    // Her tur sıfırlanan "ekran zorla çizilsin" işareti; oyun ve ses
-    // efektleri bu bayrağı kullanır (döngü başına sıfırlanır).
-    let mut force_render;
-
-    // Sanal masaüstü değişimi tüm ekranı etkilediği için kirli-bölge
-    // hesaplamasını atlayıp tam kare çizmeyi gerektirir.
-    let mut last_workspace = compositor.active_workspace;
-
-    // Oyun motorunun son adım zamanı (TSC) — kare süresi ölçümü için.
-    let mut cp_last_cycles: u64 = 0;
+    // Oyun bütçesi sabitleri
+    const GAME_UPDATE_BUDGET_MS: u64 = 30;
+    const GAME_BUDGET_MAX_STRIKES: u32 = 2;
+    const GAME_FPS_LIMIT_MS: u64 = 33;
+    const FPS3D_FPS_LIMIT_MS: u64 = 16;
+    // Oyun tick zamanları (döngü içinde kullanılır)
+    let mut last_game_tick_ms: u64 = monotonic_ms();
+    let mut last_fps3d_tick_ms: u64 = monotonic_ms();
+    let mut last_city_tick_ms: u64 = monotonic_ms();
 
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
@@ -986,8 +834,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             );
         }
 
-        let loop_start_cycles = read_cpu_cycles();
-
         let focused_context = compositor
             .active_window_idx
             .and_then(|idx| compositor.windows[idx].map(|w| (w.app_id as usize, idx)))
@@ -1053,7 +899,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
-        loop_counter = loop_counter.wrapping_add(1);
+        state.loop_counter = state.loop_counter.wrapping_add(1);
 
         let mx = mouse.x as usize;
 
@@ -1062,36 +908,36 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // MouseKeys sentetik tıklama darbesini gerçek fare sinyali gibi üret:
         // bir tur basılı, ertesi tur bırakılı görünsün ki basma/bırakma
         // kenarları (mouse_clicked / mouse_released) normal yoldan işlensin.
-        match mousekeys_click_left {
+        match state.mousekeys_click_left {
             1 => {
                 mouse.left_button = true;
-                mousekeys_click_left = 2;
+                state.mousekeys_click_left = 2;
             }
             2 => {
                 mouse.left_button = false;
-                mousekeys_click_left = 0;
+                state.mousekeys_click_left = 0;
             }
             _ => {}
         }
-        match mousekeys_click_right {
+        match state.mousekeys_click_right {
             1 => {
                 mouse.right_button = true;
-                mousekeys_click_right = 2;
+                state.mousekeys_click_right = 2;
             }
             2 => {
                 mouse.right_button = false;
-                mousekeys_click_right = 0;
+                state.mousekeys_click_right = 0;
             }
             _ => {}
         }
 
         gui::MinGuiCompositor::set_pointer_state(mx, my, mouse.left_button);
 
-        let mouse_clicked = mouse.left_button && !last_buttons.0;
+        let mouse_clicked = mouse.left_button && !state.last_buttons.0;
 
-        let mouse_released = !mouse.left_button && last_buttons.0;
+        let mouse_released = !mouse.left_button && state.last_buttons.0;
 
-        let right_clicked = mouse.right_button && !last_buttons.1;
+        let right_clicked = mouse.right_button && !state.last_buttons.1;
 
         let l = gui::MinGuiCompositor::tray_layout(width, height);
 
@@ -1099,11 +945,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         // RTC saatini islem dongusu sayisina gore degil, gecen gercek zamana gore yenile.
 
-        force_render = false;
+        state.force_render = false;
 
         // USB Hotplug (tak/çıkar) bildirimleri ve donanım envanteri canlı güncellemesi
         while let Some(ev) = drivers::usb_hid::pop_hotplug_event() {
-            force_render = true;
+            state.force_render = true;
             drivers::framework::broadcast_hotplug(match ev.action {
                 drivers::usb_hid::HotplugAction::Connected => drivers::HotplugEvent::Added,
                 drivers::usb_hid::HotplugAction::Disconnected => drivers::HotplugEvent::Removed,
@@ -1160,26 +1006,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             );
         }
         if drivers::usb_hid::check_and_clear_hotplug_dirty() {
-            force_render = true;
+            state.force_render = true;
         }
 
         let clock_now_ms = monotonic_ms();
 
-        if clock_now_ms.wrapping_sub(last_clock_update_ms) >= 1_000 {
-            last_clock_update_ms = clock_now_ms;
+        if clock_now_ms.wrapping_sub(state.last_clock_update_ms) >= 1_000 {
+            state.last_clock_update_ms = clock_now_ms;
 
             now = drivers::rtc::DateTime::read_for_region(settings_app.region_offset());
 
             // Otomatik gundus/gece temasini senkronla: aktifse saati bazli tema
-            // uygulanir; tema degisikligi varsa yeniden cizim (force_render) gerekir.
+            // uygulanir; tema degisikligi varsa yeniden cizim (state.force_render) gerekir.
             let auto_theme_id = gui::theme::sync_auto_theme_at(now.hour, now.minute);
             if auto_theme_id != gui::theme::current() {
                 gui::theme::set_theme(auto_theme_id);
-                force_render = true;
+                state.force_render = true;
             }
 
             // Saat güncellemesi tam ekran yerine yalnızca görev çubuğu
-            // saat bölgesini kirli işaretler; force_render devre dışı.
+            // saat bölgesini kirli işaretler; state.force_render devre dışı.
             // Clock update marks only the taskbar clock rect dirty instead
             // of forcing a full-screen redraw.
             let clock_rect =
@@ -1191,12 +1037,16 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         let had_toasts = compositor.toasts.iter().any(|t| t.is_some());
 
+        // Fare bir bildirimin üzerindeyken otomatik kapanma sayacını
+        // duraklat; uzun mesajlar okunurken kaybolmaz.
+        compositor.hover_toasts(width, tb_y, mx, my, clock_now_ms);
+
         compositor.update_toasts(clock_now_ms);
 
         let has_toasts = compositor.toasts.iter().any(|t| t.is_some());
 
         if had_toasts != has_toasts {
-            force_render = true;
+            state.force_render = true;
         }
 
         // Giriş/çıkış animasyonundaki toast'lar için sağ üst bölgeyi her
@@ -1275,7 +1125,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     compositor.context_window = Some(idx);
 
-                    if my < win.y + gui::titlebar_h() {
+                    if my < win.y + gui::scaled_titlebar_h() {
                         hit_window = Some((idx, gui::ContextKind::Window));
                     } else if idx == 10 {
                         // Terminal / CMD: Sağ tık seçimi panoya kopyalar veya panoyu yapıştırır
@@ -1486,7 +1336,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if run_dialog_open {
+            if state.run_dialog_open {
                 let rbox = (
                     width.saturating_sub(320) / 2,
                     height.saturating_sub(110) / 2,
@@ -1495,9 +1345,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 );
 
                 if !gui::in_rect(mx, my, rbox) {
-                    run_dialog_open = false;
+                    state.run_dialog_open = false;
 
-                    run_dialog_input.clear();
+                    state.run_dialog_input.clear();
                 } else {
                     consumed = true;
                 }
@@ -1507,7 +1357,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // X / Tamam butonlari ve modal disina tiklama pencereyi kapatir.
 
-            if properties_open {
+            if state.properties_open {
                 let pw = 340usize.min(width.saturating_sub(20));
 
                 let ph = 260usize.min(height.saturating_sub(40));
@@ -1531,28 +1381,142 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let on_ok = gui::in_rect(mx, my, (ok_btn_x, ok_btn_y, ok_btn_w, ok_btn_h));
 
                 if on_close || on_ok || !gui::in_rect(mx, my, (px, py, pw, ph)) {
-                    properties_open = false;
+                    state.properties_open = false;
 
-                    properties_name.clear();
+                    state.properties_name.clear();
 
-                    properties_type.clear();
+                    state.properties_type.clear();
 
-                    properties_size.clear();
+                    state.properties_size.clear();
 
-                    properties_location.clear();
+                    state.properties_location.clear();
 
-                    properties_path.clear();
+                    state.properties_path.clear();
                 }
 
                 consumed = true;
 
-                force_render = true;
+                state.force_render = true;
             }
 
             if !consumed && compositor.toast_click(width, tb_y, mx, my) {
                 consumed = true;
 
-                force_render = true;
+                state.force_render = true;
+            }
+
+            // Kaydedilmemiş değişiklikler diyalogu (Not Defteri)
+            if notepad_app.unsaved_dialog_pending() {
+                if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
+                    let btn_rects = crate::apps::notepad::NotepadApp::unsaved_dialog_btn_rects(
+                        w.width, w.height,
+                    );
+                    // Butonlar: [0]=Kaydet, [1]=Kaydetme, [2]=İptal
+                    if gui::in_rect(mx - w.x, my - w.y, btn_rects[0]) {
+                        // Kaydet
+                        notepad_app.handle_unsaved_dialog_click(
+                            crate::apps::notepad::UnsavedDialogAction::Save,
+                        );
+                        consumed = true;
+                        state.force_render = true;
+                    } else if gui::in_rect(mx - w.x, my - w.y, btn_rects[1]) {
+                        // Kaydetme
+                        notepad_app.handle_unsaved_dialog_click(
+                            crate::apps::notepad::UnsavedDialogAction::DontSave,
+                        );
+                        consumed = true;
+                        state.force_render = true;
+                    } else if gui::in_rect(mx - w.x, my - w.y, btn_rects[2]) {
+                        // İptal
+                        notepad_app.handle_unsaved_dialog_click(
+                            crate::apps::notepad::UnsavedDialogAction::Cancel,
+                        );
+                        consumed = true;
+                        state.force_render = true;
+                    }
+                    // Diyalog açıkken diğer tıklamaları yut
+                    if consumed {
+                        // Diyalog alanının dışına tıklandıysa da İptal say
+                        let dialog_w = crate::gui::sp(300).min(w.width.saturating_sub(20));
+                        let dialog_h = crate::gui::sp(120);
+                        let dialog_x = (w.width.saturating_sub(dialog_w)) / 2;
+                        let dialog_y = (w.height.saturating_sub(dialog_h)) / 2;
+                        let dialog_rect = (w.x + dialog_x, w.y + dialog_y, dialog_w, dialog_h);
+                        if !gui::in_rect(mx, my, dialog_rect) {
+                            notepad_app.handle_unsaved_dialog_click(
+                                crate::apps::notepad::UnsavedDialogAction::Cancel,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Kaydedilmemiş değişiklikler diyalog aksiyonunu işle
+            if let Some((idx, _)) = focused_window_for_app(&compositor, 2) {
+                match notepad_app.take_unsaved_dialog_action() {
+                    crate::apps::notepad::UnsavedDialogAction::Save => {
+                        // Kaydet ve sonra kapat
+                        if with_busy_progress(
+                            &mut fb,
+                            mx,
+                            my,
+                            gui::ui_text("Dosya kaydediliyor...", "Saving file..."),
+                            || notepad_app.save_file(&mut fs_mgr.vfs),
+                        ) {
+                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                            // Kaydedildiyse pencereyi kapat
+                            terminate_app(
+                                idx,
+                                &mut compositor,
+                                &mut filemanager_app,
+                                &mut settings_app,
+                                &mut notepad_app,
+                                &mut browser_app,
+                                &mut imageviewer_app,
+                                &mut musicplayer_app,
+                                &mut videoplayer_app,
+                                &mut taskmgr_app,
+                                &mut calculator_app,
+                                &mut paint_apps[idx],
+                                &mut terminal_app,
+                                &mut installer_app,
+                                &mut viewer3d_app,
+                                &mut pkgmgr_app,
+                                &mut fps_game_app,
+                                &mut fps_3d_app,
+                                &mut city_drive_app,
+                            );
+                        }
+                    }
+                    crate::apps::notepad::UnsavedDialogAction::DontSave => {
+                        // Kaydetmeden kapat
+                        terminate_app(
+                            idx,
+                            &mut compositor,
+                            &mut filemanager_app,
+                            &mut settings_app,
+                            &mut notepad_app,
+                            &mut browser_app,
+                            &mut imageviewer_app,
+                            &mut musicplayer_app,
+                            &mut videoplayer_app,
+                            &mut taskmgr_app,
+                            &mut calculator_app,
+                            &mut paint_apps[idx],
+                            &mut terminal_app,
+                            &mut installer_app,
+                            &mut viewer3d_app,
+                            &mut pkgmgr_app,
+                            &mut fps_game_app,
+                            &mut fps_3d_app,
+                            &mut city_drive_app,
+                        );
+                    }
+                    crate::apps::notepad::UnsavedDialogAction::Cancel => {
+                        // İptal - hiçbir şey yapma, diyalog zaten kapandı
+                    }
+                    crate::apps::notepad::UnsavedDialogAction::None => {}
+                }
             }
 
             // Not Defteri metin alani: imleci konumlandir, cift tikta kelime sec,
@@ -1595,7 +1559,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         notepad_app.menu = 0;
 
-                        notepad_dragging = false;
+                        state.notepad_dragging = false;
 
                         consumed = true;
                     }
@@ -1649,7 +1613,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             notepad_app.selection_end = None;
                         }
 
-                        notepad_dragging = true;
+                        state.notepad_dragging = true;
                     }
 
                     consumed = true;
@@ -1917,18 +1881,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             if file_idx < desktop_files.file_count {
                                                 desktop_files.selected_idx = file_idx;
                                                 let file = &desktop_files.files[file_idx];
-                                                properties_name.clear();
-                                                properties_name.push_str(file.display_name());
-                                                properties_type.clear();
-                                                properties_type.push_str(file.file_type);
-                                                properties_size.clear();
-                                                properties_size.push_str(file.size_str.as_str());
-                                                properties_location.clear();
-                                                properties_location.push_str(desktop_files.path());
-                                                properties_path.clear();
+                                                state.properties_name.clear();
+                                                state.properties_name.push_str(file.display_name());
+                                                state.properties_type.clear();
+                                                state.properties_type.push_str(file.file_type);
+                                                state.properties_size.clear();
+                                                state
+                                                    .properties_size
+                                                    .push_str(file.size_str.as_str());
+                                                state.properties_location.clear();
+                                                state
+                                                    .properties_location
+                                                    .push_str(desktop_files.path());
+                                                state.properties_path.clear();
                                                 let full_path = desktop_files.selected_full_path();
-                                                properties_path.push_str(&full_path);
-                                                properties_open = true;
+                                                state.properties_path.push_str(&full_path);
+                                                state.properties_open = true;
                                             }
                                         }
                                     }
@@ -2084,31 +2052,34 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             if file_idx < filemanager_app.file_count {
                                                 let file = &filemanager_app.files[file_idx];
 
-                                                properties_name.clear();
+                                                state.properties_name.clear();
 
-                                                properties_name.push_str(file.display_name());
+                                                state.properties_name.push_str(file.display_name());
 
-                                                properties_type.clear();
+                                                state.properties_type.clear();
 
-                                                properties_type.push_str(file.file_type);
+                                                state.properties_type.push_str(file.file_type);
 
-                                                properties_size.clear();
+                                                state.properties_size.clear();
 
-                                                properties_size.push_str(file.size_str.as_str());
+                                                state
+                                                    .properties_size
+                                                    .push_str(file.size_str.as_str());
 
-                                                properties_location.clear();
+                                                state.properties_location.clear();
 
-                                                properties_location
+                                                state
+                                                    .properties_location
                                                     .push_str(filemanager_app.path());
 
-                                                properties_path.clear();
+                                                state.properties_path.clear();
 
                                                 let full_path =
                                                     filemanager_app.selected_full_path();
 
-                                                properties_path.push_str(&full_path);
+                                                state.properties_path.push_str(&full_path);
 
-                                                properties_open = true;
+                                                state.properties_open = true;
                                             }
                                         }
                                     }
@@ -2190,7 +2161,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 w.x = width.saturating_sub(w.width) / 2;
 
                                                 w.y = height
-                                                    .saturating_sub(gui::taskbar_h())
+                                                    .saturating_sub(gui::scaled_taskbar_h())
                                                     .saturating_sub(w.height)
                                                     / 2;
                                             }
@@ -2328,7 +2299,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         monotonic_ms(),
                         settings_app.double_click_ms as u64,
                     );
-                    start_search_dragging = true;
+                    state.start_search_dragging = true;
 
                     consumed = true;
                 }
@@ -2564,7 +2535,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     if gui::in_rect(mx, my, badge) {
                         compositor.switch_workspace(1);
 
-                        force_render = true;
+                        state.force_render = true;
 
                         consumed = true;
                     }
@@ -2855,17 +2826,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     // Window controls activate on release so their pressed state is visible.
                     // Hit alanları düğme basılıyken görsel olarak küçülse dahi tam boyutta kalır.
-                    let control = if gui::in_rect(mx, my, win.close_hit_rect()) {
-                        Some(0)
-                    } else if gui::in_rect(mx, my, win.max_hit_rect()) {
-                        Some(1)
-                    } else if gui::in_rect(mx, my, win.min_hit_rect()) {
-                        Some(2)
-                    } else {
-                        None
-                    };
-                    if let Some(control) = control {
-                        pending_window_control = Some((idx, control));
+                    if let Some(control) = event_window::window_control_at(mx, my, &win) {
+                        state.pending_window_control = Some((idx, control));
                         compositor.focus_window(idx);
                         break;
                     }
@@ -2903,7 +2865,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 if gui::in_rect(mx, my, g.thumb) {
                                     // Tutamac uzerinde: tiklama noktasini koru.
                                     let grab = my.saturating_sub(g.thumb.1);
-                                    vscroll_drag =
+                                    state.vscroll_drag =
                                         Some((idx, grab, g.thumb.3, track.3, c_h, lay.view_h));
                                 } else {
                                     // Iz uzerinde: tutamac merkezini tiklamaya getir.
@@ -2934,7 +2896,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
 
                                     let grab = (thumb_h / 2).min(thumb_h);
-                                    vscroll_drag =
+                                    state.vscroll_drag =
                                         Some((idx, grab, thumb_h, track.3, c_h, lay.view_h));
                                 }
 
@@ -2952,7 +2914,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 if gui::in_rect(mx, my, hit) {
                                     if gui::in_rect(mx, my, g.thumb) {
                                         let grab = mx.saturating_sub(g.thumb.0);
-                                        hscroll_drag =
+                                        state.hscroll_drag =
                                             Some((idx, grab, g.thumb.2, track.2, c_w, lay.view_w));
                                     } else {
                                         let thumb_w = g.thumb.2.max(16);
@@ -2982,7 +2944,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         }
 
                                         let grab = (thumb_w / 2).min(thumb_w);
-                                        hscroll_drag =
+                                        state.hscroll_drag =
                                             Some((idx, grab, thumb_w, track.2, c_w, lay.view_w));
                                     }
 
@@ -3005,11 +2967,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         if let Some(edge) = win.resize_edge_at(mx, my) {
                             compositor.focus_window(idx);
 
-                            resizing_win = Some(idx);
+                            state.resizing_win = Some(idx);
 
-                            resize_edge = Some(edge);
+                            state.resize_edge = Some(edge);
 
-                            resize_orig = (wx, wy, ww, wh);
+                            state.resize_orig = (wx, wy, ww, wh);
 
                             break;
                         }
@@ -3020,8 +2982,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     if gui::in_rect(mx, my, win.title_drag_rect()) {
                         let now_ms = monotonic_ms();
 
-                        let dbl = last_title_idx == Some(idx)
-                            && now_ms.wrapping_sub(last_title_click_ms)
+                        let dbl = state.last_title_idx == Some(idx)
+                            && now_ms.wrapping_sub(state.last_title_click_ms)
                                 <= settings_app.double_click_ms as u64;
 
                         compositor.focus_window(idx);
@@ -3029,24 +2991,24 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         if dbl {
                             compositor.toggle_maximize(idx, width, height);
 
-                            dragging_win = None;
+                            state.dragging_win = None;
 
                             // cift tik tuketildikten sonra eslesmeyi temizle;
 
                             // ucuncu kisa tik yeni bir cift tik baslatabilsin.
 
-                            last_title_idx = None;
+                            state.last_title_idx = None;
                         } else {
-                            last_title_idx = Some(idx);
+                            state.last_title_idx = Some(idx);
 
-                            last_title_click_ms = now_ms;
+                            state.last_title_click_ms = now_ms;
 
                             if !win.is_maximized {
-                                dragging_win = Some(idx);
+                                state.dragging_win = Some(idx);
 
-                                drag_offset_x = mx.saturating_sub(wx);
+                                state.drag_offset_x = mx.saturating_sub(wx);
 
-                                drag_offset_y = my.saturating_sub(wy);
+                                state.drag_offset_y = my.saturating_sub(wy);
                             }
                         }
 
@@ -3083,7 +3045,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 wx.saturating_sub(win.scroll.x),
                                 wy.saturating_sub(win.scroll.y),
                                 c_w.saturating_add(2).max(ww),
-                                c_h.saturating_add(gui::titlebar_h() + 1).max(wh),
+                                c_h.saturating_add(gui::scaled_titlebar_h() + 1).max(wh),
                             )
                         };
 
@@ -3741,7 +3703,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                             settings_app.display_res = requested;
                                                             crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
                                                             keep_windows_on_screen(&mut compositor, width, height);
-                                                            force_render = true;
+                                                            state.force_render = true;
                                                             settings_app.status_msg = gui::ui_text("Çözünürlük değiştirildi (BGA).", "Resolution changed (BGA).");
                                                         } else {
                                                             settings_app.status_msg = gui::ui_text("Çözünürlük uygulanamadı (bellek sınırı).", "Resolution failed (memory limit).");
@@ -4363,7 +4325,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         monotonic_ms(),
                                         settings_app.double_click_ms as u64,
                                     );
-                                    browser_address_dragging = true;
+                                    state.browser_address_dragging = true;
                                 } else if let Some(url) =
                                     browser_app.click_bookmark_at(mx, my, wx, wy, ww)
                                 {
@@ -4380,13 +4342,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 {
                                     // Resim üzerine çift tıkla: görüntüleyicide aç.
                                     let now_ms = monotonic_ms();
-                                    let is_double_click = browser_last_img_click == Some((mx, my))
-                                        && now_ms.wrapping_sub(browser_last_img_click_ms)
+                                    let is_double_click = state.browser_last_img_click
+                                        == Some((mx, my))
+                                        && now_ms.wrapping_sub(state.browser_last_img_click_ms)
                                             <= settings_app.double_click_ms as u64;
-                                    browser_last_img_click = Some((mx, my));
-                                    browser_last_img_click_ms = now_ms;
+                                    state.browser_last_img_click = Some((mx, my));
+                                    state.browser_last_img_click_ms = now_ms;
                                     if is_double_click {
-                                        browser_last_img_click = None;
+                                        state.browser_last_img_click = None;
                                         open_image_file(
                                             &cache_path,
                                             &fs_mgr.vfs,
@@ -4411,32 +4374,61 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             doc_h,
                                             win.scroll.y,
                                         );
-                                        browser_page_dragging = true;
+                                        state.browser_page_dragging = true;
                                     }
                                 }
                             }
 
                             4 => {
                                 // Resim: yakinlastir / uzaklastir
-
-                                if my >= wy + 32 && my <= wy + 52 && mx >= wx + 8 && mx <= wx + 150
-                                {
-                                    if let Some(rgb) = imageviewer_app.wallpaper_rgb() {
-                                        crate::gui::wallpaper::set_custom_image(
-                                            rgb,
-                                            imageviewer_app.width,
-                                            imageviewer_app.height,
-                                        );
-                                        imageviewer_app.status = gui::ui_text(
-                                            "Masaüstü arka planı ayarlandı",
-                                            "Desktop wallpaper set",
-                                        );
+                                let is_compact = ww < 300;
+                                if is_compact {
+                                    if my >= wy + 32 && my <= wy + 52 {
+                                        if mx >= wx + 8 && mx <= wx + 32 {
+                                            if let Some(rgb) = imageviewer_app.wallpaper_rgb() {
+                                                crate::gui::wallpaper::set_custom_image(
+                                                    rgb,
+                                                    imageviewer_app.width,
+                                                    imageviewer_app.height,
+                                                );
+                                                imageviewer_app.status = gui::ui_text(
+                                                    "Masaüstü arka planı ayarlandı",
+                                                    "Desktop wallpaper set",
+                                                );
+                                            }
+                                        } else if mx >= wx + ww.saturating_sub(60)
+                                            && mx <= wx + ww.saturating_sub(38)
+                                        {
+                                            imageviewer_app.zoom_in();
+                                        } else if mx >= wx + ww.saturating_sub(32)
+                                            && mx <= wx + ww.saturating_sub(10)
+                                        {
+                                            imageviewer_app.zoom_out();
+                                        }
                                     }
-                                } else if my >= wy + 32 && my <= wy + 52 {
-                                    if mx >= wx + ww - 180 && mx <= wx + ww - 130 {
-                                        imageviewer_app.zoom_in();
-                                    } else if mx >= wx + ww - 124 && mx <= wx + ww - 74 {
-                                        imageviewer_app.zoom_out();
+                                } else {
+                                    if my >= wy + 32
+                                        && my <= wy + 52
+                                        && mx >= wx + 8
+                                        && mx <= wx + 150
+                                    {
+                                        if let Some(rgb) = imageviewer_app.wallpaper_rgb() {
+                                            crate::gui::wallpaper::set_custom_image(
+                                                rgb,
+                                                imageviewer_app.width,
+                                                imageviewer_app.height,
+                                            );
+                                            imageviewer_app.status = gui::ui_text(
+                                                "Masaüstü arka planı ayarlandı",
+                                                "Desktop wallpaper set",
+                                            );
+                                        }
+                                    } else if my >= wy + 32 && my <= wy + 52 {
+                                        if mx >= wx + ww - 180 && mx <= wx + ww - 130 {
+                                            imageviewer_app.zoom_in();
+                                        } else if mx >= wx + ww - 124 && mx <= wx + ww - 74 {
+                                            imageviewer_app.zoom_out();
+                                        }
                                     }
                                 }
                             }
@@ -5193,7 +5185,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             10 => {
                                 terminal_app.start_selection_at(mx, my, wx, wy, ww, wh);
-                                terminal_dragging = true;
+                                state.terminal_dragging = true;
                             }
 
                             12 => {
@@ -5264,7 +5256,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     )
                                 {
                                     apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
-                                    force_render = true;
+                                    state.force_render = true;
                                 } else if apps::controlpanel::active_tab() == 5
                                     && gui::in_rect(
                                         mx,
@@ -5273,7 +5265,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     )
                                 {
                                     apps::controlpanel::rescan_drivers();
-                                    force_render = true;
+                                    state.force_render = true;
                                 }
                             }
 
@@ -5288,7 +5280,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         ah,
                                     );
                                     if changed {
-                                        force_render = true;
+                                        state.force_render = true;
                                     }
                                 }
                             }
@@ -5296,10 +5288,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             16 => {
                                 // FPS 3D oyun: fare ile bakış, WASD hareket, ateş.
                                 // Fare butonu değiştiyse ateş et (focus bağımsızğı)
-                                if mouse.left_button != last_buttons.0 {
+                                if mouse.left_button != state.last_buttons.0 {
                                     let changed = fps_3d_app.handle_mouse_click(&mut audio_dev);
                                     if changed {
-                                        force_render = true;
+                                        state.force_render = true;
                                     }
                                 }
                             }
@@ -5349,27 +5341,35 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     });
 
                     if let Some(idx) = active_window {
-                        terminate_app(
-                            idx,
-                            &mut compositor,
-                            &mut filemanager_app,
-                            &mut settings_app,
-                            &mut notepad_app,
-                            &mut browser_app,
-                            &mut imageviewer_app,
-                            &mut musicplayer_app,
-                            &mut videoplayer_app,
-                            &mut taskmgr_app,
-                            &mut calculator_app,
-                            &mut paint_apps[idx],
-                            &mut terminal_app,
-                            &mut installer_app,
-                            &mut viewer3d_app,
-                            &mut pkgmgr_app,
-                            &mut fps_game_app,
-                            &mut fps_3d_app,
-                            &mut city_drive_app,
-                        );
+                        // Check if it's Notepad with unsaved changes
+                        if let Some(win) = compositor.windows[idx] {
+                            if win.app_id == 2 && win.dirty {
+                                // Show unsaved changes dialog
+                                notepad_app.show_unsaved_changes_dialog();
+                            } else {
+                                terminate_app(
+                                    idx,
+                                    &mut compositor,
+                                    &mut filemanager_app,
+                                    &mut settings_app,
+                                    &mut notepad_app,
+                                    &mut browser_app,
+                                    &mut imageviewer_app,
+                                    &mut musicplayer_app,
+                                    &mut videoplayer_app,
+                                    &mut taskmgr_app,
+                                    &mut calculator_app,
+                                    &mut paint_apps[idx],
+                                    &mut terminal_app,
+                                    &mut installer_app,
+                                    &mut viewer3d_app,
+                                    &mut pkgmgr_app,
+                                    &mut fps_game_app,
+                                    &mut fps_3d_app,
+                                    &mut city_drive_app,
+                                );
+                            }
+                        }
                     } else {
                         // Masaustundeyken Alt+F4 guc menusunu acar.
 
@@ -5404,25 +5404,25 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 drivers::keyboard::KeyAction::WorkspacePrev => {
                     compositor.switch_workspace(-1);
 
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 drivers::keyboard::KeyAction::WorkspaceNext => {
                     compositor.switch_workspace(1);
 
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 drivers::keyboard::KeyAction::MoveWindowWorkspacePrev => {
                     compositor.move_active_window_workspace(-1);
 
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 drivers::keyboard::KeyAction::MoveWindowWorkspaceNext => {
                     compositor.move_active_window_workspace(1);
 
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 drivers::keyboard::KeyAction::WinShowDesktop => {
@@ -5527,11 +5527,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                 drivers::keyboard::KeyAction::ArrowUp => {
                     // Win + Yukari Ok: pencereyi tam ekrana getir (maximize)
+                    // Win + Shift + Yukari Ok: ust-sol ceyrege yasla (koshe snap)
+                    if keyboard.super_key && keyboard.shift {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.snap_window(
+                                    idx,
+                                    gui::SnapPosition::TopLeft,
+                                    width,
+                                    height,
+                                );
+                                state.force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if keyboard.super_key {
                         if let Some(idx) = compositor.active_window_idx {
                             if idx < gui::MAX_WINDOWS {
                                 compositor.toggle_maximize(idx, width, height);
-                                force_render = true;
+                                state.force_render = true;
                             }
                         }
                         continue;
@@ -5569,10 +5584,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 17) {
                         // Şehir sürüşü: ok tuşları gaz (yukarı) / fren (aşağı).
                         city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowUp);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow_up_down(true, false);
-                        force_render = true;
+                        state.force_render = true;
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -5601,7 +5616,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 .map(|(_, w)| w.width)
                                 .unwrap_or(0);
 
-                            filemanager_app.move_selection_up(win_w);
+                            filemanager_app.move_selection_up_ext(
+                                win_w,
+                                apps::filemanager::SelectMod::from_keys(
+                                    keyboard.shift,
+                                    keyboard.ctrl,
+                                ),
+                            );
 
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
@@ -5622,13 +5643,28 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 fps_game_app.tab - 1
                             };
                             fps_game_app.select_tab(tab);
-                            force_render = true;
+                            state.force_render = true;
                         }
                     }
                 }
 
                 drivers::keyboard::KeyAction::ArrowDown => {
                     // Win + Asagi Ok: pencereyi kucult/restore et
+                    // Win + Shift + Asagi Ok: ust-sag ceyrege yasla (koshe snap)
+                    if keyboard.super_key && keyboard.shift {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.snap_window(
+                                    idx,
+                                    gui::SnapPosition::TopRight,
+                                    width,
+                                    height,
+                                );
+                                state.force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if keyboard.super_key {
                         if let Some(idx) = compositor.active_window_idx {
                             if idx < gui::MAX_WINDOWS {
@@ -5645,7 +5681,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         win.is_minimized = true;
                                     }
                                 }
-                                force_render = true;
+                                state.force_render = true;
                             }
                         }
                         continue;
@@ -5692,10 +5728,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 17) {
                         // Şehir sürüşü: ok aşağı frendir.
                         city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowDown);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow_up_down(false, true);
-                        force_render = true;
+                        state.force_render = true;
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -5724,7 +5760,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 .map(|(_, w)| w.width)
                                 .unwrap_or(0);
 
-                            filemanager_app.move_selection_down(win_w);
+                            filemanager_app.move_selection_down_ext(
+                                win_w,
+                                apps::filemanager::SelectMod::from_keys(
+                                    keyboard.shift,
+                                    keyboard.ctrl,
+                                ),
+                            );
 
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
@@ -5740,18 +5782,33 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         } else if app_is_focused(&compositor, 15) {
                             let tab = (fps_game_app.tab + 1) % apps::game::TAB_COUNT;
                             fps_game_app.select_tab(tab);
-                            force_render = true;
+                            state.force_render = true;
                         }
                     }
                 }
 
                 drivers::keyboard::KeyAction::ArrowLeft => {
                     // Win + Sol Ok: pencereyi sol yarısına yasla (Aero Snap)
+                    // Win + Shift + Sol Ok: alt-sol ceyrege yasla (koshe snap)
+                    if keyboard.super_key && keyboard.shift {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.snap_window(
+                                    idx,
+                                    gui::SnapPosition::BottomLeft,
+                                    width,
+                                    height,
+                                );
+                                state.force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if keyboard.super_key {
                         if let Some(idx) = compositor.active_window_idx {
                             if idx < gui::MAX_WINDOWS {
                                 compositor.snap_window(idx, gui::SnapPosition::Left, width, height);
-                                force_render = true;
+                                state.force_render = true;
                             }
                         }
                         continue;
@@ -5784,7 +5841,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             compositor.start_menu_focus_submenu = false;
                         }
                     } else if app_is_focused(&compositor, 0) {
-                        filemanager_app.move_selection_left();
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 0) {
+                            filemanager_app.move_selection_left_ext(
+                                w.width,
+                                apps::filemanager::SelectMod::from_keys(
+                                    keyboard.shift,
+                                    keyboard.ctrl,
+                                ),
+                            );
+                        }
 
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
@@ -5828,19 +5893,34 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             fps_game_app.tab - 1
                         };
                         fps_game_app.select_tab(tab);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 17) {
                         // Şehir sürüşü: ok sola direksiyon.
                         city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowLeft);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow(true, false);
-                        force_render = true;
+                        state.force_render = true;
                     }
                 }
 
                 drivers::keyboard::KeyAction::ArrowRight => {
                     // Win + Sag Ok: pencereyi sag yarısına yasla (Aero Snap)
+                    // Win + Shift + Sag Ok: alt-sag ceyrege yasla (koshe snap)
+                    if keyboard.super_key && keyboard.shift {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.snap_window(
+                                    idx,
+                                    gui::SnapPosition::BottomRight,
+                                    width,
+                                    height,
+                                );
+                                state.force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if keyboard.super_key {
                         if let Some(idx) = compositor.active_window_idx {
                             if idx < gui::MAX_WINDOWS {
@@ -5850,7 +5930,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     width,
                                     height,
                                 );
-                                force_render = true;
+                                state.force_render = true;
                             }
                         }
                         continue;
@@ -5888,7 +5968,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             compositor.selected_start_item = 0;
                         }
                     } else if app_is_focused(&compositor, 0) {
-                        filemanager_app.move_selection_right();
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 0) {
+                            filemanager_app.move_selection_right_ext(
+                                w.width,
+                                apps::filemanager::SelectMod::from_keys(
+                                    keyboard.shift,
+                                    keyboard.ctrl,
+                                ),
+                            );
+                        }
 
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
@@ -5922,14 +6010,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 15) {
                         let tab = (fps_game_app.tab + 1) % apps::game::TAB_COUNT;
                         fps_game_app.select_tab(tab);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 17) {
                         // Şehir sürüşü: ok sağa direksiyon.
                         city_drive_app.handle_key_action(drivers::keyboard::KeyAction::ArrowRight);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 16) {
                         fps_3d_app.handle_arrow(false, true);
-                        force_render = true;
+                        state.force_render = true;
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
 
@@ -5984,29 +6072,29 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         let file = &filemanager_app.files[file_idx];
 
-                        properties_name.clear();
+                        state.properties_name.clear();
 
-                        properties_name.push_str(file.display_name());
+                        state.properties_name.push_str(file.display_name());
 
-                        properties_type.clear();
+                        state.properties_type.clear();
 
-                        properties_type.push_str(file.file_type);
+                        state.properties_type.push_str(file.file_type);
 
-                        properties_size.clear();
+                        state.properties_size.clear();
 
-                        properties_size.push_str(file.size_str.as_str());
+                        state.properties_size.push_str(file.size_str.as_str());
 
-                        properties_location.clear();
+                        state.properties_location.clear();
 
-                        properties_location.push_str(filemanager_app.path());
+                        state.properties_location.push_str(filemanager_app.path());
 
-                        properties_path.clear();
+                        state.properties_path.clear();
 
                         let full_path = filemanager_app.selected_full_path();
 
-                        properties_path.push_str(&full_path);
+                        state.properties_path.push_str(&full_path);
 
-                        properties_open = true;
+                        state.properties_open = true;
 
                         enter_char_consumed = true;
                     }
@@ -6557,7 +6645,37 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if compositor.is_start_menu_open && compositor.start_search_focused {
                         compositor.paste_start_search();
                     } else if app_is_focused(&compositor, 0) {
-                        filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs);
+                        let pasted_count =
+                            filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs);
+                        // Sonucu bildirime dönüştür: başarı → yeşil ✓, hata → kırmızı ✕.
+                        if pasted_count > 0 {
+                            gui::toast_success(
+                                &mut compositor,
+                                monotonic_ms(),
+                                gui::ui_text("Yapıştırma tamamlandı", "Paste completed"),
+                                gui::ui_text(
+                                    "Seçili öğeler hedef klasöre taşındı.",
+                                    "Selected items were pasted.",
+                                ),
+                            );
+                        } else if filemanager_app.status_buf.is_empty() {
+                            gui::toast_warning(
+                                &mut compositor,
+                                monotonic_ms(),
+                                gui::ui_text("Yapıştırılamadı", "Paste failed"),
+                                gui::ui_text(
+                                    "Hedef CD-ROM salt okunur veya öğe yok.",
+                                    "Target is read-only or nothing to paste.",
+                                ),
+                            );
+                        } else {
+                            gui::toast_error(
+                                &mut compositor,
+                                monotonic_ms(),
+                                gui::ui_text("Kopyalama hatası", "Copy error"),
+                                filemanager_app.status_buf.as_str(),
+                            );
+                        }
                     } else if app_is_focused(&compositor, 8) {
                         calculator_app.paste_expression();
                     } else if app_is_focused(&compositor, 10) {
@@ -6698,7 +6816,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         // Home: scroll to top of page
                         browser_scroll_edge(&mut compositor, &mut browser_app, false);
                     } else if app_is_focused(&compositor, 0) {
-                        filemanager_app.select_first();
+                        filemanager_app.select_first_ext(apps::filemanager::SelectMod::from_keys(
+                            keyboard.shift,
+                            keyboard.ctrl,
+                        ));
 
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 7) {
@@ -6727,7 +6848,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         // End: scroll to bottom of page
                         browser_scroll_edge(&mut compositor, &mut browser_app, true);
                     } else if app_is_focused(&compositor, 0) {
-                        filemanager_app.select_last();
+                        filemanager_app.select_last_ext(apps::filemanager::SelectMod::from_keys(
+                            keyboard.shift,
+                            keyboard.ctrl,
+                        ));
 
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 7) {
@@ -6743,7 +6867,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             .map(|(_, w)| fm_page_rows(&w, &filemanager_app))
                             .unwrap_or(8);
 
-                        filemanager_app.select_page(false, rows);
+                        filemanager_app.select_page_ext(
+                            false,
+                            rows,
+                            apps::filemanager::SelectMod::from_keys(keyboard.shift, keyboard.ctrl),
+                        );
 
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -6776,7 +6904,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             .map(|(_, w)| fm_page_rows(&w, &filemanager_app))
                             .unwrap_or(8);
 
-                        filemanager_app.select_page(true, rows);
+                        filemanager_app.select_page_ext(
+                            true,
+                            rows,
+                            apps::filemanager::SelectMod::from_keys(keyboard.shift, keyboard.ctrl),
+                        );
 
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -6946,7 +7078,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         monotonic_ms(),
                         2500,
                     );
-                    force_render = true;
+                    state.force_render = true;
                 }
                 drivers::keyboard::KeyAction::MouseNumpadUp
                 | drivers::keyboard::KeyAction::MouseNumpadDown
@@ -6966,16 +7098,16 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 drivers::keyboard::KeyAction::MouseClickLeft => {
                     // Basış bu turda değil, bir sonraki turda kenar olarak üretilir;
                     // aksi halde bırakma kenarı asla oluşmaz ve düğme takılırdı.
-                    if mousekeys_click_left == 0 {
-                        mousekeys_click_left = 1;
+                    if state.mousekeys_click_left == 0 {
+                        state.mousekeys_click_left = 1;
                     }
-                    force_render = true;
+                    state.force_render = true;
                 }
                 drivers::keyboard::KeyAction::MouseClickRight => {
-                    if mousekeys_click_right == 0 {
-                        mousekeys_click_right = 1;
+                    if state.mousekeys_click_right == 0 {
+                        state.mousekeys_click_right = 1;
                     }
-                    force_render = true;
+                    state.force_render = true;
                 }
                 drivers::keyboard::KeyAction::MouseSpeedUp => {
                     mouse.speed = mouse.speed.saturating_add(1).min(10);
@@ -6985,9 +7117,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
 
                 drivers::keyboard::KeyAction::RunDialog => {
-                    run_dialog_open = !run_dialog_open;
+                    state.run_dialog_open = !state.run_dialog_open;
 
-                    run_dialog_input.clear();
+                    state.run_dialog_input.clear();
 
                     compositor.close_start_menu();
                 }
@@ -7080,7 +7212,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         let mut num = gui::TextBuf::new();
 
-                        num.push_usize(screenshot_counter);
+                        num.push_usize(state.screenshot_counter);
 
                         path.push_str(num.as_str());
 
@@ -7088,7 +7220,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         serial_print("[SCREENSHOT] Ekran görüntüsü alınıyor...\n");
 
-                        screenshot_counter += 1;
+                        state.screenshot_counter += 1;
 
                         let arc_data: alloc::sync::Arc<[u8]> = bmp_data.into();
 
@@ -7116,7 +7248,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 4000,
                             );
 
-                            force_render = true;
+                            state.force_render = true;
 
                             serial_print("[SCREENSHOT] Başarıyla kaydedildi: ");
 
@@ -7142,7 +7274,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                 drivers::keyboard::KeyAction::ShowHelp => {
                     // F1 - Yardım ekranı göster
-                    let _ = force_render;
+                    let _ = state.force_render;
                 }
             }
         }
@@ -7196,9 +7328,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         mouse.y as usize,
                         (
                             w.x,
-                            w.y + gui::titlebar_h(),
+                            w.y + gui::scaled_titlebar_h(),
                             w.width,
-                            w.height.saturating_sub(gui::titlebar_h() + 28),
+                            w.height.saturating_sub(gui::scaled_titlebar_h() + 28),
                         ),
                     )
                 {
@@ -7371,7 +7503,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let (cx, cy, cw, ch) = image_viewer_canvas_rect(&vw);
 
                 if w.is_focused && gui::in_rect(mx, my, (cx, cy, cw, ch)) {
-                    if let Some((last_x, last_y)) = image_drag_last {
+                    if let Some((last_x, last_y)) = state.image_drag_last {
                         imageviewer_app.pan_x = imageviewer_app
                             .pan_x
                             .saturating_add(mx as isize - last_x as isize);
@@ -7381,12 +7513,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             .saturating_add(my as isize - last_y as isize);
                     }
 
-                    image_drag_last = Some((mx, my));
+                    state.image_drag_last = Some((mx, my));
                 } else {
-                    image_drag_last = None;
+                    state.image_drag_last = None;
                 }
             } else {
-                image_drag_last = None;
+                state.image_drag_last = None;
             }
 
             if let Some(w) = compositor.windows[1] {
@@ -7471,7 +7603,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if notepad_dragging && notepad_app.menu == 0 {
+            if state.notepad_dragging && notepad_app.menu == 0 {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
 
@@ -7491,7 +7623,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if browser_address_dragging {
+            if state.browser_address_dragging {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
                     if w.is_focused {
                         browser_app.address_drag_to(mx, w.x + 94);
@@ -7499,7 +7631,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if browser_page_dragging {
+            if state.browser_page_dragging {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
                     if w.is_focused {
                         let doc_x = w.x + 8;
@@ -7513,7 +7645,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if terminal_dragging {
+            if state.terminal_dragging {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
                     if w.is_focused {
                         terminal_app.update_selection_at(mx, my, w.x, w.y, w.width, w.height);
@@ -7536,7 +7668,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if start_search_dragging && compositor.is_start_menu_open {
+            if state.start_search_dragging && compositor.is_start_menu_open {
                 let (menu_x, menu_y, menu_w, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
                 let search = gui::MinGuiCompositor::start_search_rect(menu_x, menu_y, menu_w);
                 compositor.start_search_drag_to(mx, search.0 + 6);
@@ -7603,7 +7735,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {
+            if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = state.vscroll_drag {
                 // Tutamaci fare ile surukle → kaydirma ofseti.
 
                 let track_top = compositor.windows[idx]
@@ -7631,7 +7763,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     wm.scroll_anim.cancel();
                     wm.scroll.y = new_off;
                     let (cx, cy, cw, ch) = wm.content_rect();
-                    drag_dirty_rect = Some((cx, cy, cw, ch));
+                    state.drag_dirty_rect = Some((cx, cy, cw, ch));
                     // Drag bölgesini per pencere render listesine işle: kare
                     // çizim skip kararı bu listeden beslenir.
                     compositor
@@ -7641,7 +7773,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 if compositor.windows[idx].map(|w| w.app_id as usize) == Some(3) {
                     browser_app.sync_external_scroll(new_off);
                 }
-            } else if let Some((idx, grab, thumb_w, track_w, content_w, view_w)) = hscroll_drag {
+            } else if let Some((idx, grab, thumb_w, track_w, content_w, view_w)) =
+                state.hscroll_drag
+            {
                 // Yatay tutamaci fare ile surukle → kaydirma ofseti.
 
                 let track_left = compositor.windows[idx]
@@ -7668,16 +7802,16 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     wm.scroll_anim.cancel();
                     wm.scroll.x = new_off;
                     let (cx, cy, cw, ch) = wm.content_rect();
-                    drag_dirty_rect = Some((cx, cy, cw, ch));
+                    state.drag_dirty_rect = Some((cx, cy, cw, ch));
                     compositor
                         .dirty_tracker
                         .mark_window(idx, crate::gui::dirty_rect::DirtyRect::new(cx, cy, cw, ch));
                 }
-            } else if let Some(idx) = dragging_win {
+            } else if let Some(idx) = state.dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
                     let max_x = width.saturating_sub(w.width);
 
-                    let max_y = height.saturating_sub(w.height + gui::taskbar_h());
+                    let max_y = height.saturating_sub(w.height + gui::scaled_taskbar_h());
 
                     let prev_box = (
                         w.x.saturating_sub(4),
@@ -7686,20 +7820,20 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         w.height + 12,
                     );
 
-                    w.x = mx.saturating_sub(drag_offset_x).min(max_x);
+                    w.x = mx.saturating_sub(state.drag_offset_x).min(max_x);
 
-                    w.y = my.saturating_sub(drag_offset_y).min(max_y);
+                    w.y = my.saturating_sub(state.drag_offset_y).min(max_y);
 
                     // Aero Snap kenar/köşe algılama & önizleme kutusu.
                     // Bölge mantığı `gui::snap` modülündedir; bırakma yolu da
                     // aynı fonksiyonu kullandığı için önizleme ile sonuç
                     // birebir aynıdır.
 
-                    let old_snap = active_snap_preview;
+                    let old_snap = state.active_snap_preview;
 
-                    let usable_h = height.saturating_sub(gui::taskbar_h());
+                    let usable_h = height.saturating_sub(gui::scaled_taskbar_h());
 
-                    active_snap_preview = gui::snap::snap_zone(mx, my, width, usable_h)
+                    state.active_snap_preview = gui::snap::snap_zone(mx, my, width, usable_h)
                         .map(|zone| gui::snap::snap_rect(zone, width, usable_h));
 
                     let new_box = (
@@ -7709,7 +7843,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         w.height + 12,
                     );
 
-                    let mut dirty = match drag_prev_box {
+                    let mut dirty = match state.drag_prev_box {
                         Some(p) => drivers::video::rect_union(p, new_box),
 
                         None => drivers::video::rect_union(prev_box, new_box),
@@ -7726,11 +7860,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         dirty = drivers::video::rect_union(dirty, p);
                     }
 
-                    if let Some(p) = active_snap_preview {
+                    if let Some(p) = state.active_snap_preview {
                         dirty = drivers::video::rect_union(dirty, p);
                     }
 
-                    drag_dirty_rect = Some(dirty);
+                    state.drag_dirty_rect = Some(dirty);
 
                     // Aero Snap onizleme/tasarruf kirli bolgesini per pencere
                     // render listesine isle.
@@ -7739,15 +7873,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         crate::gui::dirty_rect::DirtyRect::new(dirty.0, dirty.1, dirty.2, dirty.3),
                     );
 
-                    drag_prev_box = Some(new_box);
+                    state.drag_prev_box = Some(new_box);
                 }
-            } else if let Some(idx) = resizing_win {
-                let edge = resize_edge.unwrap_or(gui::ResizeEdge::BottomRight);
+            } else if let Some(idx) = state.resizing_win {
+                let edge = state.resize_edge.unwrap_or(gui::ResizeEdge::BottomRight);
 
                 if let Some(w) = compositor.windows[idx].as_mut() {
                     use gui::ResizeEdge::*;
 
-                    let (ox, oy, ow, oh) = resize_orig;
+                    let (ox, oy, ow, oh) = state.resize_orig;
 
                     let left = ox + ow; // sol kenarin sabit sag referansi
 
@@ -7791,7 +7925,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     // Alt kenar surukleniyor
 
                     if matches!(edge, Bottom | BottomLeft | BottomRight) {
-                        let max_h = height.saturating_sub(gui::taskbar_h()).saturating_sub(w.y);
+                        let max_h = height
+                            .saturating_sub(gui::scaled_taskbar_h())
+                            .saturating_sub(w.y);
 
                         nh = my
                             .saturating_sub(bottom)
@@ -7854,7 +7990,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         w.height + 12,
                     );
 
-                    let mut dirty = match drag_prev_box {
+                    let mut dirty = match state.drag_prev_box {
                         Some(p) => drivers::video::rect_union(p, new_box),
 
                         None => drivers::video::rect_union(prev_box, new_box),
@@ -7865,11 +8001,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         (mx.saturating_sub(8), my.saturating_sub(8), 24, 24),
                     );
 
-                    if let Some(p) = active_snap_preview {
+                    if let Some(p) = state.active_snap_preview {
                         dirty = drivers::video::rect_union(dirty, p);
                     }
 
-                    drag_dirty_rect = Some(dirty);
+                    state.drag_dirty_rect = Some(dirty);
 
                     // Pencere yeniden boyutlandirma (Aero Snap/resizing) kirli
                     // bolgesini per pencere render listesine isle.
@@ -7878,22 +8014,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         crate::gui::dirty_rect::DirtyRect::new(dirty.0, dirty.1, dirty.2, dirty.3),
                     );
 
-                    drag_prev_box = Some(new_box);
+                    state.drag_prev_box = Some(new_box);
                 }
             }
         }
 
         if mouse_released {
-            if let Some((idx, control)) = pending_window_control.take() {
-                if let Some(win) = compositor.windows.get(idx).and_then(|slot| *slot) {
-                    let release_rect = match control {
-                        0 => win.close_hit_rect(),
-                        1 => win.max_hit_rect(),
-                        _ => win.min_hit_rect(),
-                    };
-                    if win.is_open && !win.is_minimized && gui::in_rect(mx, my, release_rect) {
-                        match control {
-                            0 => terminate_app(
+            if let Some((idx, control)) = state.pending_window_control.take() {
+                if control == 0 {
+                    // Kapatma: terminate_app ile işlenir (çoğu parametre gerektirir).
+                    if let Some(win) = compositor.windows.get(idx).and_then(|slot| *slot) {
+                        if win.is_open
+                            && !win.is_minimized
+                            && gui::in_rect(mx, my, win.close_hit_rect())
+                        {
+                            terminate_app(
                                 idx,
                                 &mut compositor,
                                 &mut filemanager_app,
@@ -7913,28 +8048,28 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 &mut fps_game_app,
                                 &mut fps_3d_app,
                                 &mut city_drive_app,
-                            ),
-                            1 => {
-                                compositor.focus_window(idx);
-                                compositor.toggle_maximize(idx, width, height);
-                            }
-                            _ => {
-                                if let Some(w) = compositor.windows[idx].as_mut() {
-                                    w.is_minimized = true;
-                                }
-                                compositor.focus_top_window();
-                            }
+                            );
                         }
                     }
+                } else {
+                    let _ = event_window::handle_window_control_release(
+                        &mut compositor,
+                        idx,
+                        control,
+                        mx,
+                        my,
+                        width,
+                        height,
+                    );
                 }
             }
-            image_drag_last = None;
+            state.image_drag_last = None;
         }
 
         if mouse_released {
-            drag_prev_box = None;
+            state.drag_prev_box = None;
 
-            drag_dirty_rect = None;
+            state.drag_dirty_rect = None;
 
             viewer3d_app.handle_mouse_up();
 
@@ -7944,11 +8079,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            notepad_dragging = false;
-            browser_address_dragging = false;
-            browser_page_dragging = false;
-            terminal_dragging = false;
-            start_search_dragging = false;
+            state.notepad_dragging = false;
+            state.browser_address_dragging = false;
+            state.browser_page_dragging = false;
+            state.terminal_dragging = false;
+            state.start_search_dragging = false;
 
             let (is_drag_active, drag_item, drag_target) = if desktop_drag_source {
                 (
@@ -8073,9 +8208,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             // - Ekranin kenarları: Yarı ekran
             // - Ekranin köşeleri: Çeyrek ekran
 
-            if let Some(idx) = dragging_win {
+            if let Some(idx) = state.dragging_win {
                 compositor.focus_window(idx);
-                let usable_h = height.saturating_sub(gui::taskbar_h());
+                let usable_h = height.saturating_sub(gui::scaled_taskbar_h());
 
                 // Bölge mantığı önizleme ile aynı kaynaktan gelir.
                 if let Some(zone) = gui::snap::snap_zone(mx, my, width, usable_h) {
@@ -8083,17 +8218,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            active_snap_preview = None;
+            state.active_snap_preview = None;
 
-            dragging_win = None;
+            state.dragging_win = None;
 
-            resizing_win = None;
+            state.resizing_win = None;
 
-            resize_edge = None;
+            state.resize_edge = None;
 
-            vscroll_drag = None;
+            state.vscroll_drag = None;
 
-            hscroll_drag = None;
+            state.hscroll_drag = None;
         }
 
         // Alt tusu birakildiginda Alt+Tab penceresini kapat
@@ -8121,15 +8256,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // Baslat menusu acikken klavye kisayollari menu SIRASINI kullanir
 
-            if run_dialog_open {
+            if state.run_dialog_open {
                 if ch == '\x1b' {
-                    run_dialog_open = false;
+                    state.run_dialog_open = false;
 
-                    run_dialog_input.clear();
+                    state.run_dialog_input.clear();
                 } else if ch == '\x08' {
-                    run_dialog_input.pop();
+                    state.run_dialog_input.pop();
                 } else if ch == '\n' {
-                    let cmd = run_dialog_input.as_str().trim();
+                    let cmd = state.run_dialog_input.as_str().trim();
 
                     let app_id = match cmd {
                         "cmd" | "terminal" | "term" | "bash" | "sh" => Some(10),
@@ -8175,15 +8310,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         audio_dev.play_beep(440, 60);
                     }
 
-                    run_dialog_open = false;
+                    state.run_dialog_open = false;
 
-                    run_dialog_input.clear();
-                } else if ch >= ' ' && ch != '\x7f' && run_dialog_input.len() < 30 {
+                    state.run_dialog_input.clear();
+                } else if ch >= ' ' && ch != '\x7f' && state.run_dialog_input.len() < 30 {
                     let mut b = [0u8; 4];
 
                     let s = ch.encode_utf8(&mut b);
 
-                    run_dialog_input.push_str(s);
+                    state.run_dialog_input.push_str(s);
                 }
 
                 continue;
@@ -8193,21 +8328,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // özellikler modali acikken ESC ve Enter modali kapatir.
 
-            if properties_open {
+            if state.properties_open {
                 if ch == '\x1b' || ch == '\n' {
-                    properties_open = false;
+                    state.properties_open = false;
 
-                    properties_name.clear();
+                    state.properties_name.clear();
 
-                    properties_type.clear();
+                    state.properties_type.clear();
 
-                    properties_size.clear();
+                    state.properties_size.clear();
 
-                    properties_location.clear();
+                    state.properties_location.clear();
 
-                    properties_path.clear();
+                    state.properties_path.clear();
 
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 continue;
@@ -8215,6 +8350,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             if ch == '\x1b' && compositor.is_start_menu_open {
                 compositor.close_start_menu();
+            } else if ch == '\x1b' && compositor.dismiss_toasts() > 0 {
+                // Esc: açık bildirimleri kapat (başka bir katman açık değilken).
+                state.force_render = true;
             } else if ch == '\x1b' && compositor.is_context_menu_open {
                 compositor.is_context_menu_open = false;
 
@@ -8322,10 +8460,34 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 desktop_files.drag_active = false;
 
                 desktop_files.drag_target = None;
-            } else if app_is_focused(&compositor, 0) && ch == '\x08' {
+            } else if app_is_focused(&compositor, 0)
+                && ch == '\x08'
+                && filemanager_app.focused_control == 6
+            {
+                // Filtre kutusu odaktayken Backspace: filtre metnini siler.
                 filemanager_app.search_backspace();
 
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+            } else if app_is_focused(&compositor, 0)
+                && ch == '\x08'
+                && filemanager_app.focused_control == 5
+            {
+                // Liste odaktayken Backspace = üst klasör (kök dizinde etkisiz).
+                if filemanager_app.go_up() {
+                    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                }
+
+                fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+            } else if (ch == 'a' || ch == 'A') && keyboard.ctrl && app_is_focused(&compositor, 0) {
+                // Ctrl+A: tüm görünür öğeleri seç, Ctrl+Shift+A: seçimi temizle.
+                if keyboard.shift {
+                    filemanager_app.clear_selection();
+                } else if filemanager_app.select_all() > 0 {
+                    filemanager_app.set_status_text(gui::ui_text(
+                        "Tüm öğeler seçildi.",
+                        "All items selected.",
+                    ));
+                }
             } else if (ch == 'g' || ch == 'G') && keyboard.ctrl && app_is_focused(&compositor, 0) {
                 // Ctrl+G: liste <-> izgara gorunumu.
 
@@ -8334,7 +8496,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 filemanager_app.ensure_thumbs(&fs_mgr.vfs);
 
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
-            } else if app_is_focused(&compositor, 0) && ch >= ' ' && ch != '\x7f' {
+            } else if app_is_focused(&compositor, 0)
+                && filemanager_app.focused_control == 6
+                && ch >= ' '
+                && ch != '\x7f'
+            {
+                // Yalnızca filtre kutusu odaktayken yazılan karakterler filtreler;
+                // listede yazı yazmak kısayollarla çakışmaz.
                 filemanager_app.search_char(ch);
 
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
@@ -8695,23 +8863,23 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let fps_focused = app_is_focused(&compositor, 15);
 
                 if fps_focused && fps_game_app.handle_key(ch) {
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 let fps3d_focused = app_is_focused(&compositor, 16);
 
                 if fps3d_focused && fps_3d_app.handle_key(ch, &mut audio_dev) {
-                    force_render = true;
+                    state.force_render = true;
                 }
 
                 // Şehir sürüşü: gaz/fren/direksiyon tuşları ve menü komutları.
                 let city_focused = app_is_focused(&compositor, 17);
 
                 if city_focused && city_drive_app.handle_key(ch) {
-                    force_render = true;
+                    state.force_render = true;
                 }
 
-                if !run_dialog_open
+                if !state.run_dialog_open
                     && !compositor.is_start_menu_open
                     && !compositor.is_context_menu_open
                 {
@@ -8730,7 +8898,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
-        let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
+        let mouse_moved = mouse.x != state.last_mouse_x || mouse.y != state.last_mouse_y;
 
         if mouse_moved && compositor.is_start_menu_open {
             let (_, menu_y, _, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
@@ -8754,13 +8922,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // düğme/tepsi vurguları bir sonraki tesadüfi kareye kadar güncellenmez
         // (düz imleç hareketi yalnızca imleç dikdörtgenini yeniden çizer).
         if mouse_moved {
-            let strip_top = height.saturating_sub(gui::taskbar_h());
-            let was_in_strip = (last_mouse_y as usize) >= strip_top;
+            let strip_top = height.saturating_sub(gui::scaled_taskbar_h());
+            let was_in_strip = (state.last_mouse_y as usize) >= strip_top;
             let in_strip = (mouse.y as usize) >= strip_top;
             if was_in_strip || in_strip {
                 compositor.dirty_tracker.track(
                     0,
-                    crate::gui::dirty_rect::DirtyRect::new(0, strip_top, width, gui::taskbar_h()),
+                    crate::gui::dirty_rect::DirtyRect::new(
+                        0,
+                        strip_top,
+                        width,
+                        gui::scaled_taskbar_h(),
+                    ),
                 );
             }
 
@@ -8782,8 +8955,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 {
                     continue;
                 }
-                let tb_rect = (w.x, w.y, w.width, gui::titlebar_h());
-                let was_in_tb = gui::in_rect(last_mouse_x as usize, last_mouse_y as usize, tb_rect);
+                let tb_rect = (w.x, w.y, w.width, gui::scaled_titlebar_h());
+                let was_in_tb = gui::in_rect(
+                    state.last_mouse_x as usize,
+                    state.last_mouse_y as usize,
+                    tb_rect,
+                );
                 let in_tb = gui::in_rect(mx, my, tb_rect);
                 if was_in_tb || in_tb {
                     compositor.dirty_tracker.track(
@@ -8846,8 +9023,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
                 if gw > 0 && gh > 0 {
                     let gutter = (gx, gy, gw, gh);
-                    let was_in_sb =
-                        gui::in_rect(last_mouse_x as usize, last_mouse_y as usize, gutter);
+                    let was_in_sb = gui::in_rect(
+                        state.last_mouse_x as usize,
+                        state.last_mouse_y as usize,
+                        gutter,
+                    );
                     let in_sb = gui::in_rect(mx, my, gutter);
                     if was_in_sb || in_sb {
                         compositor
@@ -8865,31 +9045,31 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // Mouse look only when FPS-3D window is focused; avoids unnecessary
         // redraws when another window has focus.
         if mouse_moved && app_is_focused(&compositor, 16) {
-            let dx = (mouse.x as f32 - last_mouse_x as f32) * 0.5;
+            let dx = (mouse.x as f32 - state.last_mouse_x as f32) * 0.5;
             if dx.abs() > 0.5 {
                 fps_3d_app.handle_mouse_look(dx);
-                force_render = true;
+                state.force_render = true;
             }
         }
         // Delta hesaplandıktan sonra referans konumunu güncelle. Önceki sıra
         // odaklı pencerede delta'yı her zaman sıfırlıyordu; ayrıca odak dışı
         // hareketin sonraki FPS karesine taşınmasını engeller.
         if mouse_moved {
-            last_mouse_x = mouse.x;
-            last_mouse_y = mouse.y;
+            state.last_mouse_x = mouse.x;
+            state.last_mouse_y = mouse.y;
         }
 
-        let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
+        let buttons_changed = (mouse.left_button, mouse.right_button) != state.last_buttons;
 
         let v3d_dragging = mouse.left_button && viewer3d_app.drag_active;
 
-        let is_dragging = dragging_win.is_some()
-            || resizing_win.is_some()
-            || vscroll_drag.is_some()
-            || hscroll_drag.is_some()
-            || notepad_dragging
-            || browser_page_dragging
-            || terminal_dragging
+        let is_dragging = state.dragging_win.is_some()
+            || state.resizing_win.is_some()
+            || state.vscroll_drag.is_some()
+            || state.hscroll_drag.is_some()
+            || state.notepad_dragging
+            || state.browser_page_dragging
+            || state.terminal_dragging
             || filemanager_app.drag_active
             || v3d_dragging;
 
@@ -8931,12 +9111,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             crate::gui::frame::vsync_enabled(),
         );
 
-        let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= frame_interval_ms;
+        let timer_tick_fired =
+            monotonic_ms().wrapping_sub(state.last_frame_ms) >= frame_interval_ms;
 
         if timer_tick_fired {
-            last_frame_ms = monotonic_ms();
+            state.last_frame_ms = monotonic_ms();
 
-            anim_tick = anim_tick.wrapping_add(1);
+            state.anim_tick = state.anim_tick.wrapping_add(1);
 
             if viewer3d_open {
                 let _app_context = apps::guard::ContextScope::new(12, apps::guard::NO_WINDOW);
@@ -8975,107 +9156,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // --- Kullanıcı modu GUI syscall isteklerini işle ---
         // Olay döngüsü, kullanıcı modu süreçlerinden gelen pencere oluşturma,
         // çizim ve girdi isteklerini tüketir ve kompozitörle eşler.
-        for (req_id, req) in drain_gui_requests() {
-            match req {
-                GuiSyscallRequest::CreateWindow {
-                    pid: _,
-                    title_ptr,
-                    title_len,
-                    x,
-                    y,
-                    w,
-                    h,
-                } => {
-                    // Başlığı kullanıcı belleğinden kopyala.
-                    let address_space = AddressSpace::current();
-                    let title_bytes = match uaccess::copy_cstring_from_user(
-                        &address_space,
-                        title_ptr,
-                        title_len + 1,
-                    ) {
-                        Ok(b) => b,
-                        Err(_) => continue,
-                    };
-                    let title_str = match core::str::from_utf8(&title_bytes) {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    };
-                    // Sabit bir başlık kullan (dinamik başlık için Window.title
-                    // alanının &'static str'den String'e değiştirilmesi gerekir).
-                    let _ = title_str;
-                    let title = "Kullanıcı Uygulaması";
-                    let win =
-                        gui::Window::new(title, "UserApp", x, y, w.min(800), h.min(600), true);
-                    let mut win = win;
-                    win.app_id = u8::MAX; // Kullanıcı modu penceresini işaretler.
-                    if compositor.add_window(win) {
-                        let _ = req_id;
-                    }
-                }
-                GuiSyscallRequest::DestroyWindow { pid: _, window_id } => {
-                    let _ = window_id;
-                    let _ = req_id;
-                    // TODO: Pencereyi kompozitörden kaldır.
-                }
-                GuiSyscallRequest::SetTitle {
-                    pid: _,
-                    window_id,
-                    title_ptr: _,
-                    title_len: _,
-                } => {
-                    let _ = window_id;
-                    let _ = req_id;
-                    // TODO: Pencere başlığını güncelle.
-                }
-                GuiSyscallRequest::DrawPixel {
-                    pid: _,
-                    window_id,
-                    x: _,
-                    y: _,
-                    color: _,
-                } => {
-                    let _ = window_id;
-                    let _ = req_id;
-                    // TODO: Pikseli kullanıcı belleğinden çizer.
-                }
-                GuiSyscallRequest::DrawRect {
-                    pid: _,
-                    window_id,
-                    x: _,
-                    y: _,
-                    w: _,
-                    h: _,
-                    color: _,
-                } => {
-                    let _ = window_id;
-                    let _ = req_id;
-                    // TODO: Dikdörtgeni kullanıcı belleğinden çizer.
-                }
-                GuiSyscallRequest::GetInput {
-                    pid: _,
-                    window_id,
-                    buffer_ptr: _,
-                    buffer_len: _,
-                } => {
-                    let _ = window_id;
-                    let _ = req_id;
-                    // TODO: Girdi olaylarını kullanıcı tamponuna yazar.
-                }
-                GuiSyscallRequest::SetCursor { pid: _, x: _, y: _ } => {
-                    let _ = req_id;
-                    // TODO: Fare imlecini ayarlar.
-                }
-                GuiSyscallRequest::GetWindowInfo {
-                    pid: _,
-                    window_id,
-                    buffer_ptr: _,
-                } => {
-                    let _ = window_id;
-                    let _ = req_id;
-                    // TODO: Pencere bilgilerini kullanıcı tamponuna yazar.
-                }
-            }
-        }
+        event_syscall::drain_and_handle_gui_syscalls(&mut compositor);
 
         // Oyun motoru: dama yapay zekâsı, bulmaca gösterisi ve performans testi
         // yalnızca pencere açık ve zamanlayıcı işareti geldiğinde ilerler.
@@ -9107,8 +9188,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         watchdog::heartbeat(idx, 15);
                     }
                     if game_elapsed_ms > GAME_UPDATE_BUDGET_MS {
-                        game_budget_strikes = game_budget_strikes.saturating_add(1);
-                        if game_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
+                        state.game_budget_strikes = state.game_budget_strikes.saturating_add(1);
+                        if state.game_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
                             crate::serial_print(
                                 "[GAMES] Guard: oyun bütçeyi sürekli aşıyor, sonlandırılıyor\n",
                             );
@@ -9143,10 +9224,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             crate::serial_print(" ms)\n");
                         }
                     } else {
-                        game_budget_strikes = 0;
+                        state.game_budget_strikes = 0;
                     }
                     if changed {
-                        force_render = true;
+                        state.force_render = true;
                     }
                 } else {
                     // Guard recovery: oyun içinde hata oluştu, uygulama kapatılacak
@@ -9200,14 +9281,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             let now_cycles = read_cpu_cycles();
             if apps::controlpanel::active_tab() == 3 {
                 let _app_context = apps::guard::ContextScope::new(14, apps::guard::NO_WINDOW);
-                let delta = now_cycles.wrapping_sub(cp_last_cycles);
+                let delta = now_cycles.wrapping_sub(state.cp_last_cycles);
                 let delta_us = delta / unsafe { TSC_CYCLES_PER_US };
                 let target_us = frame_interval_ms.saturating_mul(1_000);
                 if apps::controlpanel::perf_sample(delta_us.min(1_000_000), target_us) {
-                    force_render = true;
+                    state.force_render = true;
                 }
             }
-            cp_last_cycles = now_cycles;
+            state.cp_last_cycles = now_cycles;
         }
 
         // FPS 3D oyun motoru: raycasting, hareket, düşman AI, ses.
@@ -9245,8 +9326,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         watchdog::heartbeat(idx, 16);
                     }
                     if fps3d_elapsed_ms > GAME_UPDATE_BUDGET_MS {
-                        fps3d_budget_strikes = fps3d_budget_strikes.saturating_add(1);
-                        if fps3d_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
+                        state.fps3d_budget_strikes = state.fps3d_budget_strikes.saturating_add(1);
+                        if state.fps3d_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
                             crate::serial_print(
                                 "[FPS-3D] Guard: oyun bütçeyi sürekli aşıyor, sonlandırılıyor\n",
                             );
@@ -9281,7 +9362,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             crate::serial_print(" ms)\n");
                         }
                     } else {
-                        fps3d_budget_strikes = 0;
+                        state.fps3d_budget_strikes = 0;
                     }
                 } else {
                     // Guard recovery: oyun içinde hata oluştu, uygulama kapatılacak
@@ -9437,7 +9518,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             x - (x3 / 6.0) + (x5 / 120.0) - (x7 / 5040.0)
         }
 
-        game_perf_us = game_perf_us.wrapping_add(1);
+        state.game_perf_us = state.game_perf_us.wrapping_add(1);
         if let Some((freq, duration_ms)) =
             apps::game::GameApp::sound_tone(fps_game_app.take_sound())
         {
@@ -9460,16 +9541,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     }
                 } else {
                     audio_dev.set_pc_speaker_tone(freq);
-                    game_sound_until_ms = crate::monotonic_ms().saturating_add(duration_ms as u64);
+                    state.game_sound_until_ms =
+                        crate::monotonic_ms().saturating_add(duration_ms as u64);
                 }
-                force_render = true;
+                state.force_render = true;
             }
         }
 
         // 3-Masa oyunu PC Speaker sesi süresi dolduysa otomatik olarak sustur.
-        if game_sound_until_ms > 0 && crate::monotonic_ms() >= game_sound_until_ms {
+        if state.game_sound_until_ms > 0 && crate::monotonic_ms() >= state.game_sound_until_ms {
             audio_dev.set_pc_speaker_tone(0);
-            game_sound_until_ms = 0;
+            state.game_sound_until_ms = 0;
         }
 
         // FPS 3D oyun ses efektleri.
@@ -9478,7 +9560,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         {
             if !audio_dev.is_muted && audio_dev.volume_left > 0 && freq > 0 {
                 audio_dev.set_pc_speaker_tone(freq);
-                force_render = true;
+                state.force_render = true;
             }
         }
 
@@ -9486,17 +9568,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         if videoplayer_app.is_playing {
             let video_now_ms = monotonic_ms();
 
-            if video_now_ms.wrapping_sub(last_video_frame_ms) >= 33 {
-                last_video_frame_ms = video_now_ms;
+            if video_now_ms.wrapping_sub(state.last_video_frame_ms) >= 33 {
+                state.last_video_frame_ms = video_now_ms;
 
                 videoplayer_app.frame = videoplayer_app.frame.wrapping_add(1);
             }
         } else {
-            last_video_frame_ms = monotonic_ms();
+            state.last_video_frame_ms = monotonic_ms();
         }
 
         if musicplayer_app.is_playing && !audio_dev.is_muted && audio_dev.volume_left > 0 {
-            if anim_tick.wrapping_sub(last_music_beat) >= 24 {
+            if state.anim_tick.wrapping_sub(state.last_music_beat) >= 24 {
                 // Her liste öğesi ayrı bir melodi kalıbına sahip olsun. Sadece
                 // frekansı biraz kaydırmak parçaların aynı duyulmasına neden
                 // oluyordu; artık ritmik/notsal dizileri de birbirinden farklı.
@@ -9509,7 +9591,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 ];
 
                 let track = musicplayer_app.current_track.min(TRACK_NOTES.len() - 1);
-                let freq = TRACK_NOTES[track][music_note % TRACK_NOTES[track].len()];
+                let freq = TRACK_NOTES[track][state.music_note % TRACK_NOTES[track].len()];
 
                 // HDA hazir ve DMA ilerliyorsa gercek PCM ornegi uret ve gonder.
 
@@ -9528,7 +9610,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             musicplayer_app.wav_position = 0;
                             musicplayer_app.is_playing = false;
                         }
-                        last_music_beat = anim_tick;
+                        state.last_music_beat = state.anim_tick;
                         continue;
                     }
                     let sample_count = 1920; // 40 ms
@@ -9568,518 +9650,80 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         idx += n;
                     }
 
-                    if speaker_on {
+                    if state.speaker_on {
                         audio_dev.set_pc_speaker_tone(0);
 
-                        speaker_on = false;
+                        state.speaker_on = false;
                     }
                 } else {
                     // Otomatik Fallback: HDA yok veya sanallastirma ortaminda DMA duraksadiysa PC Speaker PWM tonlama yap!
 
                     audio_dev.set_pc_speaker_tone(freq);
 
-                    speaker_on = true;
+                    state.speaker_on = true;
                 }
 
-                music_note = (music_note + 1) % TRACK_NOTES[track].len();
+                state.music_note = (state.music_note + 1) % TRACK_NOTES[track].len();
 
-                last_music_beat = anim_tick;
+                state.last_music_beat = state.anim_tick;
             }
 
             // Parca 3:30 (210 sn) oldugu icin cubuk gercek zamanda her 2.1 sn'de %1 ilerler.
             let progress_now_ms = monotonic_ms();
-            if progress_now_ms.wrapping_sub(last_music_progress_ms) >= 2_100 {
-                last_music_progress_ms = progress_now_ms;
+            if progress_now_ms.wrapping_sub(state.last_music_progress_ms) >= 2_100 {
+                state.last_music_progress_ms = progress_now_ms;
                 musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;
             }
-        } else if speaker_on || audio_dev.is_muted || audio_dev.volume_left == 0 {
+        } else if state.speaker_on || audio_dev.is_muted || audio_dev.volume_left == 0 {
             drivers::hda::silence();
 
             audio_dev.set_pc_speaker_tone(0);
 
-            speaker_on = false;
+            state.speaker_on = false;
 
-            last_music_beat = anim_tick;
+            state.last_music_beat = state.anim_tick;
 
-            last_music_progress_ms = monotonic_ms();
+            state.last_music_progress_ms = monotonic_ms();
         }
 
-        let night_light_active = settings_app.night_light;
-
-        // Ayarlar > Testler: fare test verisini canli besle.
-
-        let settings_test_active = app_is_focused(&compositor, 1) && settings_app.active_tab == 4;
-
-        if settings_test_active {
-            if let Some((_, w)) = focused_window_for_app(&compositor, 1) {
-                settings_app.capture_mouse_test(
-                    mx,
-                    my,
-                    mouse.left_button,
-                    mouse.right_button,
-                    mouse.middle_button,
-                    w.x.saturating_sub(w.scroll.x),
-                    w.y.saturating_sub(w.scroll.y),
-                );
-            }
-        }
-
-        let busy_dirty = unsafe {
-            let dirty = BUSY_DIRTY;
-
-            BUSY_DIRTY = false;
-
-            dirty
-        };
-
-        // Secim/konum degistiyse Hizli onizleme icerigini tazele. Kimlik anahtari
-
-        // ayniyken cagri ucuzdur ve VFS okumasi yapmaz.
-
-        if filemanager_app.preview_open {
-            filemanager_app.update_preview(&fs_mgr.vfs);
-        }
-
-        // Tarayıcı: yeni sayfa yüklendiğinde kaydırmayı başa al.
-        // Adreste `#parça` varsa ilgili çapanın konumuna kaydır.
-        let browser_scroll_reset = browser_app.scroll_reset;
-        if browser_app.scroll_reset {
-            browser_app.scroll_reset = false;
-            browser_app.scroll_animating = false;
-            browser_app.scroll_target = 0;
-            if let Some((idx, w)) = focused_window_for_app(&compositor, 3) {
-                if let Some(wm) = compositor.windows[idx].as_mut() {
-                    wm.scroll.y = 0;
-                }
-                if let Some(y) = browser_app.pending_anchor_y.take() {
-                    let view_h = w.content_rect().3;
-                    let max_y = browser_app.content_height().saturating_sub(view_h);
-                    browser_app.scroll_to(0, y, max_y, monotonic_ms());
-                }
-            } else {
-                browser_app.pending_anchor_y = None;
-            }
-        }
-
-        // Tarayıcı: yumuşak içerik kaydırmasını kare hızında ilerlet.
-        let mut browser_scroll_step = false;
-        if browser_app.scroll_animating && timer_tick_fired {
-            if let Some((idx, w)) = focused_window_for_app(&compositor, 3) {
-                let view_h = w.content_rect().3;
-                let max_y = browser_app.content_height().saturating_sub(view_h);
-                if let Some(y) = browser_app.scroll_anim_step(monotonic_ms(), max_y) {
-                    browser_scroll_step = true;
-                    if let Some(wm) = compositor.windows[idx].as_mut() {
-                        wm.scroll.y = y.min(max_y);
-                    }
-                }
-            } else {
-                browser_app.scroll_animating = false;
-            }
-        }
-        let browser_scrolling = browser_scroll_step || browser_app.scroll_animating;
-
-        // Genel yumuşak kaydırma: tekerlekle başlatılan "hedefe git"
-        // animasyonlarını kare hızında ilerlet. Tarayıcı (app 3) kendi
-        // scroll_to/scroll_anim_step mekanizmasını kullandığı için hariç.
-        let mut generic_scrolling = false;
-        if timer_tick_fired {
-            let now_ms = monotonic_ms();
-            for (idx, slot) in compositor.windows.iter_mut().enumerate() {
-                let Some(wm) = slot.as_mut() else {
-                    continue;
-                };
-                if !wm.scroll_anim.is_active()
-                    || !wm.is_open
-                    || wm.is_minimized
-                    || wm.workspace != compositor.active_workspace
-                    || wm.app_id == 3
-                {
-                    continue;
-                }
-                let app_id = wm.app_id as usize;
-                let (win_w, win_h, rep_w, rep_h) =
-                    (wm.width, wm.height, wm.content_w, wm.content_h);
-                let (content_w, content_h) = window_content_size(
-                    app_id,
-                    win_w,
-                    win_h,
-                    rep_w,
-                    rep_h,
-                    &filemanager_app,
-                    &notepad_app,
-                    &browser_app,
-                );
-                let (_, _, cw, ch) = wm.content_rect();
-                let sb = gui::scrollbar::SCROLLBAR_THICKNESS;
-                let want_v = content_h > ch && ch > 0;
-                let want_h = content_w > cw && cw > 0;
-                let view_w = cw.saturating_sub(if want_v { sb } else { 0 });
-                let view_h = ch.saturating_sub(if want_h { sb } else { 0 });
-                let max_x = gui::scrollbar::max_offset(content_w, view_w);
-                let max_y = gui::scrollbar::max_offset(content_h, view_h);
-                if let Some(s) = wm.scroll_anim.step(now_ms, max_x, max_y) {
-                    wm.scroll = s;
-                    let (dx, dy, dw, dh) = wm.content_rect();
-                    generic_scrolling = true;
-                    // `track` hem global listeye (bounding → kısmi redraw)
-                    // hem de pencere render listesine işler.
-                    compositor
-                        .dirty_tracker
-                        .track(idx, crate::gui::dirty_rect::DirtyRect::new(dx, dy, dw, dh));
-                }
-            }
-        }
-
-        // Tooltip durumu: hover raporu (son render'dan) ile onaylı adayı
-        // mutabık kılar; gecikmesi dolan ipucu görünür olur ve ilgili bölge
-        // kirli işaretlenir (bir sonraki karede çizilir).
-        compositor.tooltip_tick(monotonic_ms(), width, height);
-
-        // Yeni açılan pencereleri açılış animasyonu için tek seferde damgala.
-        // Kayıt yolu (Window::new, is_open=true atamaları) dokunulmaz;
-        // olay döngüsü her turda eksik damgayı tamamlar.
-        {
-            let now = monotonic_ms();
-            for w in compositor.windows.iter_mut().flatten() {
-                if w.is_open && w.open_ms == 0 {
-                    w.open_ms = now;
-                }
-            }
-        }
-
-        // Başlat menüsü açılış animasyonu sürerken kareleri zorla.
-        let start_menu_animating = compositor.is_start_menu_open
-            && monotonic_ms().wrapping_sub(compositor.start_menu_open_ms)
-                < gui::MinGuiCompositor::START_MENU_OPEN_MS;
-
-        // Pencere açılış animasyonu sürerken kareleri zorla.
-        let window_open_animating = !gui::anim::reduced_motion()
-            && compositor.windows.iter().any(|slot| {
-                slot.is_some_and(|w| {
-                    w.is_open
-                        && w.open_ms != 0
-                        && monotonic_ms().wrapping_sub(w.open_ms) < gui::window::OPEN_ANIM_MS
-                })
-            });
-
-        // Bağlam menüsü, Alt+Tab ve tepsi açılır pencereleri açılış
-        // animasyonları sürerken kareleri zorla.
-        let popup_anim_ms = crate::gui::window::OPEN_ANIM_MS;
-        let overlay_animating = !gui::anim::reduced_motion()
-            && ((compositor.is_context_menu_open
-                && monotonic_ms().wrapping_sub(compositor.context_menu_open_ms) < popup_anim_ms)
-                || (compositor.is_alt_tab_open
-                    && monotonic_ms().wrapping_sub(compositor.alt_tab_open_ms) < popup_anim_ms)
-                || (compositor.is_calendar_open
-                    && monotonic_ms().wrapping_sub(compositor.calendar_open_ms) < popup_anim_ms)
-                || (compositor.is_volume_popup_open
-                    && monotonic_ms().wrapping_sub(compositor.volume_popup_open_ms)
-                        < popup_anim_ms));
-
-        let full_redraw = input_update.keyboard
-            || buttons_changed
-            || scroll_val != 0
-            || browser_scrolling
-            || generic_scrolling
-            || start_menu_animating
-            || window_open_animating
-            || overlay_animating
-            || browser_scroll_reset
-            || force_render
-            || busy_dirty
-            || !compositor.dirty_tracker.is_empty()
-            || (mouse_moved
-                && (is_interacting
-                    || night_light_active
-                    || settings_test_active
-                    || compositor.is_start_menu_open))
-            || (timer_tick_fired && media_animating);
-
-        if full_redraw {
-            let tm_open = compositor
-                .windows
-                .iter()
-                .flatten()
-                .any(|w| w.app_id == 7 && w.is_open && !w.is_minimized);
-
-            if tm_open {
-                // Gorev yoneticisi istatistiklerini her frame yerine periyodik guncelle.
-
-                use core::sync::atomic::{AtomicUsize, Ordering};
-
-                static TM_UPDATE_TICK: AtomicUsize = AtomicUsize::new(0);
-
-                let tick = TM_UPDATE_TICK.fetch_add(1, Ordering::Relaxed);
-
-                if tick % 30 == 0 {
-                    let _app_context = apps::guard::ContextScope::new(7, apps::guard::NO_WINDOW);
-                    taskmgr_app.update(
-                        &memory_mgr.pmm,
-                        &fs_mgr.vfs,
-                        &compositor.windows,
-                        &app_render_cycles,
-                    );
-                }
-            }
-
-            keep_windows_on_screen(&mut compositor, width, height);
-
-            // Menuler veya modal pencereler kapaliyken tek pencere ici klavye girisi veya
-
-            // pencere surukleme yapiliyorsa yalnizca kirli dikdortgeni (dirty rect) cizerek
-
-            // CPU yukunu ve gereksiz VRAM kopyalamasini %60-70 azalt.
-
-            // Kirli bölge takibini her dalda boşalt: menü/modal dalı
-            // tam kare çizse bile eski kayıtlar sonraki tura taşınmamalı.
-            let tracked_dirty = compositor.take_dirty_region();
-
-            let target_dirty = if force_render
-                || busy_dirty
-                || compositor.is_start_menu_open
-                || compositor.is_context_menu_open
-                || compositor.is_alt_tab_open
-                || compositor.active_workspace != last_workspace
-                || run_dialog_open
-                || night_light_active
-            {
-                None
-            } else if let Some(drag) = drag_dirty_rect {
-                Some(drag)
-            } else {
-                // GlobalDirtyTracker'dan bu turun birleşik kirli bölgeyi al.
-                // Taşma (overflow) veya boş takip → None → tam yeniden çizim.
-                tracked_dirty
-            };
-            last_workspace = compositor.active_workspace;
-
-            gui::frame::render_full_frame(
-                &mut fb,
-                &compositor,
-                &filemanager_app,
-                &desktop_files,
-                &settings_app,
-                &notepad_app,
-                &browser_app,
-                &imageviewer_app,
-                &musicplayer_app,
-                &videoplayer_app,
-                &taskmgr_app,
-                &calculator_app,
-                &paint_apps,
-                &terminal_app,
-                &installer_app,
-                &viewer3d_app,
-                &pkgmgr_app,
-                &fps_game_app,
-                &mut fps_3d_app,
-                &mut city_drive_app,
-                &now,
-                mouse,
-                keyboard,
-                memory_mgr.pmm.total_memory_bytes,
-                memory_mgr.pmm.used_memory_bytes,
-                anim_tick,
-                &mut app_render_cycles,
-                &app_render_time_ms,
-                (run_dialog_open, &run_dialog_input),
-                (
-                    properties_open,
-                    &properties_name,
-                    &properties_type,
-                    &properties_size,
-                    &properties_location,
-                    &properties_path,
-                ),
-                active_snap_preview,
-                target_dirty,
-            );
-
-            // İzleme damgası: her karede açık pencereleri canlı olarak işaretle.
-            for (idx, slot) in compositor.windows.iter().enumerate() {
-                if let Some(win) = slot {
-                    if win.is_open && !win.is_minimized {
-                        watchdog::heartbeat(idx, win.app_id as usize);
-                    }
-                }
-            }
-
-            drag_dirty_rect = None;
-        } else if mouse_moved {
-            // Imlec hareketinde uygulamalari ve tum ekrani yeniden cizmek yerine
-
-            // sadece onceki ve yeni imlec alanlarini birlesik tek bir dikdortgen olarak guncelle.
-
-            let old_rect = fb.restore_cursor_background();
-
-            compositor.draw_mouse_cursor(&mut fb, mx, my, mouse.left_button);
-
-            let new_rect = fb.cursor_rect();
-
-            match (old_rect, new_rect) {
-                (Some(o), Some(n)) => {
-                    let u = drivers::video::rect_union(o, n);
-
-                    fb.flush_rect(u);
-                }
-
-                (Some(o), None) => fb.flush_rect(o),
-
-                (None, Some(n)) => fb.flush_rect(n),
-
-                _ => {}
-            }
-        }
-
-        last_mouse_x = mouse.x;
-
-        last_mouse_y = mouse.y;
-
-        last_buttons = (mouse.left_button, mouse.right_button);
-
-        if !input_update.mouse
-            && !input_update.keyboard
-            && !mouse_moved
-            && !buttons_changed
-            && !force_render
-        {
-            // Boşta bekleme: timer doğrulanmışsa veya cihaz kesmeleri mevcutsa
-            // APIC katmanı HLT ile uyutur; sürekli spin-polling CPU'yu tüketmez.
-
-            let wait_start = read_cpu_cycles();
-
-            let browser_waiting = browser_app.take_net_idle_hint();
-
-            if !browser_waiting {
-                // APIC timer ~100 Hz: HLT en geç ~10 ms içinde uyanır. PS/2 veya
-                // USB girdi kesmesi geldiğinde daha erken uyanıp olayı işleriz.
-                // Böylece boşta CPU döngüsü yerine gerçek uyku kullanılır.
-                arch::x86_64::apic::idle_pause();
-            } else {
-                let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(20_000);
-
-                let busy_wait_cycles = if browser_waiting {
-                    unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_000)
-                } else {
-                    idle_wait_cycles
-                };
-
-                while read_cpu_cycles().wrapping_sub(wait_start) < busy_wait_cycles {
-                    if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
-                        break;
-                    }
-                    core::hint::spin_loop();
-                }
-            }
-
-            let loop_end_cycles = read_cpu_cycles();
-
-            let elapsed = loop_end_cycles.wrapping_sub(loop_start_cycles);
-
-            let idle_elapsed = loop_end_cycles.wrapping_sub(wait_start).min(elapsed);
-
-            cpu_sample_total_cycles = cpu_sample_total_cycles.saturating_add(elapsed);
-
-            cpu_sample_active_cycles =
-                cpu_sample_active_cycles.saturating_add(elapsed.saturating_sub(idle_elapsed));
-        } else {
-            // Aktif durumda sürekli %100 CPU'yu önlemek için kısa bir
-            // spin beklemesi (~100 µs) eklendi. Fare hareketi gibi düşük
-            // yoğunluklu etkinliklerde döngü saniyede binlerce kez dönmez.
-            let active_wait_start = read_cpu_cycles();
-            let active_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(100);
-            while read_cpu_cycles().wrapping_sub(active_wait_start) < active_wait_cycles {
-                core::hint::spin_loop();
-            }
-
-            let elapsed = read_cpu_cycles().wrapping_sub(loop_start_cycles);
-
-            cpu_sample_total_cycles = cpu_sample_total_cycles.saturating_add(elapsed);
-
-            cpu_sample_active_cycles = cpu_sample_active_cycles.saturating_add(elapsed);
-        }
-
-        let now_cycles = read_cpu_cycles();
-
-        let sample_window = unsafe { TSC_CYCLES_PER_US }.saturating_mul(250_000);
-
-        if now_cycles.wrapping_sub(cpu_sample_start) >= sample_window {
-            let bsp_pct = cpu_sample_active_cycles
-                .saturating_mul(100)
-                .checked_div(cpu_sample_total_cycles)
-                .unwrap_or(0)
-                .min(100) as usize;
-
-            taskmgr_app.cpu_usage_pct = bsp_pct;
-
-            let cpus = arch::x86_64::smp::cpu_count().min(arch::x86_64::smp::MAX_CPUS);
-
-            taskmgr_app.core_count = cpus;
-
-            taskmgr_app.core_usage_pct[0] = bsp_pct;
-
-            for c in 1..cpus {
-                let hb = arch::x86_64::smp::heartbeat(c);
-
-                let diff = hb.wrapping_sub(last_ap_heartbeats[c]);
-
-                last_ap_heartbeats[c] = hb;
-
-                // AP dongusu her 500 bosta beklemede bir kalp atisi artirir.
-
-                // Aktif bir is varsa poll_job yapilir veya kalp atislari canlilik gosterir.
-
-                taskmgr_app.core_usage_pct[c] = if arch::x86_64::smp::is_ap_online(c) {
-                    if diff > 0 {
-                        ((diff.min(50) * 100) / 50).min(100) as usize
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                };
-            }
-
-            cpu_sample_start = now_cycles;
-
-            cpu_sample_total_cycles = 0;
-
-            cpu_sample_active_cycles = 0;
-
-            // --- Kaynak uyarıları: CPU ve RAM (sadece seri konsola, toast yok) ---
-
-            // CPU uyarısı: sadece ilk kez aştığında serial'e yazılır.
-            if bsp_pct >= CPU_WARN_PCT {
-                if !cpu_warn_shown {
-                    crate::serial_print("[WARN] CPU kullanımı yüksek: ");
-                    crate::serial_print_dec(bsp_pct as u64);
-                    crate::serial_print("%\n");
-                    cpu_warn_shown = true;
-                }
-            } else {
-                cpu_warn_shown = false;
-            }
-
-            // RAM uyarısı: sadece ilk kez aştığında serial'e yazılır.
-            let total_ram = memory_mgr.pmm.total_memory_bytes;
-            let used_ram = memory_mgr.pmm.used_memory_bytes;
-            if total_ram > 0 {
-                let ram_pct = used_ram
-                    .saturating_mul(100)
-                    .checked_div(total_ram)
-                    .unwrap_or(0) as usize;
-                if ram_pct >= RAM_WARN_PCT {
-                    if !ram_warn_shown {
-                        crate::serial_print("[WARN] RAM kullanımı yüksek: ");
-                        crate::serial_print_dec(ram_pct as u64);
-                        crate::serial_print("%\n");
-                        ram_warn_shown = true;
-                    }
-                } else {
-                    ram_warn_shown = false;
-                }
-            }
-        }
+        event_render::render_frame(
+            &mut state,
+            &mut fb,
+            &mut compositor,
+            &mut filemanager_app,
+            &mut desktop_files,
+            &mut settings_app,
+            &mut notepad_app,
+            &mut browser_app,
+            &mut imageviewer_app,
+            &mut musicplayer_app,
+            &mut videoplayer_app,
+            &mut taskmgr_app,
+            &mut calculator_app,
+            &mut paint_apps,
+            &mut terminal_app,
+            &mut installer_app,
+            &mut viewer3d_app,
+            &mut pkgmgr_app,
+            &mut fps_game_app,
+            &mut fps_3d_app,
+            &mut city_drive_app,
+            &now,
+            mouse,
+            keyboard,
+            memory_mgr,
+            &mut fs_mgr,
+            &input_update,
+            timer_tick_fired,
+            mouse_moved,
+            buttons_changed,
+            is_interacting,
+            media_animating,
+            scroll_val as isize,
+            mx,
+            my,
+            width,
+            height,
+        );
     }
 }

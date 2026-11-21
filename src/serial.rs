@@ -179,6 +179,23 @@ pub fn init() {
     }
 }
 
+/// COM1 alıcı tamponunda bayt varsa okur; yoksa `None` döner.
+/// Çalışma anı seri konsol komutları (ör. `log ...`) bu yolla beslenir.
+pub fn poll_rx_byte() -> Option<u8> {
+    let lsr: u8;
+    unsafe {
+        asm!("in al, dx", in("dx") COM1_LINE_STATUS, out("al") lsr, options(nomem, nostack, preserves_flags));
+    }
+    if lsr & 0x01 == 0 {
+        return None;
+    }
+    let byte: u8;
+    unsafe {
+        asm!("in al, dx", in("dx") COM1_DATA, out("al") byte, options(nomem, nostack, preserves_flags));
+    }
+    Some(byte)
+}
+
 /// Verici (THR) boşalana kadar bekleyip tek bayt yazar.
 /// Beklemeden art arda `out` yapmak özellikle VirtualBox'ta bayt düşürür
 /// (kesik/bozuk log). UART yanıt vermezse zaman aşımıyla vazgeçer.

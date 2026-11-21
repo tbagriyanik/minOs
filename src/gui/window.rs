@@ -41,38 +41,11 @@ pub struct WindowState {
     pub is_open: bool,
 }
 
-/// Base title bar height at 100% UI scale (pixels).
-pub const TITLEBAR_BASE: usize = 24;
-/// Base taskbar height at 100% UI scale (pixels).
-pub const TASKBAR_BASE: usize = 36;
 /// Maximum number of concurrent windows supported by the compositor.
 pub const MAX_WINDOWS: usize = 32;
 /// Pencere açılış animasyonunun süresi (ms) ve yukarı kayma miktarı (px).
 pub const OPEN_ANIM_MS: u64 = 140;
 pub const OPEN_RISE_PX: usize = 22;
-
-/// Returns the current title bar height scaled by the active font zoom level.
-///
-/// The height scales proportionally with the UI scale factor (100%, 125%, or 150%).
-/// This ensures UI elements remain usable at higher DPI settings.
-///
-/// # Returns
-/// The scaled title bar height in pixels.
-#[inline(always)]
-pub fn titlebar_h() -> usize {
-    sp(TITLEBAR_BASE)
-}
-
-/// Returns the current taskbar height scaled by the active font zoom level.
-///
-/// The height scales proportionally with the UI scale factor.
-///
-/// # Returns
-/// The scaled taskbar height in pixels.
-#[inline(always)]
-pub fn taskbar_h() -> usize {
-    sp(TASKBAR_BASE)
-}
 
 /// Main window structure representing a top-level GUI window.
 ///
@@ -165,9 +138,9 @@ impl Window {
     /// Tuple of (x, y, width, height) in pixels.
     pub fn content_rect(&self) -> (usize, usize, usize, usize) {
         let x = self.x + 1;
-        let y = self.y + titlebar_h();
+        let y = self.y + scaled_titlebar_h();
         let w = self.width.saturating_sub(2);
-        let h = self.height.saturating_sub(titlebar_h() + 1);
+        let h = self.height.saturating_sub(scaled_titlebar_h() + 1);
         (x, y, w, h)
     }
 
@@ -216,7 +189,7 @@ impl Window {
             z: 0,
             scroll: scrollbar::ScrollState::new(),
             content_w: width.saturating_sub(2),
-            content_h: height.saturating_sub(titlebar_h() + 1),
+            content_h: height.saturating_sub(scaled_titlebar_h() + 1),
             scroll_anim: scrollbar::ScrollAnim::idle(),
             open_ms: 0,
             theme_override: None,
@@ -280,7 +253,7 @@ impl Window {
         let b = sp(18);
         (
             self.x + self.width.saturating_sub(sp(26)),
-            self.y + (titlebar_h().saturating_sub(b)) / 2,
+            self.y + (scaled_titlebar_h().saturating_sub(b)) / 2,
             b,
             b,
         )
@@ -300,7 +273,7 @@ impl Window {
             self.x + self.width.saturating_sub(w),
             self.y,
             w,
-            titlebar_h(),
+            scaled_titlebar_h(),
         )
     }
 
@@ -312,7 +285,7 @@ impl Window {
         let b = sp(18);
         (
             self.x + self.width.saturating_sub(sp(46)),
-            self.y + (titlebar_h().saturating_sub(b)) / 2,
+            self.y + (scaled_titlebar_h().saturating_sub(b)) / 2,
             b,
             b,
         )
@@ -328,7 +301,7 @@ impl Window {
             self.x + self.width.saturating_sub(sp(56)),
             self.y,
             w,
-            titlebar_h(),
+            scaled_titlebar_h(),
         )
     }
 
@@ -340,7 +313,7 @@ impl Window {
         let b = sp(18);
         (
             self.x + self.width.saturating_sub(sp(66)),
-            self.y + (titlebar_h().saturating_sub(b)) / 2,
+            self.y + (scaled_titlebar_h().saturating_sub(b)) / 2,
             b,
             b,
         )
@@ -356,7 +329,7 @@ impl Window {
             self.x + self.width.saturating_sub(sp(78)),
             self.y,
             w,
-            titlebar_h(),
+            scaled_titlebar_h(),
         )
     }
 
@@ -365,7 +338,7 @@ impl Window {
     /// # Returns
     /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
-        let g = RESIZE_GRIP;
+        let g = resize_grip();
         (
             self.x + self.width.saturating_sub(g),
             self.y + self.height.saturating_sub(g),
@@ -384,7 +357,12 @@ impl Window {
     fn title_controls_rect(&self) -> (usize, usize, usize, usize) {
         let left = self.min_rect().0;
         let right = self.x + self.width;
-        (left, self.y, right.saturating_sub(left), titlebar_h())
+        (
+            left,
+            self.y,
+            right.saturating_sub(left),
+            scaled_titlebar_h(),
+        )
     }
 
     /// Returns the title bar drag region (for window movement).
@@ -398,7 +376,7 @@ impl Window {
             self.x,
             self.y,
             self.width.saturating_sub(sp(66)),
-            titlebar_h(),
+            scaled_titlebar_h(),
         )
     }
 }
@@ -427,11 +405,6 @@ pub enum ResizeEdge {
     BottomRight,
 }
 
-/// Resize grip size for side/bottom edges (pixels at 100% scale).
-/// Top edge uses a smaller grip to avoid title bar overlap.
-pub const RESIZE_GRIP: usize = 12;
-const TOP_RESIZE_GRIP: usize = 4;
-
 impl Window {
     /// Determines which resize edge (if any) contains the given point.
     ///
@@ -455,12 +428,12 @@ impl Window {
             return None;
         }
 
-        let g = RESIZE_GRIP;
-        const OUTSIDE_MARGIN: usize = 4;
-        let left_bound = self.x.saturating_sub(OUTSIDE_MARGIN);
-        let right_bound = self.x + self.width + OUTSIDE_MARGIN;
-        let top_bound = self.y.saturating_sub(OUTSIDE_MARGIN);
-        let bottom_bound = self.y + self.height + OUTSIDE_MARGIN;
+        let g = resize_grip();
+        let outside_margin = outside_margin();
+        let left_bound = self.x.saturating_sub(outside_margin);
+        let right_bound = self.x + self.width + outside_margin;
+        let top_bound = self.y.saturating_sub(outside_margin);
+        let bottom_bound = self.y + self.height + outside_margin;
 
         if mx < left_bound || mx >= right_bound || my < top_bound || my >= bottom_bound {
             return None;
@@ -468,7 +441,7 @@ impl Window {
 
         let left = mx <= self.x + g;
         let edge_right = mx + g >= self.x + self.width;
-        let top = my <= self.y + TOP_RESIZE_GRIP;
+        let top = my <= self.y + top_resize_grip();
         let edge_bottom = my + 4 >= self.y + self.height;
 
         if top && left {
@@ -751,7 +724,7 @@ impl MinGuiCompositor {
             && mx >= win.x
             && my >= win.y
             && mx < win.x + win.width
-            && my < win.y + titlebar_h();
+            && my < win.y + scaled_titlebar_h();
         // Saydam pencere tercihi: gövde ~%45 opaklığa düşer, altındaki
         // masaüstü belirgin şekilde görünür. Sürüklemede daha da şeffaf.
         let transparent = crate::gui::transparent_windows();
@@ -786,22 +759,30 @@ impl MinGuiCompositor {
                 Self::shade(Color::TITLE_BAR_INACTIVE, -10),
             )
         };
-        fb.draw_rounded_vgradient(win.x, win.y, win.width, titlebar_h(), 10, t_top, t_bottom);
+        fb.draw_rounded_vgradient(
+            win.x,
+            win.y,
+            win.width,
+            scaled_titlebar_h(),
+            10,
+            t_top,
+            t_bottom,
+        );
         fb.draw_rounded_rect_alpha(
             win.x,
             win.y,
             win.width,
-            titlebar_h(),
+            scaled_titlebar_h(),
             10,
             t_top,
             if dragging { 140 } else { 224 },
         );
-        fb.draw_rect(win.x, win.y + titlebar_h() - 1, win.width, 1, border);
+        fb.draw_rect(win.x, win.y + scaled_titlebar_h() - 1, win.width, 1, border);
 
         // Pencereye özel ilgili program simgesi ve başlık (aktif ölçekte).
         let icon_idx = Self::window_icon_index(win.app_id as usize);
         let icon_sz = Self::icon_size();
-        let icon_y = win.y + titlebar_h().saturating_sub(icon_sz) / 2;
+        let icon_y = win.y + scaled_titlebar_h().saturating_sub(icon_sz) / 2;
         Self::draw_icon_by_index(fb, win.x + sp(8), icon_y, icon_idx);
         let title_col = if win.is_focused {
             Color::TEXT_MAIN
@@ -824,12 +805,12 @@ impl MinGuiCompositor {
         // başlıklar pencere dışına veya düğmelerin üzerine taşmaz. Kırpma
         // olduğunda sonuna … (ellipsis) eklenir.
         let text_h = Self::text_height();
-        let title_y = win.y + titlebar_h().saturating_sub(text_h) / 2;
+        let title_y = win.y + scaled_titlebar_h().saturating_sub(text_h) / 2;
         let title_x = win.x + sp(8) + icon_sz + sp(8);
         let title_area_w = win.width.saturating_sub((title_x - win.x) + sp(76));
         if title_area_w > 0 {
             let old_clip = fb.clip();
-            fb.set_clip(title_x, win.y, title_area_w, titlebar_h());
+            fb.set_clip(title_x, win.y, title_area_w, scaled_titlebar_h());
             // Başlık alana sığmıyorsa … ile kısalt.
             let title_w = Self::text_width(&full_title, 1);
             let display_title: alloc::string::String = if title_w > title_area_w {

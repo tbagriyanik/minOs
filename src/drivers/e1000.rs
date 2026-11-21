@@ -1626,8 +1626,16 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         INIT_OUTCOME.store(2, Ordering::Relaxed);
     }
 }
+/// `driver:e1000` hedefli INFO kayıtları; `log=driver:e1000:off` ile susturulur.
+#[inline]
+fn e1000_log_enabled() -> bool {
+    crate::logging::enabled(crate::logging::LEVEL_INFO, "driver:e1000")
+}
+
 fn e1000_print(s: &str) {
-    crate::serial::print(s);
+    if e1000_log_enabled() {
+        crate::serial::print(s);
+    }
 }
 
 fn e1000_print_hex(v: u8) {
@@ -1639,5 +1647,7 @@ fn e1000_print_hex(v: u8) {
 }
 
 fn e1000_print_byte(b: u8) {
-    crate::serial::write_byte(b);
+    if e1000_log_enabled() {
+        crate::serial::write_byte(b);
+    }
 }

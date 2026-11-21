@@ -237,6 +237,41 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Öğe yüzdesine göre (0-100) yuvarlatılmış bir ilerleme çubuğu çizer.
+    ///
+    /// `rect` = (x, y, w, h). Hem toast kartları (`gui::toast`) hem de
+    /// dosya yöneticisi işlem bandı bu tek çizim yolunu kullanır; böylece
+    /// kopyalama, silme, küçük resim ve format işlemlerinde ilerleme aynı
+    /// görsel dille sunulur.
+    pub fn render_toast_progress_bar(
+        fb: &mut Framebuffer,
+        rect: (usize, usize, usize, usize),
+        percent: u8,
+        fill: u32,
+    ) {
+        let (x, y, w, h) = rect;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let radius = (h / 2).max(1);
+        fb.draw_rounded_rect(x, y, w, h, radius, Color::DARK_BG);
+        fb.draw_rounded_rect_outline(x, y, w, h, radius, Color::BORDER);
+        let pct = percent.min(100) as usize;
+        if pct == 0 {
+            return;
+        }
+        // Dolgu genişliği: ilerleme 1-99 arasında bile görünür kalır.
+        let filled = (w * pct / 100).clamp(2, w).min(w);
+        fb.draw_rounded_rect(
+            x + 1,
+            y + 1,
+            filled.saturating_sub(2).max(1),
+            h.saturating_sub(2).max(1),
+            radius.saturating_sub(1),
+            fill,
+        );
+    }
+
     /// Ekran okuyucu bildirim bandını çizer.
     ///
     /// Band, ekranın altında görev çubuğunun hemen üstünde yer alır ve

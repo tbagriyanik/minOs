@@ -2,6 +2,7 @@ use crate::apps;
 use crate::drivers;
 use crate::fs;
 use crate::gui;
+use crate::gui::metrics::scaled_taskbar_h;
 
 /// Holds all application instances for the GUI.
 pub struct AppInstances {
@@ -133,13 +134,13 @@ pub fn register_default_windows(
     // 0: File Manager
     let files_width = 720.min(width.saturating_sub(20)).max(200);
     let files_height = 500
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(
         "Dosya Yoneticisi",
         "Dosyalar",
         width.saturating_sub(files_width) / 2,
-        height.saturating_sub(files_height + gui::taskbar_h()) / 2,
+        height.saturating_sub(files_height + scaled_taskbar_h()) / 2,
         files_width,
         files_height,
         false,
@@ -148,13 +149,13 @@ pub fn register_default_windows(
     // 1: Settings
     let settings_width = 700.min(width.saturating_sub(20)).max(200);
     let settings_height = 540
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(
         "Sistem Ayarlari",
         "Ayarlar",
         width.saturating_sub(settings_width) / 2,
-        height.saturating_sub(settings_height + gui::taskbar_h()) / 2,
+        height.saturating_sub(settings_height + scaled_taskbar_h()) / 2,
         settings_width,
         settings_height,
         false,
@@ -174,13 +175,13 @@ pub fn register_default_windows(
     // 3: Browser
     let browser_w = 760.min(width.saturating_sub(20)).max(300);
     let browser_h = 490
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(200);
     compositor.add_window(gui::Window::new(
         "Web Gezgini",
         "Web",
         width.saturating_sub(browser_w) / 2,
-        height.saturating_sub(browser_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(browser_h + scaled_taskbar_h()) / 2,
         browser_w,
         browser_h,
         false,
@@ -266,13 +267,13 @@ pub fn register_default_windows(
     // 11: Installer
     let inst_w = 540.min(width.saturating_sub(20)).max(200);
     let inst_h = 460
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(
         "minOs Tek Tikla Kur",
         "Kurulum",
         width.saturating_sub(inst_w) / 2,
-        height.saturating_sub(inst_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(inst_h + scaled_taskbar_h()) / 2,
         inst_w,
         inst_h,
         false,
@@ -281,13 +282,13 @@ pub fn register_default_windows(
     // 12: 3D Viewer
     let v3d_w = 600.min(width.saturating_sub(20)).max(200);
     let v3d_h = 440
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(
         "3D Gosterici",
         "3D",
         width.saturating_sub(v3d_w) / 2,
-        height.saturating_sub(v3d_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(v3d_h + scaled_taskbar_h()) / 2,
         v3d_w,
         v3d_h,
         false,
@@ -296,13 +297,13 @@ pub fn register_default_windows(
     // 13: Package Manager
     let pkg_w = 620.min(width.saturating_sub(20)).max(200);
     let pkg_h = 440
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(
         "Paket Yoneticisi",
         "Paketler",
         width.saturating_sub(pkg_w) / 2,
-        height.saturating_sub(pkg_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(pkg_h + scaled_taskbar_h()) / 2,
         pkg_w,
         pkg_h,
         false,
@@ -311,13 +312,13 @@ pub fn register_default_windows(
     // 14: Control Panel
     let cp_w = 620.min(width.saturating_sub(20)).max(200);
     let cp_h = 470
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(
         "Kontrol Paneli",
         "Kontrol",
         width.saturating_sub(cp_w) / 2,
-        height.saturating_sub(cp_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(cp_h + scaled_taskbar_h()) / 2,
         cp_w,
         cp_h,
         false,
@@ -326,13 +327,13 @@ pub fn register_default_windows(
     // 15: Games
     let fps_w = 700.min(width.saturating_sub(20)).max(300);
     let fps_h = 540
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(200);
     compositor.add_window(gui::Window::new(
         "Oyunlar",
         "Oyun",
         width.saturating_sub(fps_w) / 2,
-        height.saturating_sub(fps_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(fps_h + scaled_taskbar_h()) / 2,
         fps_w,
         fps_h,
         false,
@@ -341,13 +342,13 @@ pub fn register_default_windows(
     // 16: FPS 3D Game
     let fps3d_w = 700.min(width.saturating_sub(20)).max(300);
     let fps3d_h = 540
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(200);
     compositor.add_window(gui::Window::new(
         "FPS 3D Oyun",
         "FPS3D",
         width.saturating_sub(fps3d_w) / 2,
-        height.saturating_sub(fps3d_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(fps3d_h + scaled_taskbar_h()) / 2,
         fps3d_w,
         fps3d_h,
         false,
@@ -356,13 +357,13 @@ pub fn register_default_windows(
     // 17: City Drive (3D sehir surusu)
     let city_w = 760.min(width.saturating_sub(20)).max(320);
     let city_h = 520
-        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(220);
     compositor.add_window(gui::Window::new(
         "Sehir Surusu",
         "Sehir",
         width.saturating_sub(city_w) / 2,
-        height.saturating_sub(city_h + gui::taskbar_h()) / 2,
+        height.saturating_sub(city_h + scaled_taskbar_h()) / 2,
         city_w,
         city_h,
         false,

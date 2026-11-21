@@ -231,6 +231,61 @@ impl OperationCancel {
     }
 }
 
+/// Uzun işlemlerin ilerlemesini adım adım raporlar.
+///
+/// `OperationCancel` iptal + sayaç tutarken bu tür, kullanıcıya **gerçek**
+/// bir yüzde göstermek için adım ilerlemesini tek yerden üretir. İlerleme
+/// monotoniktir (asla geri gitmez) ve 100'e sabitlenir; böylece ilerleme
+/// çubuğu titremez.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProgressTracker {
+    total: usize,
+    completed: usize,
+}
+
+impl ProgressTracker {
+    pub const fn new(total: usize) -> Self {
+        Self {
+            total,
+            completed: 0,
+        }
+    }
+
+    /// Bir adımı tamamlandı sayar ve güncel yüzdeyi döndürür.
+    pub fn step(&mut self) -> usize {
+        if self.completed < self.total {
+            self.completed += 1;
+        }
+        self.percent()
+    }
+
+    /// Belirli bir adım sayısını tamamlandı sayar (toplu ilerleme).
+    pub fn advance(&mut self, n: usize) {
+        self.completed = self.completed.saturating_add(n).min(self.total);
+    }
+
+    pub fn completed(&self) -> usize {
+        self.completed
+    }
+
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    /// 0..=100 aralığında tam sayı yüzde.
+    pub fn percent(&self) -> usize {
+        self.completed
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100)
+    }
+
+    /// İşlem bitti mi?
+    pub fn is_complete(&self) -> bool {
+        self.completed >= self.total
+    }
+}
+
 /// İptal edilebilir işlem listesini adım adım yürütür.
 ///
 /// `op` her öğe için `true` (başarılı) / `false` (atlandı) döndürür.
@@ -318,6 +373,44 @@ mod tests {
         assert_eq!(req.result, Confirmation::Pending);
         req.enter(true);
         assert!(req.is_allowed());
+    }
+
+    #[test]
+    fn progress_tracker_reports_real_percentages() {
+        let mut p = ProgressTracker::new(4);
+        assert_eq!(p.percent(), 0);
+        assert!(!p.is_complete());
+        assert_eq!(p.step(), 25);
+        assert_eq!(p.step(), 50);
+        assert_eq!(p.completed(), 2);
+        assert_eq!(p.total(), 4);
+        p.advance(1);
+        assert_eq!(p.percent(), 75);
+        assert_eq!(p.step(), 100);
+        assert!(p.is_complete());
+        // Fazla adımlar 100'ü aşmaz.
+        p.advance(10);
+        assert_eq!(p.percent(), 100);
+        assert_eq!(p.completed(), 4);
+    }
+
+    #[test]
+    fn progress_tracker_handles_empty_and_bulk_work() {
+        // Boş iş: tamamlanmış sayılır (bant %100 ile kapanır).
+        let empty = ProgressTracker::new(0);
+        assert_eq!(empty.percent(), 100);
+        assert!(empty.is_complete());
+
+        // Toplu ilerleme: kopyalanan bayt gibi tek bir sayaçla.
+        let mut bulk = ProgressTracker::new(1000);
+        bulk.advance(250);
+        assert_eq!(bulk.percent(), 25);
+        bulk.advance(500);
+        assert_eq!(bulk.percent(), 75);
+        assert!(!bulk.is_complete());
+        bulk.advance(1000);
+        assert_eq!(bulk.completed(), 1000);
+        assert!(bulk.is_complete());
     }
 
     #[test]

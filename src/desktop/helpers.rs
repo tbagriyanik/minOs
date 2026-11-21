@@ -228,7 +228,8 @@ pub fn desktop_item_visible(
     width: usize,
     height: usize,
 ) -> bool {
-    if rect.0 + rect.2 > width || rect.1 + rect.3 >= height.saturating_sub(gui::taskbar_h()) {
+    if rect.0 + rect.2 > width || rect.1 + rect.3 >= height.saturating_sub(gui::scaled_taskbar_h())
+    {
         return false;
     }
     !rects_overlap(rect, gui::MinGuiCompositor::desktop_watermark_rect(width))
@@ -309,7 +310,7 @@ pub fn keep_windows_on_screen(
     screen_h: usize,
 ) {
     let screen_w = screen_w.max(1);
-    let usable_h = screen_h.saturating_sub(gui::taskbar_h()).max(1);
+    let usable_h = screen_h.saturating_sub(gui::scaled_taskbar_h()).max(1);
     for window in compositor.windows.iter_mut().flatten() {
         if !window.is_open {
             continue;
@@ -470,7 +471,7 @@ pub fn app_layout_rect(app_id: usize, win: &gui::Window) -> (usize, usize, usize
             win.y.saturating_sub(win.scroll.y),
             win.content_w.saturating_add(2).max(win.width),
             win.content_h
-                .saturating_add(gui::titlebar_h() + 1)
+                .saturating_add(gui::scaled_titlebar_h() + 1)
                 .max(win.height),
         )
     }
@@ -498,13 +499,13 @@ pub fn window_content_size(
     br: &apps::browser::BrowserApp,
 ) -> (usize, usize) {
     let view_w = win_w.saturating_sub(2);
-    let view_h = win_h.saturating_sub(gui::titlebar_h() + 1);
+    let view_h = win_h.saturating_sub(gui::scaled_titlebar_h() + 1);
 
     let (need_w, need_h) = match app_id {
         // Dosya Yöneticisi: geçerli görünümün (liste/ızgara) içerik yüksekliği.
         0 => {
             let full_h = apps::filemanager::list_top() + fm.content_height(win_w) + 30;
-            (view_w, full_h.saturating_sub(gui::titlebar_h()))
+            (view_w, full_h.saturating_sub(gui::scaled_titlebar_h()))
         }
         // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
         // Satır yüksekliği ve karakter genişliği font ölçeğine duyarlı olmalı.
@@ -515,7 +516,7 @@ pub fn window_content_size(
             let wrap_cols = (text_w / char_w.max(1)).max(1);
             let (lines, _) = np.text_extent(wrap_cols);
             let full_h = lines * line_h + gui::sp(58) + gui::sp(22);
-            (view_w, full_h.saturating_sub(gui::titlebar_h()))
+            (view_w, full_h.saturating_sub(gui::scaled_titlebar_h()))
         }
         // Web Tarayıcısı: yalnızca HTML/lik geçmiş içeriği kaydırılabilir.
         3 => (view_w, br.content_height()),
@@ -538,7 +539,7 @@ pub fn window_content_h(
     np: &apps::notepad::NotepadApp,
     br: &apps::browser::BrowserApp,
 ) -> usize {
-    let view_h = win_h.saturating_sub(gui::titlebar_h() + 1);
+    let view_h = win_h.saturating_sub(gui::scaled_titlebar_h() + 1);
     let (_, need_h) = window_content_size(
         app_id,
         win_w,

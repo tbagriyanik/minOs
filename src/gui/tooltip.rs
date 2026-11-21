@@ -61,41 +61,57 @@ impl TooltipState {
 }
 
 /// Tooltip metninin piksel genişliği + iç boşluk.
-fn tooltip_width(text: &str) -> usize {
-    MinGuiCompositor::text_width(text, 1).saturating_add(16)
+/// Çok satırlı tooltip'ler için satır sayısı da hesaba katılır.
+fn tooltip_width(text: &str, max_width: usize) -> usize {
+    let lines: alloc::vec::Vec<&str> = text.lines().collect();
+    let mut max_w = 0;
+    for line in lines {
+        let w = MinGuiCompositor::text_width(line, 1);
+        if w > max_w {
+            max_w = w;
+        }
+    }
+    (max_w + 16).min(max_width)
 }
 
 const TOOLTIP_H: usize = 24;
+const TOOLTIP_MAX_W: usize = 320;
 
 /// Anchor dikdörtgenine göre ekran içi çizim dikdörtgeni üretir.
 /// Alt kenardaki öğelerde (görev çubuğu) balon yukarı açılır.
+/// Çok satırlı tooltip'leri destekler.
 fn tooltip_rect(
     anchor: (usize, usize, usize, usize),
     text: &str,
     fb_w: usize,
     fb_h: usize,
 ) -> (usize, usize, usize, usize) {
-    let tw = tooltip_width(text).min(fb_w.saturating_sub(8));
+    let lines: alloc::vec::Vec<&str> = text.lines().collect();
+    let line_count = lines.len().max(1);
+    let tw = tooltip_width(text, TOOLTIP_MAX_W.min(fb_w.saturating_sub(8)));
+    let th = TOOLTIP_H
+        .saturating_mul(line_count)
+        .min(fb_h.saturating_sub(8));
     let anchor_cx = anchor.0.saturating_add(anchor.2 / 2);
     let mut x = anchor_cx.saturating_sub(tw / 2);
     x = x.clamp(4, fb_w.saturating_sub(tw + 4).max(4));
 
     let below_y = anchor.1.saturating_add(anchor.3).saturating_add(4);
-    let above_y = anchor.1.saturating_sub(TOOLTIP_H + 4);
+    let above_y = anchor.1.saturating_sub(th + 4);
     // Anchor ekranın alt yarısındaysa balonu üstte göster.
     let y = if anchor.1 > fb_h / 2 {
-        if below_y + TOOLTIP_H <= fb_h.saturating_sub(4) {
+        if below_y + th <= fb_h.saturating_sub(4) {
             below_y
         } else {
             above_y
         }
-    } else if below_y + TOOLTIP_H <= fb_h.saturating_sub(4) {
+    } else if below_y + th <= fb_h.saturating_sub(4) {
         below_y
     } else {
         above_y
     };
-    let y = y.min(fb_h.saturating_sub(TOOLTIP_H + 4));
-    (x, y, tw, TOOLTIP_H)
+    let y = y.min(fb_h.saturating_sub(th + 4));
+    (x, y, tw, th)
 }
 
 impl MinGuiCompositor {
@@ -172,6 +188,10 @@ impl MinGuiCompositor {
         fb.draw_shadow(t.x, t.y, t.w, t.h, Color::SHADOW);
         fb.draw_rounded_rect(t.x, t.y, t.w, t.h, 4, Color::TITLE_BAR);
         fb.draw_rounded_rect_outline(t.x, t.y, t.w, t.h, 4, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, t.x + 8, t.y + 5, t.text, Color::TEXT_MAIN);
+        let lines: alloc::vec::Vec<&str> = t.text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let line_y = t.y + 5 + i * TOOLTIP_H;
+            MinGuiCompositor::draw_string(fb, t.x + 8, line_y, line, Color::TEXT_MAIN);
+        }
     }
 }

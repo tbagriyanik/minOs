@@ -1,7 +1,6 @@
 //! Erken önyükleme: Limine framebuffer doğrulaması, metin konsolu, zaman tabanı
 //! ve HHDM ofseti. `main.rs` içinden `src/boot/` katmanına taşındı.
 
-use crate::boot::console::{serial_print, serial_print_dec};
 use crate::boot::limine::{
     is_canonical_ptr, is_mapped_limine_ptr, valid_limine_response, FRAMEBUFFER_REQUEST,
     HHDM_REQUEST,
@@ -32,19 +31,29 @@ pub fn init() -> BootDisplay {
     // 115200 8N1 ile çerçeveye oturur.
     crate::serial::init();
 
+    // Seviyeli log altyapısı: `log` crate logger'ı seri konsola bağlanır,
+    // cmdline `log=` belirteci filtre varsayılanlarını uygular.
+    crate::logging::init();
+
     // PCID: süreç başına TLB etiketi; CR4.PCIDE etkinse bağlam geçişleri
     // TLB flush'suz yapılır. Destek yoksa tüm PCID yardımcıları kapalı kalır.
     if crate::arch::x86_64::pcid::init() {
-        crate::serial_print("[PCID] Process-context identifiers enabled (CR4.PCIDE).\n");
+        kdebug!(
+            "boot",
+            "[PCID] Process-context identifiers enabled (CR4.PCIDE).\n"
+        );
     } else {
-        crate::serial_print("[PCID] CPU does not support PCID; TLB flush per switch.\n");
+        kdebug!(
+            "boot",
+            "[PCID] CPU does not support PCID; TLB flush per switch.\n"
+        );
     }
 
     // PKU/PKRU: kullanıcı sayfa koruma anahtarı altyapısı (varsa).
     if crate::arch::x86_64::pku::init() {
-        crate::serial_print("[PKU] Protection keys enabled (CR4.PKE, PKRU=0).\n");
+        kdebug!("boot", "[PKU] Protection keys enabled (CR4.PKE, PKRU=0).\n");
     } else {
-        crate::serial_print("[PKU] CPU does not support PKU; PKRU disabled.\n");
+        kdebug!("boot", "[PKU] CPU does not support PKU; PKRU disabled.\n");
     }
 
     crate::kernel::heap::init();
@@ -114,31 +123,31 @@ pub fn early_init() -> BootDisplay {
         crate::boot::text_console::init(Framebuffer::new(fb_ptr, width, height, pitch, bpp));
     }
 
-    serial_print("[BOOT] UEFI text console enabled; preparing hardware and memory.\n");
+    kinfo!(
+        "boot",
+        "[BOOT] UEFI text console enabled; preparing hardware and memory.\n"
+    );
 
-    serial_print("[BOOT] Starting PIT/TSC time base...\n");
+    kinfo!("boot", "[BOOT] Starting PIT/TSC time base...\n");
     if init_timebase() {
-        serial_print("[BOOT] PIT/TSC time base ready.\n");
+        kinfo!("boot", "[BOOT] PIT/TSC time base ready.\n");
     } else {
-        serial_print("[BOOT] WARNING: PIT did not respond; using CPUID TSC estimate.\n");
+        kwarn!(
+            "boot",
+            "[BOOT] WARNING: PIT did not respond; using CPUID TSC estimate.\n"
+        );
     }
 
     // Zaman tabanı hazır: açılış süresi ölçümünü buradan başlat.
     crate::boot::timing::begin();
 
-    serial_print("[VIDEO] ");
-    serial_print_dec(width as u64);
-    serial_print("x");
-    serial_print_dec(height as u64);
-    serial_print(" @ ");
-    serial_print_dec(bpp as u64);
-    serial_print(" bpp.\n");
+    kinfo!("boot", "[VIDEO] {}x{} @ {} bpp.\n", width, height, bpp);
 
     #[cfg(minos_boot_log)]
-    serial_print("[minOs] Çekirdek _start noktasına ulaştı.\n");
+    kdebug!("boot", "[minOs] Çekirdek _start noktasına ulaştı.\n");
 
     #[cfg(minos_boot_log)]
-    serial_print("[minOs] SSE enabled; PIC interrupts masked.\n");
+    kdebug!("boot", "[minOs] SSE enabled; PIC interrupts masked.\n");
 
     // HHDM ofsetini al (fiziksel MMIO ve sayfa tablosu sanal erisimi icin).
     let hhdm_offset = unsafe {
@@ -148,20 +157,22 @@ pub fn early_init() -> BootDisplay {
         match response_offset {
             Some(offset) if is_mapped_limine_ptr(offset as *const u8) => offset,
             Some(_) => {
-                serial_print(
-                    "[BOOT] Invalid HHDM offset / gecersiz HHDM ofseti; using fallback.\n",
+                kdebug!(
+                    "boot",
+                    "[BOOT] Invalid HHDM offset / gecersiz HHDM ofseti; using fallback.\n"
                 );
                 0xFFFF_8000_0000_0000
             }
             None => {
-                serial_print("[BOOT] HHDM response missing / HHDM yaniti yok; using fallback.\n");
+                kdebug!(
+                    "boot",
+                    "[BOOT] HHDM response missing / HHDM yaniti yok; using fallback.\n"
+                );
                 0xFFFF_8000_0000_0000
             }
         }
     };
-    serial_print("[BOOT] HHDM offset: ");
-    crate::boot::console::serial_print_hex(hhdm_offset);
-    serial_print("\n");
+    kdebug!("boot", "[BOOT] HHDM offset: 0x{:X}\n", hhdm_offset);
     drivers::set_hhdm_offset(hhdm_offset);
 
     // Map APIC physical range to prevent page faults early in boot.
@@ -176,32 +187,26 @@ pub fn early_init() -> BootDisplay {
     if let Some((kphys, kvirt)) = crate::boot::limine::limine_kernel_address() {
         let slide = crate::boot::limine::kaslr_slide().unwrap_or(0);
         let aligned = crate::boot::limine::kaslr_slide_aligned();
-        serial_print("[KASLR] fiziksel=");
-        crate::boot::console::serial_print_hex(kphys);
-        serial_print(" sanal=");
-        crate::boot::console::serial_print_hex(kvirt);
-        serial_print(" slide=");
-        crate::boot::console::serial_print_hex(slide);
-        serial_print(" alignment=");
-        if aligned {
-            serial_print("ok");
-        } else {
-            serial_print("FAIL");
-        }
-        serial_print(" durum=");
-        if slide != 0 {
-            serial_print("enabled");
-        } else {
-            serial_print("disabled");
-        }
-        serial_print("\n");
+        kdebug!(
+            "boot",
+            "[KASLR] fiziksel=0x{:X} sanal=0x{:X} slide=0x{:X} alignment={} durum={}\n",
+            kphys,
+            kvirt,
+            slide,
+            if aligned { "ok" } else { "FAIL" },
+            if slide != 0 { "enabled" } else { "disabled" }
+        );
         if !aligned {
-            serial_print(
-                "[KASLR] WARNING: slide is not page-aligned; address assumptions are risky.\n",
+            kwarn!(
+                "boot",
+                "[KASLR] WARNING: slide is not page-aligned; address assumptions are risky.\n"
             );
         }
     } else {
-        serial_print("[KASLR] Kernel adres yaniti yok; KASLR kapali olabilir.\n");
+        kdebug!(
+            "boot",
+            "[KASLR] Kernel adres yaniti yok; KASLR kapali olabilir.\n"
+        );
     }
 
     BootDisplay {

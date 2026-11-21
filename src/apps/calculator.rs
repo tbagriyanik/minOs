@@ -1,5 +1,5 @@
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor};
+use crate::gui::{gap_small, scaled_button_h, Color, MinGuiCompositor};
 
 use super::calc_core::CalcCore;
 
@@ -12,9 +12,6 @@ const BUTTONS: [[char; 4]; 5] = [
     ['0', '.', '=', '+'],
 ];
 const BUTTON_TOP: usize = 100;
-const BUTTON_GAP_X: usize = 6;
-const BUTTON_GAP_Y: usize = 6;
-const BUTTON_HEIGHT: usize = 32;
 
 pub struct CalculatorApp {
     /// Saf aritmetik çekirdeği; host testlerinde ayrıca doğrulanır.
@@ -126,20 +123,20 @@ impl CalculatorApp {
             );
         }
 
-        let gap_x = BUTTON_GAP_X;
+        let gap_x = gap_small();
         let button_w = display_w.saturating_sub(gap_x * 3) / 4;
         let button_y = y + BUTTON_TOP;
         for (row, row_buttons) in BUTTONS.iter().enumerate() {
             for (col, &key) in row_buttons.iter().enumerate() {
                 let bx = display_x + col * (button_w + gap_x);
-                let by = button_y + row * (BUTTON_HEIGHT + BUTTON_GAP_Y);
+                let by = button_y + row * (scaled_button_h() + gap_small());
                 let color = match key {
                     '=' => Color::ACCENT_GREEN,
                     'C' | 'E' | 'B' | '%' => Color::TITLE_BAR_INACTIVE,
                     '+' | '-' | '*' | '/' => Color::ACCENT_BLUE,
                     _ => Color::TITLE_BAR,
                 };
-                fb.draw_rect(bx, by, button_w, BUTTON_HEIGHT, color);
+                fb.draw_rect(bx, by, button_w, scaled_button_h(), color);
                 let label = match key {
                     'E' => "CE",
                     'B' => "BS",
@@ -158,14 +155,15 @@ impl CalculatorApp {
     pub fn key_at(x: usize, y: usize, wx: usize, wy: usize, ww: usize) -> Option<char> {
         let display_x = wx + 10;
         let display_w = ww.saturating_sub(20);
-        let gap_x = BUTTON_GAP_X;
+        let gap_x = gap_small();
         let button_w = display_w.saturating_sub(gap_x * 3) / 4;
         let button_y = wy + BUTTON_TOP;
         if x < display_x || y < button_y {
             return None;
         }
-        let row = (y - button_y) / (BUTTON_HEIGHT + BUTTON_GAP_Y);
-        if row >= BUTTONS.len() || (y - button_y) % (BUTTON_HEIGHT + BUTTON_GAP_Y) >= BUTTON_HEIGHT
+        let row = (y - button_y) / (scaled_button_h() + gap_small());
+        if row >= BUTTONS.len()
+            || (y - button_y) % (scaled_button_h() + gap_small()) >= scaled_button_h()
         {
             return None;
         }

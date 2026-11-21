@@ -6,8 +6,8 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-194%2C206%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-513%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-198%2C046%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-521%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Çekirdek `no_std` ve `no_main` kullanır; grafik masaüstü ve yerleşik uygulamalar sunar.
@@ -19,7 +19,8 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - Donmuş uygulamaların izlenmesi ana döngüden bağımsız çalışır; FPS 3D uygulaması gerçek kare hızı ölçümleri üretir.
 - FPS Oyunu başlangıç ve sonuç menülerini içerir; temel form kontrollerinde Tab ile gezinme, Enter ile onaylama ve Esc ile vazgeçme desteği bulunur (Hoş Geldin ekranı dahil).
 - Render bütçesi aşılırsa tamamlanmamış kare ekranda bırakılmaz.
-- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 513 test içerir.
+- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 521 test içerir.
+- Çekirdek loglama artık seviyeli ve filtrelenebilir: `trace/debug/info/warn/error` seviyeleri ile `boot`, `driver` ve `net` hedeflerine ayrılan kayıtlar `[LEVEL][hedef]` önekiyle seri konsola yazılır. Varsayılanlar Limine cmdline `log=` belirtecinden (`log=debug`, `log=info,net:trace` gibi), çalışma anı değişiklikleri seri konsoldan `log ...` komutlarıyla yapılır; CI'a çekirdek hedefi için `cargo clippy -D warnings` kapısı eklendi.
 - Web tarayıcısı modern bir tarayıcıya dönüştü: HTTP/1.1 + TLS 1.3'in yanına HTTP/2 ve HTTP/3 (QUIC) eklendi; HTML5'te satır-içi SVG rasterizasyonu, `<details>`/`<dialog>`/`<template>`/`<picture>` desteği; CSS3'te bağlam-duyarlı seçiciler (`:nth-child`, `[attr=]`, `:is()`/`:not()`, kardeş/ata birleşimleyicileri); Canvas 2D'de gradyan, transform, Bézier/arc path'leri, `save`/`restore` ve `getImageData`/`putImageData`; minJs'te `XMLHttpRequest`, `history.pushState` ve `requestAnimationFrame`.
 - Tarayıcı CSS3 `display` (flex/grid/block/inline/inline-block) ve `overflow` kuralları artık doğru uygulanıyor; çoklu CPU scheduler'ında bir işlemcinin kendi hazır görevini atlayıp boşta kalma hatası düzeltildi.
 - `TimeBudget` ve `OperationGuard` için deterministik host testleri eklendi.
@@ -29,7 +30,7 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - QEMU varsayılan çalıştırmasında klavye ve fare artık çalışıyor: `run.ps1` artık varsayılan olarak `qemu-xhci + usb-kbd + usb-mouse` (USB HID) bağlar. QEMU 11'in varsayılan `pc` makinesinde i8042 denetleyicisi olduğuna karşın PS/2 klavye/fare aygıtı bağlı gelmediği için önceki sürümlerde masaüstü giriş olayları gelmemişti.
 - Masaüstü arayüzü uçtan uca cilalandı ve hızlandırıldı: tüm uygulamalarda tekerlekle yumuşak kaydırma; pencere, başlat menüsü, bağlam menüsü, Alt+Tab geçişi ve takvim/ses açılır pencerelerinde kısa açılış animasyonları; görev çubuğu ve tepside ipucu (tooltip) balonları; toast bildirimlerde kayma animasyonu; metin çiziminde glyph önbelleği. Sistem Ayarları > Ekran sekmesine **Arayüz animasyonları** (tüm hareketi kapatır) ve **Saydam pencereler** anahtarları eklendi.
 - Erişilebilirlik iyileştirmeleri: başlık çubuğunda kaydedilmemiş değişiklik işareti (●) ve uzun başlık kısaltma (…); düğmelerde seçili (yeşil çerçeve), odaklanmış (sarı odak halkası) ve devre dışı (koyulaştırılmış) durumlar ayrıştırıldı; tüm pencereler doğru uygulama kimliği (app_id) ile başlık ve simge alır.
-- Host test paketi 501'den 513 teste genişledi; tüm testler geçti (513 passed, 0 failed).
+- Host test paketi 521 teste ulaştı; tüm testler geçti (521 passed, 0 failed).
 
 Değişikliklerin tam listesi: [Sürüm günlüğü](docs/CHANGELOG.md).
 
@@ -49,7 +50,7 @@ Host testlerini çalıştırmak için:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Son doğrulama: **513 host testi geçti** (`513 passed; 0 failed`). Projede toplam **194.206 Rust satırı** bulunur; bunun **183.925 satırı `src/`**, **4.502 satırı test kodudur**. Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
+Son doğrulama: **521 host testi geçti** (`521 passed; 0 failed`). Projede toplam **198.046 Rust satırı** bulunur; bunun **187.544 satırı `src/`**, **4.724 satırı test kodudur**. Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
 
 ## Özellikler
 

@@ -162,7 +162,10 @@ pub fn shutdown() -> bool {
             // SLP_EN (bit 13) kur; SLP_TYP (bit 10-12) sıfırla → S5.
             let val = (cur & !0x1C00) | 0x2000;
             crate::drivers::port_io::io_out16(port, val);
-            crate::serial_print("[ACPI] PM1a SLP_EN yazıldı, güç kapanışı bekleniyor.\n");
+            crate::kinfo!(
+                "driver:acpi",
+                "[ACPI] PM1a SLP_EN yazıldı, güç kapanışı bekleniyor.\n"
+            );
             CURRENT_STATE = PowerState::S5;
             return true;
         }

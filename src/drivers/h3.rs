@@ -808,12 +808,7 @@ fn h3_connect(
                 }
             }
             Err(e) => {
-                crate::serial_print("[H3] conn.poll hata: ");
-                crate::serial_print(&e);
-                crate::serial_print(
-                    "
-",
-                );
+                crate::kwarn!("net", "[H3] conn.poll hata: {}\n", e);
                 return Err(socket::E_IO);
             }
         }
@@ -912,12 +907,7 @@ fn h3_do_request(
     let stream_id = match client.send_request_body(method, path, authority, req_headers, body) {
         Ok(id) => id,
         Err(e) => {
-            crate::serial_print("[H3] send_request_body hata: ");
-            crate::serial_print(&e);
-            crate::serial_print(
-                "
-",
-            );
+            crate::kwarn!("net", "[H3] send_request_body hata: {}\n", e);
             return Err(socket::E_IO);
         }
     };
@@ -936,12 +926,7 @@ fn h3_do_request(
                 }
             }
             Err(e) => {
-                crate::serial_print("[H3] client.poll hata: ");
-                crate::serial_print(&e);
-                crate::serial_print(
-                    "
-",
-                );
+                crate::kwarn!("net", "[H3] client.poll hata: {}\n", e);
                 return Err(socket::E_IO);
             }
         }

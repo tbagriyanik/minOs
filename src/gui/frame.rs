@@ -324,7 +324,7 @@ pub fn render_full_frame(
 
             let layout_w = content_w.saturating_add(2).max(win.width);
             let layout_h = content_h
-                .saturating_add(gui::titlebar_h() + 1)
+                .saturating_add(gui::scaled_titlebar_h() + 1)
                 .max(win.height);
 
             let (rx, ry, rw, rh) = if native_scroll {
@@ -788,22 +788,15 @@ pub fn render_full_frame(
     }
 
     // Hizli calistir (Run Dialog: Super+R) Diyalogu
-
     if run_dialog_state.0 {
-        let dw = 320usize;
-
-        let dh = 110usize;
-
+        let dw = 320usize.min(fb.width.saturating_sub(16)).max(160);
+        let dh = 110usize.min(fb.height.saturating_sub(16)).max(80);
         let dx = fb.width.saturating_sub(dw) / 2;
-
         let dy = fb.height.saturating_sub(dh) / 2;
 
         fb.draw_shadow(dx, dy, dw, dh, 0x000000);
-
         fb.draw_rounded_rect(dx, dy, dw, dh, 6, gui::Color::WINDOW_BG);
-
         fb.draw_rounded_rect_outline(dx, dy, dw, dh, 6, gui::Color::ACCENT_BLUE);
-
         fb.draw_rect(dx, dy, dw, 24, gui::Color::TITLE_BAR);
 
         gui::MinGuiCompositor::draw_string(
@@ -814,52 +807,56 @@ pub fn render_full_frame(
             gui::Color::WHITE,
         );
 
-        gui::MinGuiCompositor::draw_string(
-            fb,
-            dx + 12,
-            dy + 34,
-            gui::ui_text("Komut veya uygulama adı:", "Command or app name:"),
-            gui::Color::TEXT_MUTED,
-        );
+        if dh >= 100 {
+            gui::MinGuiCompositor::draw_string_clipped(
+                fb,
+                dx + 12,
+                dy + 34,
+                gui::ui_text("Komut veya uygulama adı:", "Command or app name:"),
+                gui::Color::TEXT_MUTED,
+                (dx + 6, dy + 32, dw.saturating_sub(12), 16),
+            );
+        }
 
         // Giris kutusu
-
         let bx = dx + 12;
-
-        let by = dy + 54;
-
-        let bw = dw - 24;
-
+        let by = if dh < 100 { dy + 30 } else { dy + 54 };
+        let bw = dw.saturating_sub(24);
         let bh = 24;
 
         fb.draw_rect(bx, by, bw, bh, gui::Color::DARK_BG);
-
         fb.draw_rect_outline(bx, by, bw, bh, gui::Color::BORDER);
 
         let input_text = run_dialog_state.1.as_str();
-
-        gui::MinGuiCompositor::draw_string(fb, bx + 6, by + 6, input_text, gui::Color::TEXT_MAIN);
+        gui::MinGuiCompositor::draw_string_clipped(
+            fb,
+            bx + 6,
+            by + 6,
+            input_text,
+            gui::Color::TEXT_MAIN,
+            (bx + 4, by + 2, bw.saturating_sub(8), 20),
+        );
 
         // Imlec
-
         let cur_x = bx + 6 + gui::MinGuiCompositor::text_width(input_text, 1);
-
-        if crate::gui::textedit::caret_visible(tick) {
+        if cur_x + 2 <= bx + bw && crate::gui::textedit::caret_visible(tick) {
             fb.draw_rect(cur_x, by + 4, 2, 16, gui::Color::ACCENT_YELLOW);
         }
 
         // Ipucu
-
-        gui::MinGuiCompositor::draw_string(
-            fb,
-            dx + 12,
-            dy + 88,
-            gui::ui_text(
-                "cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] çık",
-                "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel",
-            ),
-            gui::Color::TEXT_MUTED,
-        );
+        if dh >= 100 {
+            gui::MinGuiCompositor::draw_string_clipped(
+                fb,
+                dx + 12,
+                dy + 88,
+                gui::ui_text(
+                    "cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] çık",
+                    "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel",
+                ),
+                gui::Color::TEXT_MUTED,
+                (dx + 6, dy + 86, dw.saturating_sub(12), 16),
+            );
+        }
     }
 
     // 4. Backbuffer'i VRAM'e kopyala.

@@ -434,6 +434,8 @@ impl InstallerApp {
         }
 
         // 1. Limine MBR Stage sektörlerini (LBA 0..42) diske yaz
+        // Her sektör yazımı gerçek bir adımdır: ilerleme yüzdesi aşama
+        // sayısından değil, yazılan sektör sayısından hesaplanır (%10→%35).
         let stage_sectors = Self::LIMINE_MBR_STAGE.len().div_ceil(512);
         for s in 0..stage_sectors {
             let mut sec = [0u8; 512];
@@ -448,7 +450,10 @@ impl InstallerApp {
                 );
                 return false;
             }
+            let done = s + 1;
+            self.progress_pct = 10 + (done * 25 / stage_sectors.max(1));
         }
+        self.progress_pct = 35;
 
         // 2. LBA 0 üzerine MBR Bölümleme Tablosunu mühürle
         // Bölüm 1: LBA 2048 (1MiB hizalı), seçili türe göre bölüm ID'si, Bootable (0x80)
@@ -490,9 +495,9 @@ impl InstallerApp {
             return false;
         }
         ata::flush_cache(drive);
+        self.progress_pct = 40;
 
         // 3. Bölüm 1 içine (LBA 2048) seçilen dosya sistemini kur
-        self.progress_pct = 40;
         self.status_msg = ("Dosya sistemi oluşturuluyor...", "Creating filesystem...");
         let success = match self.format_type {
             FormatFsType::Fat32 => {
@@ -521,6 +526,7 @@ impl InstallerApp {
 
         if !success {
             self.state = InstallState::Failed;
+            self.progress_pct = 0;
             self.disk_formatted = false;
             self.status_msg = (
                 "HATA: Disk biçimlendirilemedi!",
@@ -1221,27 +1227,30 @@ impl InstallerApp {
             (win_x + 24, summary_y, summary_w.saturating_sub(8), 24),
         );
 
-        // 5. İlerleme Çubuğu
+        // 5. İlerleme Çubuğu (yüzde metni ile)
         let prog_y = win_y + 280;
         let prog_w = win_w.saturating_sub(40);
-        fb.draw_rounded_rect(win_x + 20, prog_y, prog_w, 14, 4, Color::DARK_BG);
-        fb.draw_rounded_rect_outline(win_x + 20, prog_y, prog_w, 14, 4, Color::BORDER);
-        if self.progress_pct > 0 {
-            let filled_w = (prog_w * self.progress_pct) / 100;
-            let bar_col = match self.state {
-                InstallState::Complete => Color::ACCENT_GREEN,
-                InstallState::Failed => Color::ACCENT_RED,
-                _ => Color::ACCENT_BLUE,
-            };
-            fb.draw_rounded_rect(
-                win_x + 21,
-                prog_y + 1,
-                filled_w.saturating_sub(2),
-                12,
-                3,
-                bar_col,
-            );
-        }
+        let bar_col = match self.state {
+            InstallState::Complete => Color::ACCENT_GREEN,
+            InstallState::Failed => Color::ACCENT_RED,
+            _ => Color::ACCENT_BLUE,
+        };
+        MinGuiCompositor::render_toast_progress_bar(
+            fb,
+            (win_x + 20, prog_y, prog_w, 14),
+            self.progress_pct.min(100) as u8,
+            bar_col,
+        );
+        let mut pct = TextBuf::new();
+        pct.push_usize(self.progress_pct.min(100));
+        pct.push_str("%");
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + win_w.saturating_sub(20 + MinGuiCompositor::text_width(pct.as_str(), 1)),
+            prog_y.saturating_sub(16),
+            pct.as_str(),
+            Color::TEXT_MUTED,
+        );
 
         // Durum Mesajı
         let cur_status = if english {

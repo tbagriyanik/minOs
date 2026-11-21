@@ -13,6 +13,8 @@ extern crate alloc;
 
 pub mod arch;
 pub mod kernel;
+#[macro_use]
+pub mod logging;
 pub mod net_smoltcp;
 pub mod random;
 

@@ -495,6 +495,10 @@ impl KeyboardState {
                 self.push_action(KeyAction::SaveDocument);
                 return None;
             } // Ctrl+S
+            0x11 if self.ctrl => {
+                self.push_action(KeyAction::CloseActiveWindow);
+                return None;
+            } // Ctrl+W
             0x31 if self.ctrl => {
                 self.push_action(KeyAction::NewDocument);
                 return None;

@@ -1,6 +1,5 @@
 use crate::arch;
 use crate::boot;
-use crate::boot::console::{serial_print, serial_print_dec};
 use crate::boot::devices::{GLOBAL_KEYBOARD, GLOBAL_MOUSE};
 use crate::boot::limine::*;
 use crate::drivers;
@@ -33,14 +32,17 @@ pub fn init_subsystems(
     let mut timer = crate::boot::timing::PhaseTimer::new();
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
-    serial_print("[BOOT] Starting virtual file system...\n");
+    kinfo!("boot", "[BOOT] Starting virtual file system...\n");
     let mut fs_mgr = fs::FileSystemManager::new();
     let boot_log = Vec::with_capacity(4096);
     boot::console::save_boot_log(&mut fs_mgr.vfs);
     timer.mark("vfs");
 
     // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
-    serial_print("[BOOT] Starting hardware interrupts and memory manager...\n");
+    kinfo!(
+        "boot",
+        "[BOOT] Starting hardware interrupts and memory manager...\n"
+    );
     arch::x86_64::init_interrupts(0);
 
     unsafe {
@@ -99,11 +101,14 @@ pub fn init_subsystems(
         }
     }
 
-    serial_print("[PMM] Physical memory manager started.\n");
+    kinfo!("boot", "[PMM] Physical memory manager started.\n");
     if memory_mgr.pmm.zone_self_test() {
-        serial_print("[PMM-ZONE] DMA/Normal bolgeleri ve CPU sayfa onbellegi dogrulandi.\n");
+        kdebug!(
+            "boot",
+            "[PMM-ZONE] DMA/Normal bolgeleri ve CPU sayfa onbellegi dogrulandi.\n"
+        );
     } else {
-        serial_print("[PMM-ZONE] WARNING: zone/cache self-test failed.\n");
+        kwarn!("boot", "[PMM-ZONE] WARNING: zone/cache self-test failed.\n");
     }
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
     timer.mark("pmm");
@@ -112,8 +117,9 @@ pub fn init_subsystems(
     // taşı; statik tampon yalnızca erken önyükleme içindi ve bu noktadan
     // sonra heap `HEAP_MAX_SIZE` boyuna kadar büyüyebilir.
     if !crate::kernel::heap::relocate_to_window() {
-        serial_print(
-            "[KHEAP] UYARI: Heap sanal penceresi kurulamadı; statik 16 MB sınırı geçerli.\n",
+        kwarn!(
+            "boot",
+            "[KHEAP] UYARI: Heap sanal penceresi kurulamadı; statik 16 MB sınırı geçerli.\n"
         );
     }
     timer.mark("heap");
@@ -125,14 +131,15 @@ pub fn init_subsystems(
     }
 
     // PMM Kendi Kendini Test Etme
-    serial_print("[BOOT] Bellek yöneticisi test ediliyor...\n");
+    kinfo!("boot", "[BOOT] Bellek yöneticisi test ediliyor...\n");
     if let (Some(f1), Some(f2)) = (
         memory_mgr.pmm.allocate_frame(),
         memory_mgr.pmm.allocate_frame(),
     ) {
         if f1 != f2 && f1 % mm::pmm::PAGE_SIZE == 0 && f2 % mm::pmm::PAGE_SIZE == 0 {
-            serial_print(
-                "[PMM] Çerçeve tahsis testi başarılı (çakışmayan çerçeveler doğrulandı).\n",
+            kdebug!(
+                "boot",
+                "[PMM] Çerçeve tahsis testi başarılı (çakışmayan çerçeveler doğrulandı).\n"
             );
         }
         memory_mgr.pmm.free_frame(f2);
@@ -140,7 +147,7 @@ pub fn init_subsystems(
     }
 
     // VMM ve Güvenli Uygulama Yükleyicisi Doğrulaması
-    serial_print("[BOOT] Testing virtual memory manager...\n");
+    kinfo!("boot", "[BOOT] Testing virtual memory manager...\n");
     let mut address_space = memory_mgr.kernel_address_space();
     let test_vaddr = mm::loader::USER_CODE_BASE;
     if let Some(frame) = memory_mgr.pmm.allocate_frame() {
@@ -155,8 +162,9 @@ pub fn init_subsystems(
         {
             if let Some(translated_phys) = address_space.translate(test_vaddr) {
                 if translated_phys == frame {
-                    serial_print(
-                        "[VMM] 4 seviyeli sanal bellek eşleme ve adres çözümleme etkin.\n",
+                    kdebug!(
+                        "boot",
+                        "[VMM] 4 seviyeli sanal bellek eşleme ve adres çözümleme etkin.\n"
                     );
                 }
             }
@@ -171,20 +179,22 @@ pub fn init_subsystems(
         mm::loader::AppLoader::load_binary(&sample_elf_bin, &mut address_space, &mut memory_mgr.pmm)
     {
         if loaded.entry_point >= mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
-            serial_print("[LOADER] Standart ELF64 ikilisi güvenli bellek yalıtımıyla yüklendi (W^X / NX etkin).\n");
+            kdebug!("boot", "[LOADER] Standart ELF64 ikilisi güvenli bellek yalıtımıyla yüklendi (W^X / NX etkin).\n");
         }
         loaded.unmap_and_free(&mut address_space, &mut memory_mgr.pmm);
     }
     timer.mark("vmm");
 
     // Süreç Yöneticisi ve Sistem Çağrılarının (syscalls) Başlatımı
-    serial_print("[BOOT] Starting process manager...\n");
+    kinfo!("boot", "[BOOT] Starting process manager...\n");
     memory_mgr.proc_mgr.init_kernel_process();
     // Syscall fd katmanı için VFS dosyalarını önbellekle (açılış anlık görüntüsü).
     let cached_files = memory_mgr.proc_mgr.files.cache_vfs(&fs_mgr.vfs);
-    serial_print("[FD] VFS dosya önbelleği hazır: ");
-    crate::serial::print_dec(cached_files as u64);
-    serial_print(" dosya.\n");
+    kdebug!(
+        "boot",
+        "[FD] VFS dosya önbelleği hazır: {} dosya.\n",
+        cached_files
+    );
     // Çekirdek CR3'ünü kaydet: kullanıcı→çekirdek trampoline'leri ve
     // zamanlayıcı CR3'ü buraya geri yükler.
     arch::x86_64::ring3::note_kernel_cr3(
@@ -221,7 +231,10 @@ pub fn init_subsystems(
         );
     }
     if test_pid == 0 {
-        serial_print("[PROC] Süreç tablosu ve sistem çağrıları (syscalls) etkin.\n");
+        kinfo!(
+            "boot",
+            "[PROC] Süreç tablosu ve sistem çağrıları (syscalls) etkin.\n"
+        );
     }
     timer.mark("proc");
 
@@ -229,69 +242,107 @@ pub fn init_subsystems(
     // tek seferlik kaynağı süreç testi ölçümlerine "sızıntı" olarak yansımasın.
     mm::user_mem::ensure_zero_page(&mut memory_mgr.pmm);
 
-    serial_print("[BOOT] Running memory tests...\n");
+    kdebug!("boot", "[BOOT] Running memory tests...\n");
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
     mm::allocator::test_allocator_subsystem();
-    serial_print("[BOOT] Running large-page and compression tests...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Running large-page and compression tests...\n"
+    );
     mm::memory::run_boot_tests(&mut memory_mgr.pmm);
     crate::kernel::heap::test_heap_growth();
     crate::kernel::heap::test_tiered_alloc();
     mm::memory::profile::report_boot_summary();
     timer.mark("bellek-testleri");
 
-    serial_print("[BOOT] Running process tests...\n");
+    kdebug!("boot", "[BOOT] Running process tests...\n");
     mm::process::test_process_lifecycle_and_fault_recovery(
         &mut memory_mgr.proc_mgr,
         &mut memory_mgr.pmm,
     );
     timer.mark("surec-testleri");
 
-    serial_print("[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n"
+    );
     mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Syscall kullanıcı işaretçi doğrulama testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Syscall kullanıcı işaretçi doğrulama testleri çalıştırılıyor...\n"
+    );
     mm::process::test_syscall_pointer_validation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Seccomp syscall izin maskesi testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Seccomp syscall izin maskesi testleri çalıştırılıyor...\n"
+    );
     mm::process::test_syscall_filter(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Kullanıcı heap/mmap/ASLR/COW testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Kullanıcı heap/mmap/ASLR/COW testleri çalıştırılıyor...\n"
+    );
     mm::process::test_user_memory(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Dosya tanıtıcısı yaşam döngüsü testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Dosya tanıtıcısı yaşam döngüsü testleri çalıştırılıyor...\n"
+    );
     mm::process::test_file_descriptor_lifecycle(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Süreç kaynak limitleri testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Süreç kaynak limitleri testleri çalıştırılıyor...\n"
+    );
     mm::process::test_resource_limits(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] kill/SIGSTOP/SIGCONT/SIGTERM testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] kill/SIGSTOP/SIGCONT/SIGTERM testleri çalıştırılıyor...\n"
+    );
     mm::process::test_kill_suspend_resume(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Süreç grubu/oturum/affinity/sinyal testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Süreç grubu/oturum/affinity/sinyal testleri çalıştırılıyor...\n"
+    );
     mm::process::test_process_groups_and_signals(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    serial_print("[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n");
+    kdebug!(
+        "boot",
+        "[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n"
+    );
     let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
     if !ring3_demo_ok {
-        serial_print("[RING3-TEST] Syscall/register dönüş doğrulaması: BAŞARISIZ\n");
+        kerror!(
+            "boot",
+            "[RING3-TEST] Syscall/register dönüş doğrulaması: BAŞARISIZ\n"
+        );
     }
     timer.mark("ring3-testleri");
 
-    serial_print("[BOOT] Starting SMP...\n");
-    serial_print("[SMP] Loading BSP GDT...\n");
+    kinfo!("boot", "[BOOT] Starting SMP...\n");
+    kdebug!("boot", "[SMP] Loading BSP GDT...\n");
     unsafe { arch::x86_64::gdt::load_for_cpu(0) };
     let requested_cpus = arch::x86_64::smp::init();
     let online_cpus = arch::x86_64::smp::wait_for_aps(5_000_000);
-    serial_print("[SMP] Çevrimiçi CPU: ");
-    crate::serial::print_dec(online_cpus as u64);
-    serial_print(" / istenen: ");
-    crate::serial::print_dec(requested_cpus as u64);
-    serial_print("; per-CPU run queue etkin.\n");
+    kinfo!(
+        "boot",
+        "[SMP] Çevrimiçi CPU: {} / istenen: {}; per-CPU run queue etkin.\n",
+        online_cpus,
+        requested_cpus
+    );
 
-    serial_print("[BOOT] Starting APIC timer...\n");
+    kinfo!("boot", "[BOOT] Starting APIC timer...\n");
     // Local APIC MMIO sayfasını eşlemeden ilk lapic_write çekirdek #PF (vektor 14)
     // üretir ve sistemi siyah ekranda durdurur. lapic_init() önce MMIO sayfasını
     // map'ler, ardından apic::init_timer() timer kayıtlarına güvenle yazabilir.
     arch::x86_64::smp::lapic_init();
     arch::x86_64::apic::init_timer();
-    serial_print("[APIC] ");
-    serial_print_dec(arch::x86_64::apic::SCHEDULER_HZ as u64);
-    serial_print("Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n");
-    serial_print("[SCHED] ");
-    serial_print_dec(arch::x86_64::apic::SCHEDULER_HZ as u64);
-    serial_print("Hz round-robin scheduler; network downloads yield cooperatively.\n");
+    kdebug!(
+        "boot",
+        "[APIC] {}Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n",
+        arch::x86_64::apic::SCHEDULER_HZ
+    );
+    kdebug!(
+        "boot",
+        "[SCHED] {}Hz round-robin scheduler; network downloads yield cooperatively.\n",
+        arch::x86_64::apic::SCHEDULER_HZ
+    );
 
     // Ring3 süreç zamanlayıcısı sınavı: yield, kernel-izolasyon ve yığın
     // taşması senaryolarını gerçek CR3/context-switch yoluyla doğrular.
@@ -326,13 +377,19 @@ pub fn init_subsystems(
                     4 * U64_PER_FRAME,
                 ) {
                     Some(got) if got == expected => {
-                        serial_print("[SMP] Paralel sağlama toplamı (AP+BSP) eşleşti: BAŞARILI\n");
+                        kdebug!(
+                            "boot",
+                            "[SMP] Paralel sağlama toplamı (AP+BSP) eşleşti: BAŞARILI\n"
+                        );
                     }
                     Some(_) => {
-                        serial_print("[SMP] Paralel sağlama toplamı UYUŞMADI: BAŞARISIZ\n");
+                        kerror!(
+                            "boot",
+                            "[SMP] Paralel sağlama toplamı UYUŞMADI: BAŞARISIZ\n"
+                        );
                     }
                     None => {
-                        serial_print("[SMP] Paralel sağlama toplamı zaman aşımı (tek çekirdek yedeği yok).\n");
+                        kwarn!("boot", "[SMP] Paralel sağlama toplamı zaman aşımı (tek çekirdek yedeği yok).\n");
                     }
                 }
             }
@@ -344,7 +401,7 @@ pub fn init_subsystems(
 
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
     timer.mark("smp");
-    serial_print("[BOOT] Starting hardware drivers...\n");
+    kinfo!("boot", "[BOOT] Starting hardware drivers...\n");
     let cmdline = limine_boot_cmdline().unwrap_or("");
     let driver_profile = if cmdline_has_token(cmdline, "full") {
         "full"
@@ -357,9 +414,7 @@ pub fn init_subsystems(
     } else {
         "full"
     };
-    serial_print("[DRIVERS] Profil: ");
-    serial_print(driver_profile);
-    serial_print("\n");
+    kinfo!("boot", "[DRIVERS] Profil: {}\n", driver_profile);
     let mut profile_line = HeaplessString::<64>::new();
     let _ = write!(profile_line, "[DRIVERS] profile: {}", driver_profile);
     let _ = fs_mgr
@@ -421,29 +476,38 @@ pub fn init_subsystems(
         "full" => &lanes[0..4],
         _ => &[],
     };
-    serial_print("[BOOT] Starting parallel driver lanes (lane count: ");
-    crate::serial::print_dec(tasks.len() as u64);
-    serial_print(", CPU: ");
-    crate::serial::print_dec(arch::x86_64::smp::cpu_count() as u64);
-    serial_print(")\n");
+    kinfo!(
+        "boot",
+        "[BOOT] Starting parallel driver lanes (lane count: {}, CPU: {})\n",
+        tasks.len(),
+        arch::x86_64::smp::cpu_count()
+    );
     arch::x86_64::smp::parallel_run(tasks);
-    serial_print("[DRIVERS] Parallel driver lanes completed.\n");
+    kinfo!("boot", "[DRIVERS] Parallel driver lanes completed.\n");
 
     let _socket_timeout_task = task::spawn("socket-timeouts", task::TaskPriority::Normal, || {
         drivers::socket::poll_timeouts();
         task::TaskStatus::Yielded
     });
-    serial_print("[TASK] İşbirlikçi soket zaman aşımı görevi kuyruğa alındı.\n");
+    kdebug!(
+        "boot",
+        "[TASK] İşbirlikçi soket zaman aşımı görevi kuyruğa alındı.\n"
+    );
+
+    // Çalışma anı log seviyesi komutları: seri konsoldan `log ...` satırları.
+    crate::logging::spawn_serial_console_task();
 
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
     audio_dev.test_audio_subsystem();
 
-    serial_print("[DRIVERS] All drivers ready.\n");
+    kinfo!("boot", "[DRIVERS] All drivers ready.\n");
     timer.mark("suruculer");
-    serial_print("[NET] smoltcp protokolleri etkin: ");
-    serial_print(crate::net_smoltcp::Protocols::summary());
-    serial_print("\n");
+    kinfo!(
+        "net",
+        "[NET] smoltcp protokolleri etkin: {}\n",
+        crate::net_smoltcp::Protocols::summary()
+    );
 
     // 4b. Gelismis grafik suruculeri: VirtIO-GPU varsayılan render yolu olarak seçiliyor.
     let t_gpu = crate::monotonic_ms();
@@ -459,17 +523,23 @@ pub fn init_subsystems(
     }
     let mut virtio_default = false;
     if gpu_caps.virtio_gpu_present && drivers::virtio_gpu::set_default_render_path() {
-        serial_print("[GPU] VirtIO-GPU varsayılan render yolu olarak ayarlandı.\n");
+        kinfo!(
+            "boot",
+            "[GPU] VirtIO-GPU varsayılan render yolu olarak ayarlandı.\n"
+        );
         fb.set_hw_cursor(false);
-        serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");
+        kdebug!("boot", "[GPU] Hızlandırılmış yazılım imleci etkin.\n");
         virtio_default = true;
     }
     if !virtio_default && gpu_caps.bga_present {
-        serial_print("[GPU] BGA algılandı, çözünürlük değişimi açık.\n");
+        kinfo!("boot", "[GPU] BGA algılandı, çözünürlük değişimi açık.\n");
         fb.set_hw_cursor(false);
-        serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");
+        kdebug!("boot", "[GPU] Hızlandırılmış yazılım imleci etkin.\n");
     } else {
-        serial_print("[GPU] BGA yok; çözünürlük Limine ile sabit, yazılım imleci.\n");
+        kdebug!(
+            "boot",
+            "[GPU] BGA yok; çözünürlük Limine ile sabit, yazılım imleci.\n"
+        );
     }
     timer.mark("gpu");
 
@@ -492,43 +562,53 @@ pub fn init_subsystems(
         status::probe_unavailable(DriverId::Input, t_input, "klavye/fare aygiti bulunamadi");
     }
     if drivers::ps2::present() {
-        serial_print("[BOOT] PS/2 ready.\n");
+        kdebug!("boot", "[BOOT] PS/2 ready.\n");
     } else {
-        serial_print("[BOOT] PS/2 denetleyicisi yok; girdi yalnızca USB HID üzerinden.\n");
+        kdebug!(
+            "boot",
+            "[BOOT] PS/2 denetleyicisi yok; girdi yalnızca USB HID üzerinden.\n"
+        );
     }
     timer.mark("ps2");
 
     let usb_hid_count = drivers::usb_hid::device_count();
     if usb_hid_count == 0 {
-        serial_print("[INPUT] USB HID bulunamadı, PS/2 yedeği kullanılıyor (BIOS Legacy USB/CSM kapalıysa klavye/fare algılanamayabilir).\n");
+        kwarn!("boot", "[INPUT] USB HID bulunamadı, PS/2 yedeği kullanılıyor (BIOS Legacy USB/CSM kapalıysa klavye/fare algılanamayabilir).\n");
     } else {
-        serial_print("[INPUT] USB HID etkin: bağlı aygıtlar kullanıma hazır.\n");
+        kdebug!(
+            "boot",
+            "[INPUT] USB HID etkin: bağlı aygıtlar kullanıma hazır.\n"
+        );
     }
 
     // 5a. Girdi kuyruğu öz-testi: klavye/fare olaylarının FIFO sırası, uzunluk
     //     bilgisi ve kuyruk dolu davranışı doğrulanır (gerçek donanımdan bağımsız).
     if drivers::input_queue::self_test() {
-        serial_print("[INPUT-TEST] klavye/fare kuyrugu: BASARILI\n");
+        kdebug!("boot", "[INPUT-TEST] klavye/fare kuyrugu: BASARILI\n");
     } else {
-        serial_print("[INPUT-TEST] klavye/fare kuyrugu: BAŞARISIZ\n");
+        kerror!("boot", "[INPUT-TEST] klavye/fare kuyrugu: BAŞARISIZ\n");
     }
 
     // 5b. Tema motorunu başlat
     crate::gui::theme::init();
-    serial_print("[BOOT] Theme ready.\n");
+    kdebug!("boot", "[BOOT] Theme ready.\n");
     timer.mark("tema");
 
     // 5c. önyükleme modu denetimi:
     let wants_installed = boot_wants_installed();
     let installed = fs::diskfs::is_installed();
-    serial_print("[BOOT] Kurulum denetimi: wants_installed=");
-    serial_print(if wants_installed { "1" } else { "0" });
-    serial_print(" installed=");
-    serial_print(if installed { "1" } else { "0" });
-    serial_print("\n");
+    kinfo!(
+        "boot",
+        "[BOOT] Kurulum denetimi: wants_installed={} installed={}\n",
+        wants_installed as u8,
+        installed as u8
+    );
 
     if wants_installed && !installed {
-        serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadı.\n");
+        kerror!(
+            "boot",
+            "[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadı.\n"
+        );
         boot::text_console::fatal("Kurulu sistem seçildi ancak MINOS.SYS bulunamadı");
     }
 
@@ -548,7 +628,10 @@ pub fn init_subsystems(
         register(alloc::boxed::Box::new(InputAdapter));
         probe_and_init_all();
     }
-    serial_print("[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n");
+    kinfo!(
+        "boot",
+        "[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n"
+    );
     timer.mark("surucu-kesfi");
 
     // Ortak sürücü durum modeli: hatların raporlamadığı sürücüleri tamamla,
@@ -556,7 +639,10 @@ pub fn init_subsystems(
     crate::boot::devices::collect_driver_statuses();
     crate::boot::devices::log_status_summary();
 
-    serial_print("[BOOT] All critical subsystems started. Loading GUI and applications...\n");
+    kinfo!(
+        "boot",
+        "[BOOT] All critical subsystems started. Loading GUI and applications...\n"
+    );
     timer.mark("alt-sistemler");
     crate::boot::timing::report_total();
 
@@ -597,14 +683,14 @@ unsafe fn driver_lane_audio(arg: *mut u8) {
     let Some(dma) = (unsafe { &*(arg as *const DriverLaneArgs) }).hda_dma else {
         return;
     };
-    serial_print("[DRIVER] Starting HDA audio driver...\n");
+    kinfo!("driver", "[DRIVER] Starting HDA audio driver...\n");
     let t0 = crate::monotonic_ms();
     drivers::hda::init(Some(dma));
     let dt_us = (crate::monotonic_ms().saturating_sub(t0)).saturating_mul(1000);
     crate::kernel::diag::record_driver_init("Intel HDA", dt_us, drivers::hda::is_ready());
     use crate::drivers::status::{self, DriverId};
     if drivers::hda::is_ready() {
-        serial_print("[DRIVER] HDA audio driver ready.\n");
+        kinfo!("driver", "[DRIVER] HDA audio driver ready.\n");
         status::probe_ready(DriverId::Audio, t0);
     } else {
         match drivers::hda::init_outcome() {
@@ -630,30 +716,35 @@ unsafe fn driver_lane_net(arg: *mut u8) {
     let Some(dma) = (unsafe { &*(arg as *const DriverLaneArgs) }).e1000_dma else {
         return;
     };
-    serial_print("[DRIVER] PCI ağ sürücüsü (e1000/VMXNET3/RTL816x/RTL8139) başlatılıyor...\n");
+    kinfo!(
+        "driver",
+        "[DRIVER] PCI ağ sürücüsü (e1000/VMXNET3/RTL816x/RTL8139) başlatılıyor...\n"
+    );
     let t0 = crate::monotonic_ms();
     drivers::e1000::init(Some(dma));
     let dt_us = (crate::monotonic_ms().saturating_sub(t0)).saturating_mul(1000);
     if drivers::e1000::is_ready() {
         crate::kernel::diag::record_driver_init("PCI NIC (e1000)", dt_us, true);
-        serial_print("[DRIVER] PCI ağ sürücüsü hazır: ");
-        serial_print(drivers::e1000::nic_name());
-        serial_print("\n");
+        kinfo!(
+            "driver",
+            "[DRIVER] PCI ağ sürücüsü hazır: {}\n",
+            drivers::e1000::nic_name()
+        );
     } else {
         // PCI kart yoksa NE2000 (ISA/PnP) denenir.
-        serial_print("[DRIVER] NE2000 ağ sürücüsü başlatılıyor...\n");
+        kinfo!("driver", "[DRIVER] NE2000 ağ sürücüsü başlatılıyor...\n");
         let t_isa = crate::monotonic_ms();
         let ok_isa = drivers::ne2000::init_isa_pnp();
         let dt_isa_us = (crate::monotonic_ms().saturating_sub(t_isa)).saturating_mul(1000);
         crate::kernel::diag::record_driver_init("NE2000 (ISA)", dt_isa_us, ok_isa);
         if ok_isa {
-            serial_print("[DRIVER] NE2000 ağ sürücüsü hazır.\n");
+            kinfo!("driver", "[DRIVER] NE2000 ağ sürücüsü hazır.\n");
         } else {
-            serial_print("[DRIVER] Ağ adaptörü bulunamadı (PCI/ISA).\n");
+            kwarn!("driver", "[DRIVER] Ağ adaptörü bulunamadı (PCI/ISA).\n");
         }
     }
 
-    serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
+    kinfo!("driver", "[DRIVER] Ağ protokolü başlatılıyor...\n");
     let t_stack = crate::monotonic_ms();
     drivers::netstack::init();
     let _ = drivers::netstack::dhcp_request();
@@ -662,7 +753,7 @@ unsafe fn driver_lane_net(arg: *mut u8) {
     crate::kernel::diag::record_driver_init("Netstack", dt_stack_us, true);
     // `livetest` işlemleri boot sırasında devre dışı bırakıldı.
     // drivers::netstack::run_live_server_tests();
-    serial_print("[DRIVER] Ağ protokolü hazır.\n");
+    kinfo!("driver", "[DRIVER] Ağ protokolü hazır.\n");
 
     // Ortak durum modeli: hazır / desteklenmiyor / başlatma hatası ayrımı.
     use crate::drivers::status::{self, DriverId};
@@ -696,7 +787,7 @@ unsafe fn driver_lane_usb(arg: *mut u8) {
     {
         return;
     }
-    serial_print("[DRIVER] Starting USB driver...\n");
+    kinfo!("driver", "[DRIVER] Starting USB driver...\n");
     use crate::drivers::status::{self, DriverId};
     let t_usb_status = status::probe_start(DriverId::Usb);
     let t_usb = crate::monotonic_ms();
@@ -704,12 +795,12 @@ unsafe fn driver_lane_usb(arg: *mut u8) {
     drivers::usb::test_usb_subsystems();
     let dt_usb_us = (crate::monotonic_ms().saturating_sub(t_usb)).saturating_mul(1000);
     crate::kernel::diag::record_driver_init("USB Host", dt_usb_us, true);
-    serial_print("[DRIVER] Starting Wi-Fi (802.11) subsystem...\n");
+    kinfo!("driver", "[DRIVER] Starting Wi-Fi (802.11) subsystem...\n");
     let t_wifi = crate::monotonic_ms();
     drivers::wifi::init();
     let dt_wifi_us = (crate::monotonic_ms().saturating_sub(t_wifi)).saturating_mul(1000);
     crate::kernel::diag::record_driver_init("Wi-Fi", dt_wifi_us, true);
-    serial_print("[DRIVER] USB driver ready.\n");
+    kinfo!("driver", "[DRIVER] USB driver ready.\n");
     if drivers::usb::controller_info().is_some() {
         status::probe_ready(DriverId::Usb, t_usb_status);
     } else {
@@ -725,19 +816,22 @@ unsafe fn driver_lane_usb(arg: *mut u8) {
 /// `usb::init`'ten bağımsızdır: kendi PCI taramasını yapar.
 unsafe fn driver_lane_hid(arg: *mut u8) {
     let args = unsafe { &*(arg as *const DriverLaneArgs) };
-    serial_print("[DRIVER] Starting USB HID (xHCI) driver...\n");
+    kinfo!("driver", "[DRIVER] Starting USB HID (xHCI) driver...\n");
     // SAFETY: `args->pmm` `parallel_run` çağrısı süresince tek erişimlidir;
     // PMM metodları iç kilitle korunur.
     drivers::usb_hid::init(unsafe { &mut *args.pmm });
     if drivers::usb_touchscreen::init() {
-        serial_print("[DRIVER] USB dokunmatik ekran hazır (");
-        crate::serial::print_dec(drivers::usb_touchscreen::max_x() as u64);
-        serial_print("x");
-        crate::serial::print_dec(drivers::usb_touchscreen::max_y() as u64);
-        if drivers::usb_touchscreen::supports_multitouch() {
-            serial_print(", multi-touch");
-        }
-        serial_print(").\n");
+        kinfo!(
+            "driver",
+            "[DRIVER] USB dokunmatik ekran hazır ({}x{}{}).\n",
+            drivers::usb_touchscreen::max_x(),
+            drivers::usb_touchscreen::max_y(),
+            if drivers::usb_touchscreen::supports_multitouch() {
+                ", multi-touch"
+            } else {
+                ""
+            }
+        );
     }
-    serial_print("[DRIVER] USB HID driver ready.\n");
+    kinfo!("driver", "[DRIVER] USB HID driver ready.\n");
 }

@@ -1,14 +1,22 @@
 pub mod a11y;
 pub mod anim;
 pub mod clipboard;
+pub mod components;
 pub mod context;
 pub mod desktop;
+pub mod desktop_loop_state;
 pub mod dirty_rect;
 pub mod draw;
+pub mod event_keyboard;
 pub mod event_loop;
+pub mod event_mouse;
+pub mod event_render;
+pub mod event_syscall;
+pub mod event_window;
 pub mod font_render;
 pub mod frame;
 pub mod icons;
+pub mod metrics;
 pub mod overlay;
 pub mod screen_layout;
 pub mod screens;
@@ -32,6 +40,7 @@ pub mod window;
 pub use context::*;
 pub use event_loop::*;
 pub use frame::*;
+pub use metrics::*;
 pub use screens::*;
 pub use scrollbar::{ScrollState, ScrollbarGeom};
 pub use setup::*;
@@ -146,6 +155,130 @@ pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str {
         en
     } else {
         tr
+    }
+}
+
+/// Merkezi çeviri anahtarları için yerelleştirilmiş metin tablosu (i18n).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum I18nKey {
+    ParentFolder,
+    Folder,
+    ImageFile,
+    WebPage,
+    SystemLog,
+    PasteCompleted,
+    NothingToPaste,
+    EmptyFolder,
+    NoSelection,
+    NoNetwork,
+    ImageFailed,
+    Refresh,
+    Retry,
+    CreateFolder,
+}
+
+/// Merkezi çeviri tablosundan aktif dile göre metin döndürür.
+pub fn tr(key: I18nKey) -> &'static str {
+    let eng = ui_english();
+    match key {
+        I18nKey::ParentFolder => {
+            if eng {
+                "Parent Folder"
+            } else {
+                "Üst Klasör"
+            }
+        }
+        I18nKey::Folder => {
+            if eng {
+                "Folder"
+            } else {
+                "Klasör"
+            }
+        }
+        I18nKey::ImageFile => {
+            if eng {
+                "Image"
+            } else {
+                "Resim İmajı"
+            }
+        }
+        I18nKey::WebPage => {
+            if eng {
+                "Web Page"
+            } else {
+                "Web Sayfası"
+            }
+        }
+        I18nKey::SystemLog => {
+            if eng {
+                "Log"
+            } else {
+                "Sistem Günlüğü"
+            }
+        }
+        I18nKey::PasteCompleted => {
+            if eng {
+                "Paste completed."
+            } else {
+                "Yapıştırma tamamlandı."
+            }
+        }
+        I18nKey::NothingToPaste => {
+            if eng {
+                "Nothing to paste."
+            } else {
+                "Yapıştırılacak öğe yok."
+            }
+        }
+        I18nKey::EmptyFolder => {
+            if eng {
+                "This folder is empty"
+            } else {
+                "Bu klasör boş"
+            }
+        }
+        I18nKey::NoSelection => {
+            if eng {
+                "No item selected"
+            } else {
+                "Hiçbir öğe seçilmedi"
+            }
+        }
+        I18nKey::NoNetwork => {
+            if eng {
+                "No network connection"
+            } else {
+                "Ağ bağlantısı yok"
+            }
+        }
+        I18nKey::ImageFailed => {
+            if eng {
+                "Failed to load image"
+            } else {
+                "Resim yüklenemedi"
+            }
+        }
+        I18nKey::Refresh => {
+            if eng {
+                "Refresh"
+            } else {
+                "Yenile"
+            }
+        }
+        I18nKey::Retry => {
+            if eng {
+                "Retry"
+            } else {
+                "Tekrar dene"
+            }
+        }
+        I18nKey::CreateFolder => {
+            if eng {
+                "Create Folder"
+            } else {
+                "Klasör oluştur"
+            }
+        }
     }
 }
 
@@ -290,7 +423,7 @@ impl MinGuiCompositor {
         self.announcer.announce_alert(text, crate::monotonic_ms())
     }
 
-    pub fn add_window(&mut self, mut win: Window) -> bool {
+    pub fn add_window(&mut self, mut win: Window) -> Option<usize> {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
                 // Sabit uygulama pencereleri 0..=17 arası slotlara eklenir (18 uygulama);
@@ -301,10 +434,10 @@ impl MinGuiCompositor {
                 self.z_counter = self.z_counter.wrapping_add(1);
                 win.z = self.z_counter;
                 self.windows[idx] = Some(win);
-                return true;
+                return Some(idx);
             }
         }
-        false
+        None
     }
 
     /// Çizim Tahtası (Paint) dışındaki uygulamalar tek örnektir; var olan pencereyi öne getirir.
@@ -366,10 +499,7 @@ impl MinGuiCompositor {
         win.workspace = self.active_workspace;
         win.scroll.x = 0;
         win.scroll.y = 0;
-        let idx = self.windows.iter().position(Option::is_none)?;
-        if !self.add_window(win) {
-            return None;
-        }
+        let idx = self.add_window(win)?;
         self.focus_window(idx);
         Some(idx)
     }
@@ -647,7 +777,7 @@ impl MinGuiCompositor {
                 win.x = 0;
                 win.y = 0;
                 win.width = screen_w;
-                win.height = screen_h.saturating_sub(taskbar_h());
+                win.height = screen_h.saturating_sub(scaled_taskbar_h());
                 win.is_maximized = true;
             }
         }
@@ -662,7 +792,7 @@ impl MinGuiCompositor {
         screen_h: usize,
     ) {
         if let Some(ref mut win) = self.windows[idx] {
-            let usable_h = screen_h.saturating_sub(taskbar_h());
+            let usable_h = screen_h.saturating_sub(scaled_taskbar_h());
             if !win.is_maximized && win.restore.is_none() {
                 win.restore = Some((win.x, win.y, win.width, win.height));
             }

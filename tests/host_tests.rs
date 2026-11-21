@@ -140,6 +140,28 @@ pub mod driver_status;
 
 pub fn serial_print(_s: &str) {}
 
+// Çekirdek `src/logging.rs` modülünün host yedeği: test derlemesinde tüm
+// kayıtlar açık sayılır; `crate::logging::*` yolları netstack/status gibi
+// `#[path]` ile bağlanan kaynak modüller tarafından kullanılır.
+pub mod logging {
+    pub const LEVEL_OFF: u8 = 0;
+    pub const LEVEL_ERROR: u8 = 1;
+    pub const LEVEL_WARN: u8 = 2;
+    pub const LEVEL_INFO: u8 = 3;
+    pub const LEVEL_DEBUG: u8 = 4;
+    pub const LEVEL_TRACE: u8 = 5;
+
+    pub fn enabled(_level: u8, _target: &str) -> bool {
+        true
+    }
+}
+
+/// Çekirdek `kinfo!` makrosunun host yedeği: testlerde kayıtlar yutulur.
+#[macro_export]
+macro_rules! kinfo {
+    ($($t:tt)*) => {{}};
+}
+
 pub mod serial {
     pub fn print_dec(_v: u64) {}
 }
@@ -562,6 +584,15 @@ mod host_feature_tests;
 #[cfg(test)]
 #[path = "host_gui_tests.rs"]
 mod host_gui_tests;
+
+// Toast bildirim sözleşmesi: tür başına renk/ikon/süre, otomatik kapanma,
+// Esc ile kapatma, duraklatma ve gerçek ilerleme göstergesi.
+#[cfg(test)]
+#[path = "host_toast_tests.rs"]
+mod host_toast_tests;
+
+#[path = "host_filemanager_tests.rs"]
+mod host_filemanager_tests;
 
 #[cfg(test)]
 #[path = "host_fs_tests.rs"]

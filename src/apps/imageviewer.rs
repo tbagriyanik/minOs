@@ -256,55 +256,119 @@ impl ImageViewerApp {
         win_h: usize,
     ) {
         // Araç Çubuğu
-        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 24, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string_clipped(
-            fb,
-            win_x + 158,
-            win_y + 36,
-            self.file_name,
-            Color::TEXT_MAIN,
-            (win_x + 154, win_y + 32, win_w.saturating_sub(346), 20),
+        fb.draw_rect(
+            win_x + 6,
+            win_y + 30,
+            win_w.saturating_sub(12),
+            24,
+            Color::TITLE_BAR,
         );
 
-        fb.draw_rect(win_x + 8, win_y + 32, 142, 20, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(
-            fb,
-            win_x + 14,
-            win_y + 36,
-            crate::gui::ui_text("Masaüstüne döşe", "Tile on desktop"),
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE),
-        );
+        let is_compact = win_w < 300;
+        if is_compact {
+            // Küçük ekranda (240x160 vb.) araç çubuğu düzeni
+            let btn_w = 24;
+            let tile_btn = (win_x + 8, win_y + 32, btn_w, 20);
+            fb.draw_rect(
+                tile_btn.0,
+                tile_btn.1,
+                tile_btn.2,
+                tile_btn.3,
+                Color::ACCENT_BLUE,
+            );
+            MinGuiCompositor::draw_string(fb, tile_btn.0 + 7, win_y + 36, "D", Color::WHITE);
 
-        // Yakınlaştırma ve Düğmeler
-        fb.draw_rect(win_x + win_w - 180, win_y + 32, 50, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(
-            fb,
-            win_x + win_w - 170,
-            win_y + 36,
-            crate::gui::ui_text("Yakın+", "Zoom+"),
-            Color::ACCENT_GREEN,
-        );
+            let zoom_in_btn = (win_x + win_w.saturating_sub(60), win_y + 32, 22, 20);
+            fb.draw_rect(
+                zoom_in_btn.0,
+                zoom_in_btn.1,
+                zoom_in_btn.2,
+                zoom_in_btn.3,
+                Color::WINDOW_BG,
+            );
+            MinGuiCompositor::draw_string(
+                fb,
+                zoom_in_btn.0 + 6,
+                win_y + 36,
+                "+",
+                Color::ACCENT_GREEN,
+            );
 
-        fb.draw_rect(win_x + win_w - 124, win_y + 32, 50, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(
-            fb,
-            win_x + win_w - 116,
-            win_y + 36,
-            crate::gui::ui_text("Uzak-", "Zoom-"),
-            Color::ACCENT_YELLOW,
-        );
+            let zoom_out_btn = (win_x + win_w.saturating_sub(32), win_y + 32, 22, 20);
+            fb.draw_rect(
+                zoom_out_btn.0,
+                zoom_out_btn.1,
+                zoom_out_btn.2,
+                zoom_out_btn.3,
+                Color::WINDOW_BG,
+            );
+            MinGuiCompositor::draw_string(
+                fb,
+                zoom_out_btn.0 + 7,
+                win_y + 36,
+                "-",
+                Color::ACCENT_YELLOW,
+            );
 
-        fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
-        let mut zoom = crate::gui::TextBuf::new();
-        zoom.push_byte(b'%');
-        zoom.push_u2(self.zoom_percent() as u32);
-        MinGuiCompositor::draw_string(
-            fb,
-            win_x + win_w - 60,
-            win_y + 36,
-            zoom.as_str(),
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE),
-        );
+            let name_clip_w = win_w.saturating_sub(105);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                win_x + 38,
+                win_y + 36,
+                self.file_name,
+                Color::TEXT_MAIN,
+                (win_x + 36, win_y + 32, name_clip_w, 20),
+            );
+        } else {
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                win_x + 158,
+                win_y + 36,
+                self.file_name,
+                Color::TEXT_MAIN,
+                (win_x + 154, win_y + 32, win_w.saturating_sub(346), 20),
+            );
+
+            fb.draw_rect(win_x + 8, win_y + 32, 142, 20, Color::ACCENT_BLUE);
+            MinGuiCompositor::draw_string(
+                fb,
+                win_x + 14,
+                win_y + 36,
+                crate::gui::ui_text("Masaüstüne döşe", "Tile on desktop"),
+                MinGuiCompositor::text_on(Color::ACCENT_BLUE),
+            );
+
+            // Yakınlaştırma ve Düğmeler
+            fb.draw_rect(win_x + win_w - 180, win_y + 32, 50, 20, Color::WINDOW_BG);
+            MinGuiCompositor::draw_string(
+                fb,
+                win_x + win_w - 170,
+                win_y + 36,
+                crate::gui::ui_text("Yakın+", "Zoom+"),
+                Color::ACCENT_GREEN,
+            );
+
+            fb.draw_rect(win_x + win_w - 124, win_y + 32, 50, 20, Color::WINDOW_BG);
+            MinGuiCompositor::draw_string(
+                fb,
+                win_x + win_w - 116,
+                win_y + 36,
+                crate::gui::ui_text("Uzak-", "Zoom-"),
+                Color::ACCENT_YELLOW,
+            );
+
+            fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
+            let mut zoom = crate::gui::TextBuf::new();
+            zoom.push_byte(b'%');
+            zoom.push_u2(self.zoom_percent() as u32);
+            MinGuiCompositor::draw_string(
+                fb,
+                win_x + win_w - 60,
+                win_y + 36,
+                zoom.as_str(),
+                MinGuiCompositor::text_on(Color::ACCENT_BLUE),
+            );
+        }
 
         // Responsive image and information panes. Narrow windows stack the
         // panes; wider windows share the available content width.
@@ -422,12 +486,18 @@ impl ImageViewerApp {
                 }
             }
         } else if self.width == 0 && self.status != crate::gui::ui_text("Ready", "Ready") {
-            MinGuiCompositor::draw_string(
+            // Boş durum / Resim yüklenemedi ekranı
+            crate::gui::ui_helpers::draw_empty_state(
                 fb,
-                canvas_x + 12,
-                canvas_y + 12,
+                canvas_x,
+                canvas_y,
+                canvas_w,
+                canvas_h,
+                crate::gui::ui_helpers::EmptyStateIcon::ImageFailed,
+                crate::gui::tr(crate::gui::I18nKey::ImageFailed),
                 self.status,
-                Color::ACCENT_RED,
+                Some(crate::gui::tr(crate::gui::I18nKey::Retry)),
+                false,
             );
         } else {
             const ART_DATA: [u16; 16] = [

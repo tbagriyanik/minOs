@@ -2595,249 +2595,268 @@ impl SystemSettings {
                 );
             }
             2 => {
-                let mut driver = TextBuf::new();
-                driver.push_str(crate::gui::ui_text("Ağ sürücüsü: ", "Network driver: "));
-                driver.push_str(network_driver);
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X,
-                    win_y + sp(UI_TOP_Y + UI_LABEL_OFFSET),
-                    driver.as_str(),
-                    Color::ACCENT_BLUE,
-                );
-
-                let mut status = TextBuf::new();
-                status.push_str(crate::gui::ui_text("Durum: ", "Status: "));
-                status.push_str(network_status);
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X,
-                    win_y + sp(UI_TOP_Y + UI_ROW_STEP + UI_LABEL_OFFSET),
-                    status.as_str(),
-                    Color::ACCENT_GREEN,
-                );
-
-                MinGuiCompositor::draw_string_clipped(
-                    fb,
-                    win_x + CONTENT_X,
-                    win_y + sp(UI_TOP_Y + 2 * UI_ROW_STEP + UI_LABEL_OFFSET),
-                    crate::gui::ui_text(
-                        "Yığın: Ethernet / IPv4 / ARP / ICMP / UDP / TCP / DHCP / DNS",
-                        "Stack: Ethernet / IPv4 / ARP / ICMP / UDP / TCP / DHCP / DNS",
-                    ),
-                    Color::TEXT_MUTED,
-                    (
+                let link_down = network_status.contains("yok")
+                    || network_status.contains("DOWN")
+                    || network_status.contains("Bulunamad");
+                if link_down && win_w < 380 {
+                    // Dar ekranda bağlantı yoksa boş durum / uyarı kartı göster
+                    crate::gui::ui_helpers::draw_empty_state(
+                        fb,
                         win_x + CONTENT_X,
-                        win_y + sp(UI_TOP_Y + 2 * UI_ROW_STEP),
+                        win_y + sp(UI_TOP_Y),
                         win_w.saturating_sub(CONTENT_X + 12),
-                        sp(18),
-                    ),
-                );
-
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X,
-                    win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP + UI_LABEL_OFFSET),
-                    if self.dhcp_enabled {
-                        crate::gui::ui_text("IP yöntemi: DHCP", "IP mode: DHCP")
-                    } else {
-                        crate::gui::ui_text("IP yöntemi: Statik", "IP mode: Static")
-                    },
-                    Color::ACCENT_YELLOW,
-                );
-
-                let ip_y = win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP - 2);
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X,
-                    ip_y + sp(6),
-                    "IP:",
-                    Color::TEXT_MAIN,
-                );
-                for i in 0..4 {
-                    let r = Self::static_ip_octet_rect(win_x, win_y, i);
-                    fb.draw_rect_outline(
-                        r.0,
-                        r.1,
-                        r.2,
-                        r.3,
-                        if self.static_ip_edit && self.static_ip_octet == i {
-                            Color::ACCENT_YELLOW
-                        } else {
-                            Color::BORDER
-                        },
+                        win_h.saturating_sub(sp(UI_TOP_Y + 40)),
+                        crate::gui::ui_helpers::EmptyStateIcon::NoNetwork,
+                        crate::gui::tr(crate::gui::I18nKey::NoNetwork),
+                        network_status,
+                        Some(crate::gui::tr(crate::gui::I18nKey::Refresh)),
+                        false,
                     );
-                    let mut octet = TextBuf::new();
-                    octet.push_usize(self.static_ip[i] as usize);
+                } else {
+                    let mut driver = TextBuf::new();
+                    driver.push_str(crate::gui::ui_text("Ağ sürücüsü: ", "Network driver: "));
+                    driver.push_str(network_driver);
                     MinGuiCompositor::draw_string(
                         fb,
-                        r.0 + (r
-                            .2
-                            .saturating_sub(MinGuiCompositor::text_width(octet.as_str(), 1)))
-                            / 2,
-                        r.1 + 6,
-                        octet.as_str(),
-                        Color::TEXT_MAIN,
+                        win_x + CONTENT_X,
+                        win_y + sp(UI_TOP_Y + UI_LABEL_OFFSET),
+                        driver.as_str(),
+                        Color::ACCENT_BLUE,
                     );
-                    if i < 3 {
-                        MinGuiCompositor::draw_string(
-                            fb,
-                            r.0 + r.2 + sp(4),
-                            r.1 + 6,
-                            ".",
-                            Color::TEXT_MUTED,
-                        );
-                    }
-                }
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X + sp(294),
-                    win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP + UI_LABEL_OFFSET),
-                    crate::gui::ui_text(
-                        "Düzenlemek için bir oktete tıkla",
-                        "Click an octet to edit",
-                    ),
-                    Color::TEXT_MUTED,
-                );
 
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X,
-                    win_y + sp(UI_TOP_Y + 5 * UI_ROW_STEP + UI_LABEL_OFFSET),
-                    "Gateway: 10.0.2.2    DNS: 10.0.2.3",
-                    Color::TEXT_MAIN,
-                );
+                    let mut status = TextBuf::new();
+                    status.push_str(crate::gui::ui_text("Durum: ", "Status: "));
+                    status.push_str(network_status);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        win_y + sp(UI_TOP_Y + UI_ROW_STEP + UI_LABEL_OFFSET),
+                        status.as_str(),
+                        Color::ACCENT_GREEN,
+                    );
 
-                let dhcp_btn = Self::dhcp_btn_rect(win_x, win_y);
-                MinGuiCompositor::draw_button(
-                    fb,
-                    dhcp_btn,
-                    Color::ACCENT_BLUE,
-                    if self.dhcp_enabled {
-                        "Static IP"
-                    } else {
-                        "DHCP"
-                    },
-                    Color::DARK_BG,
-                    false,
-                );
-                if self.focused_control == 4 {
-                    fb.draw_rect_outline(
-                        dhcp_btn.0,
-                        dhcp_btn.1,
-                        dhcp_btn.2,
-                        dhcp_btn.3,
+                    MinGuiCompositor::draw_string_clipped(
+                        fb,
+                        win_x + CONTENT_X,
+                        win_y + sp(UI_TOP_Y + 2 * UI_ROW_STEP + UI_LABEL_OFFSET),
+                        crate::gui::ui_text(
+                            "Yığın: Ethernet / IPv4 / ARP / ICMP / UDP / TCP / DHCP / DNS",
+                            "Stack: Ethernet / IPv4 / ARP / ICMP / UDP / TCP / DHCP / DNS",
+                        ),
+                        Color::TEXT_MUTED,
+                        (
+                            win_x + CONTENT_X,
+                            win_y + sp(UI_TOP_Y + 2 * UI_ROW_STEP),
+                            win_w.saturating_sub(CONTENT_X + 12),
+                            sp(18),
+                        ),
+                    );
+
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP + UI_LABEL_OFFSET),
+                        if self.dhcp_enabled {
+                            crate::gui::ui_text("IP yöntemi: DHCP", "IP mode: DHCP")
+                        } else {
+                            crate::gui::ui_text("IP yöntemi: Statik", "IP mode: Static")
+                        },
                         Color::ACCENT_YELLOW,
                     );
-                }
-                if self.static_ip_edit {
+
+                    let ip_y = win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP - 2);
                     MinGuiCompositor::draw_string(
                         fb,
                         win_x + CONTENT_X,
-                        dhcp_btn.1 + sp(28),
+                        ip_y + sp(6),
+                        "IP:",
+                        Color::TEXT_MAIN,
+                    );
+                    for i in 0..4 {
+                        let r = Self::static_ip_octet_rect(win_x, win_y, i);
+                        fb.draw_rect_outline(
+                            r.0,
+                            r.1,
+                            r.2,
+                            r.3,
+                            if self.static_ip_edit && self.static_ip_octet == i {
+                                Color::ACCENT_YELLOW
+                            } else {
+                                Color::BORDER
+                            },
+                        );
+                        let mut octet = TextBuf::new();
+                        octet.push_usize(self.static_ip[i] as usize);
+                        MinGuiCompositor::draw_string(
+                            fb,
+                            r.0 + (r
+                                .2
+                                .saturating_sub(MinGuiCompositor::text_width(octet.as_str(), 1)))
+                                / 2,
+                            r.1 + 6,
+                            octet.as_str(),
+                            Color::TEXT_MAIN,
+                        );
+                        if i < 3 {
+                            MinGuiCompositor::draw_string(
+                                fb,
+                                r.0 + r.2 + sp(4),
+                                r.1 + 6,
+                                ".",
+                                Color::TEXT_MUTED,
+                            );
+                        }
+                    }
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X + sp(294),
+                        win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP + UI_LABEL_OFFSET),
                         crate::gui::ui_text(
-                            "Rakam gir, Tab ile sonraki oktet",
-                            "Type digits, Tab for next octet",
+                            "Düzenlemek için bir oktete tıkla",
+                            "Click an octet to edit",
                         ),
                         Color::TEXT_MUTED,
                     );
-                }
 
-                // --- Ağ Tanılama ve Testleri (Satır 6 & 7) ---
-                MinGuiCompositor::draw_string(
-                    fb,
-                    win_x + CONTENT_X,
-                    win_y + sp(UI_TOP_Y + 6 * UI_ROW_STEP + UI_LABEL_OFFSET + 4),
-                    crate::gui::ui_text(
-                        "Ağ Testleri ve Bağlantı Sınama:",
-                        "Network Diagnostics & Tests:",
-                    ),
-                    Color::ACCENT_YELLOW,
-                );
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        win_y + sp(UI_TOP_Y + 5 * UI_ROW_STEP + UI_LABEL_OFFSET),
+                        "Gateway: 10.0.2.2    DNS: 10.0.2.3",
+                        Color::TEXT_MAIN,
+                    );
 
-                let net_btn = Self::test_net_btn_rect(win_x, win_y);
-                let ping_btn = Self::test_ping_btn_rect(win_x, win_y);
-                let http_btn = Self::test_http_btn_rect(win_x, win_y);
-
-                MinGuiCompositor::draw_button(
-                    fb,
-                    net_btn,
-                    Color::ACCENT_BLUE,
-                    crate::gui::ui_text("Tümünü Sına", "Self-Test"),
-                    Color::DARK_BG,
-                    false,
-                );
-                MinGuiCompositor::draw_button(
-                    fb,
-                    ping_btn,
-                    Color::ACCENT_BLUE,
-                    "Ping GW",
-                    Color::DARK_BG,
-                    false,
-                );
-                MinGuiCompositor::draw_button(
-                    fb,
-                    http_btn,
-                    Color::ACCENT_GREEN,
-                    "HTTP GET",
-                    Color::DARK_BG,
-                    false,
-                );
-
-                let english = self.language.is_english();
-                let mut net_line = DeviceLine::new();
-                if self.test_net_tested {
-                    net_line.push(if self.test_net_ok {
-                        if english {
-                            "PASS | "
+                    let dhcp_btn = Self::dhcp_btn_rect(win_x, win_y);
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        dhcp_btn,
+                        Color::ACCENT_BLUE,
+                        if self.dhcp_enabled {
+                            "Static IP"
                         } else {
-                            "BAŞARILI | "
-                        }
-                    } else if english {
-                        "FAIL | "
-                    } else {
-                        "UYARI | "
-                    });
-                    net_line.push(self.test_net_msg);
-                } else {
-                    let ready = crate::drivers::e1000::is_ready();
-                    let link = crate::drivers::e1000::link_up();
-                    if ready && link {
-                        net_line.push(if english {
-                            "Intel 82540EM Link UP | 10.0.2.15 ready"
-                        } else {
-                            "Intel 82540EM Link UP | 10.0.2.15 hazır"
-                        });
-                    } else if ready {
-                        net_line.push(if english {
-                            "Intel 82540EM Link DOWN"
-                        } else {
-                            "Intel 82540EM Bağlantı Yok"
-                        });
-                    } else {
-                        net_line.push(if english {
-                            "NIC not detected"
-                        } else {
-                            "Ağ kartı algılanmadı"
-                        });
+                            "DHCP"
+                        },
+                        Color::DARK_BG,
+                        false,
+                    );
+                    if self.focused_control == 4 {
+                        fb.draw_rect_outline(
+                            dhcp_btn.0,
+                            dhcp_btn.1,
+                            dhcp_btn.2,
+                            dhcp_btn.3,
+                            Color::ACCENT_YELLOW,
+                        );
                     }
-                }
-                draw_device_line(
-                    fb,
-                    win_x + CONTENT_X + sp(316),
-                    net_btn.1 + 4,
-                    win_w.saturating_sub(CONTENT_X + sp(326)),
-                    &net_line,
+                    if self.static_ip_edit {
+                        MinGuiCompositor::draw_string(
+                            fb,
+                            win_x + CONTENT_X,
+                            dhcp_btn.1 + sp(28),
+                            crate::gui::ui_text(
+                                "Rakam gir, Tab ile sonraki oktet",
+                                "Type digits, Tab for next octet",
+                            ),
+                            Color::TEXT_MUTED,
+                        );
+                    }
+
+                    // --- Ağ Tanılama ve Testleri (Satır 6 & 7) ---
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        win_y + sp(UI_TOP_Y + 6 * UI_ROW_STEP + UI_LABEL_OFFSET + 4),
+                        crate::gui::ui_text(
+                            "Ağ Testleri ve Bağlantı Sınama:",
+                            "Network Diagnostics & Tests:",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
+
+                    let net_btn = Self::test_net_btn_rect(win_x, win_y);
+                    let ping_btn = Self::test_ping_btn_rect(win_x, win_y);
+                    let http_btn = Self::test_http_btn_rect(win_x, win_y);
+
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        net_btn,
+                        Color::ACCENT_BLUE,
+                        crate::gui::ui_text("Tümünü Sına", "Self-Test"),
+                        Color::DARK_BG,
+                        false,
+                    );
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        ping_btn,
+                        Color::ACCENT_BLUE,
+                        "Ping GW",
+                        Color::DARK_BG,
+                        false,
+                    );
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        http_btn,
+                        Color::ACCENT_GREEN,
+                        "HTTP GET",
+                        Color::DARK_BG,
+                        false,
+                    );
+
+                    let english = self.language.is_english();
+                    let mut net_line = DeviceLine::new();
                     if self.test_net_tested {
-                        if self.test_net_ok {
-                            Color::ACCENT_GREEN
+                        net_line.push(if self.test_net_ok {
+                            if english {
+                                "PASS | "
+                            } else {
+                                "BAŞARILI | "
+                            }
+                        } else if english {
+                            "FAIL | "
                         } else {
-                            Color::ACCENT_RED
-                        }
+                            "UYARI | "
+                        });
+                        net_line.push(self.test_net_msg);
                     } else {
-                        Color::TEXT_MAIN
-                    },
-                );
+                        let ready = crate::drivers::e1000::is_ready();
+                        let link = crate::drivers::e1000::link_up();
+                        if ready && link {
+                            net_line.push(if english {
+                                "Intel 82540EM Link UP | 10.0.2.15 ready"
+                            } else {
+                                "Intel 82540EM Link UP | 10.0.2.15 hazır"
+                            });
+                        } else if ready {
+                            net_line.push(if english {
+                                "Intel 82540EM Link DOWN"
+                            } else {
+                                "Intel 82540EM Bağlantı Yok"
+                            });
+                        } else {
+                            net_line.push(if english {
+                                "NIC not detected"
+                            } else {
+                                "Ağ kartı algılanmadı"
+                            });
+                        }
+                    }
+                    draw_device_line(
+                        fb,
+                        win_x + CONTENT_X + sp(316),
+                        net_btn.1 + 4,
+                        win_w.saturating_sub(CONTENT_X + sp(326)),
+                        &net_line,
+                        if self.test_net_tested {
+                            if self.test_net_ok {
+                                Color::ACCENT_GREEN
+                            } else {
+                                Color::ACCENT_RED
+                            }
+                        } else {
+                            Color::TEXT_MAIN
+                        },
+                    );
+                }
             }
             3 => {
                 render_device_inventory(

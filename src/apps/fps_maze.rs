@@ -598,8 +598,7 @@ mod tests {
         let mut map = generate_maze(MAZE_SIZE, MAZE_SIZE, 42);
 
         // Anahtar konumu olmalı.
-        assert!(map.key_pos.is_some());
-        let (kx, ky) = map.key_pos.unwrap();
+        let (kx, ky) = map.key_pos.expect("anahtar konumu olmalı");
         assert_eq!(map.get(kx, ky), TILE_KEY);
 
         // Kapılar olmalı ve kilitli olmalı.

@@ -7,7 +7,7 @@ use crate::drivers::video::Framebuffer;
 use crate::fs::diskfs::{self, FsKind};
 use crate::fs::vfs::{NodeType, VirtualFileSystem};
 use crate::gui::scrollbar::{self, ScrollState};
-use crate::gui::{Color, MinGuiCompositor, TextBuf};
+use crate::gui::{scaled_statusbar_h, Color, MinGuiCompositor, TextBuf};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -44,7 +44,11 @@ pub fn list_top() -> usize {
     LIST_TOP
 }
 /// Durum çubuğu için ayrılan alt alan (px).
-const STATUS_H: usize = 30;
+const STATUS_H: usize = 0; // Use scaled_statusbar_h() instead
+
+pub fn status_h() -> usize {
+    scaled_statusbar_h()
+}
 
 pub const MAX_ITEMS: usize = 64;
 
@@ -168,6 +172,46 @@ pub enum SortBy {
 pub enum SortOrder {
     Ascending,
     Descending,
+}
+
+/// Klavye gezinmesindeki seçim değiştirici (modifier).
+///
+/// Ok tuşları / Home / End / PageUp / PageDown ile gezinirken Shift ve Ctrl
+/// tuşlarının anlamı tek yerde tanımlıdır:
+///
+/// * `None`     — seçimi imlece taşı (tek seçim).
+/// * `Shift`    — çapa (anchor) ile imleç arasını aralık olarak seç.
+/// * `Ctrl`     — imleci taşı, mevcut seçimi koru.
+/// * `CtrlShift`— imleci taşı ve imleçteki öğeyi seçime ekle/çıkar.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SelectMod {
+    #[default]
+    None,
+    Shift,
+    Ctrl,
+    CtrlShift,
+}
+
+impl SelectMod {
+    /// Klavye durumundan seçim değiştiricisini üretir.
+    pub fn from_keys(shift: bool, ctrl: bool) -> Self {
+        match (shift, ctrl) {
+            (true, true) => SelectMod::CtrlShift,
+            (true, false) => SelectMod::Shift,
+            (false, true) => SelectMod::Ctrl,
+            (false, false) => SelectMod::None,
+        }
+    }
+
+    /// Aralık seçimi yapılıyor mu?
+    pub fn is_range(self) -> bool {
+        matches!(self, SelectMod::Shift | SelectMod::CtrlShift)
+    }
+
+    /// Çapa sabit tutulacak mı? (Shift'li gezinmede seçim çapası yerinde kalır.)
+    pub fn keeps_anchor(self) -> bool {
+        self.is_range()
+    }
 }
 
 /// Hızlı Önizleme panelinde gösterilen içerik türü.
@@ -337,6 +381,87 @@ pub struct FileManagerApp {
     pub confirm_name_buf: [u8; 64],
     pub confirm_name_len: usize,
     pub confirm_cursor: usize,
+    /// Uzun işlem bandı: işlem adı (TR, EN) ve gerçek yüzde.
+    /// `None` iken bant çizilmez.
+    pub progress: Option<OpProgress>,
+    /// Uzun işlemler için açılmış toast bildiriminin slotu. Sistem toast
+    /// kuyruğu (görev çubuğu üstü) pencere içi bantla **aynı** gerçek
+    /// yüzdeyi gösterir; böylece kullanıcı işlem ilerlemesini iki yerde de
+    /// tutarlı görür.
+    pub progress_toast: Option<usize>,
+}
+
+/// Dosya yöneticisi işlem bandı durumu.
+///
+/// Kopyalama/taşıma, silme, küçük resim üretimi ve boşaltma gibi uzun
+/// işlemlerde pencere içinde **gerçek** ilerleme (yüzde + çubuk) gösterir;
+/// kum saati imleci tek başına kullanıldığında kullanıcı ne kadar kaldığını
+/// göremezdi.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OpProgress {
+    /// İşlem adı (TR, EN) — görünüm diline göre seçilir.
+    pub label: (&'static str, &'static str),
+    /// 0..=100 arası ilerleme yüzdesi.
+    pub percent: u8,
+    /// Toplam adım sayısı (`0` = bilinmiyor).
+    pub total: usize,
+    /// Tamamlanan adım sayısı.
+    pub done: usize,
+}
+
+impl OpProgress {
+    pub const fn new(label: (&'static str, &'static str), total: usize) -> Self {
+        Self {
+            label,
+            percent: 0,
+            total,
+            done: 0,
+        }
+    }
+
+    /// Adım ilerlemesini uygular; yüzde monoton olarak artar.
+    pub fn set_steps(&mut self, done: usize, total: usize) {
+        self.done = done.min(total.max(done));
+        self.total = total;
+        let pct = done
+            .saturating_mul(100)
+            .checked_div(total)
+            .map_or(100, |p| p.min(100)) as u8;
+        if pct > self.percent {
+            self.percent = pct;
+        }
+    }
+
+    /// Yüzdeyi doğrudan ayarlar (1..=99 beklenir; aşama geçişlerinde kullanılır).
+    pub fn set_percent(&mut self, pct: u8) {
+        let pct = pct.min(100);
+        if pct > self.percent {
+            self.percent = pct;
+        }
+    }
+
+    /// Görünüm diline göre etiketi döndürür.
+    pub fn label_str(&self) -> &'static str {
+        if crate::gui::ui_english() {
+            self.label.1
+        } else {
+            self.label.0
+        }
+    }
+
+    /// "%42 (3/7)" biçiminde ilerleme metni.
+    pub fn detail_text(&self) -> TextBuf {
+        let mut b = TextBuf::new();
+        b.push_usize(self.percent as usize);
+        b.push_str("%");
+        if self.total > 0 {
+            b.push_str("  ");
+            b.push_usize(self.done.min(self.total));
+            b.push_str("/");
+            b.push_usize(self.total);
+        }
+        b
+    }
 }
 
 impl FileManagerApp {
@@ -505,12 +630,18 @@ impl FileManagerApp {
     }
 
     pub fn search_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (
-            win_x + 122,
-            win_y + 32,
-            win_w.saturating_sub(540).max(72),
-            22,
-        )
+        if win_w < 300 {
+            // Küçük çözünürlüklerde arama kutusunu taşmayacak şekilde boyutlandır
+            let w = win_w.saturating_sub(100).max(40);
+            (win_x + 50, win_y + 35, w, 22)
+        } else {
+            (
+                win_x + 122,
+                win_y + 32,
+                win_w.saturating_sub(540).max(72),
+                22,
+            )
+        }
     }
 
     pub fn actions_button_rect(
@@ -608,7 +739,8 @@ impl FileManagerApp {
     /// Izgara görünümü/önizleme için küçük resimler hazır değilse üretir.
     pub fn ensure_thumbs(&mut self, vfs: &VirtualFileSystem) {
         // Küçük resim çözme (PNG/JPEG) uzun sürebilir; imleç kum saati olsun.
-        let _busy = crate::gui::screens::BusyScope::new();
+        // rebuild_thumbs zaten begin_progress/update_progress/finish_progress ile
+        // gerçek ilerleme çubuğu gösterir; burada ayrı BusyScope gereksiz.
         if self.thumbs.len() != self.file_count {
             self.rebuild_thumbs(vfs);
         }
@@ -768,7 +900,7 @@ impl FileManagerApp {
         let w = PREVIEW_W.min(win_w.saturating_sub(150));
         let x = win_x + win_w.saturating_sub(thick + 14 + w);
         let y = win_y + 60;
-        let h = win_h.saturating_sub(60 + STATUS_H);
+        let h = win_h.saturating_sub(60 + status_h());
         (x, y, w, h)
     }
 
@@ -814,7 +946,7 @@ impl FileManagerApp {
         let lx = Self::list_x(win_x);
         let lw = self.list_width(win_w);
         let top = win_y + LIST_TOP;
-        let bottom = win_y + win_h.saturating_sub(STATUS_H);
+        let bottom = win_y + win_h.saturating_sub(status_h());
         if mx < lx || mx >= lx + lw || my < top || my >= bottom {
             return None;
         }
@@ -881,46 +1013,164 @@ impl FileManagerApp {
         }
     }
 
+    /// İmleci hedef öğeye taşır ve seçimi `mod` değiştiricisine göre uygular.
+    ///
+    /// * Shift: çapa ile hedef arasındaki görünür öğeler seçilir (aralık).
+    /// * Ctrl: seçim değişmez, yalnızca imleç taşınır.
+    /// * Ctrl+Shift: imleç taşınır ve hedef öğe seçime eklenir/çıkarılır.
+    /// * Yok: yalnızca hedef öğe seçili olur.
+    ///
+    /// `..` (üst dizin) öğesi hiçbir zaman seçime girmez.
+    pub fn move_cursor_to(&mut self, target: usize, mods: SelectMod) {
+        if target >= self.file_count || !self.search_matches(target) {
+            return;
+        }
+        let is_up = self.files[target].display_name() == "..";
+        match mods {
+            SelectMod::None => {
+                self.selected_items = [false; MAX_ITEMS];
+                if !is_up {
+                    self.selected_items[target] = true;
+                }
+                self.selection_anchor = target;
+            }
+            SelectMod::Shift => {
+                self.selected_items = [false; MAX_ITEMS];
+                let anchor = self.selection_anchor.min(self.file_count.saturating_sub(1));
+                let start = anchor.min(target);
+                let end = anchor.max(target);
+                for i in start..=end {
+                    if self.search_matches(i) && self.files[i].display_name() != ".." {
+                        self.selected_items[i] = true;
+                    }
+                }
+            }
+            SelectMod::Ctrl => {}
+            SelectMod::CtrlShift => {
+                if !is_up {
+                    self.selected_items[target] = !self.selected_items[target];
+                }
+            }
+        }
+        self.selected_idx = target;
+    }
+
+    /// Aralık için bir sonraki görünür öğe indeksini arar (`step` negatifse geri).
+    fn search_index(&self, from: usize, step: isize) -> Option<usize> {
+        if self.file_count == 0 {
+            return None;
+        }
+        let mut i = from as isize + step;
+        while i >= 0 && (i as usize) < self.file_count {
+            if self.search_matches(i as usize) {
+                return Some(i as usize);
+            }
+            i += step;
+        }
+        None
+    }
+
     /// Yukarı ok: listede bir öğe, ızgarada bir satır (sütun kadar) yukarı.
     pub fn move_selection_up(&mut self, win_w: usize) {
+        self.move_selection_up_ext(win_w, SelectMod::None);
+    }
+
+    /// Yukarı ok + değiştiriciler.
+    pub fn move_selection_up_ext(&mut self, win_w: usize, mods: SelectMod) {
         if self.visible_count() == 0 {
             return;
         }
         let step = match self.view_mode {
             ViewMode::List => 1,
-            ViewMode::Grid => Self::grid_columns(self.list_width(win_w)),
+            ViewMode::Grid => Self::grid_columns(self.list_width(win_w)) as isize,
         };
-        for _ in 0..step.max(1) {
-            self.select_prev();
+        if let Some(target) = self.search_index(self.selected_idx, -step.max(1)) {
+            self.move_cursor_to(target, mods);
+        } else if self.selected_idx >= self.file_count {
+            // Seçim yoksa ilk görünür öğeye git.
+            if let Some(first) = (0..self.file_count).find(|&i| self.search_matches(i)) {
+                self.move_cursor_to(first, mods);
+            }
         }
     }
 
     /// Aşağı ok: listede bir öğe, ızgarada bir satır (sütun kadar) aşağı.
     pub fn move_selection_down(&mut self, win_w: usize) {
+        self.move_selection_down_ext(win_w, SelectMod::None);
+    }
+
+    /// Aşağı ok + değiştiriciler.
+    pub fn move_selection_down_ext(&mut self, win_w: usize, mods: SelectMod) {
         if self.visible_count() == 0 {
             return;
         }
         let step = match self.view_mode {
             ViewMode::List => 1,
-            ViewMode::Grid => Self::grid_columns(self.list_width(win_w)),
+            ViewMode::Grid => Self::grid_columns(self.list_width(win_w)) as isize,
         };
-        for _ in 0..step.max(1) {
-            self.select_next();
+        if let Some(target) = self.search_index(self.selected_idx, step.max(1)) {
+            self.move_cursor_to(target, mods);
         }
     }
 
-    /// Sol ok: yalnızca ızgarada önceki hücre.
-    pub fn move_selection_left(&mut self) {
-        if self.view_mode == ViewMode::Grid && self.selected_idx > 0 {
-            self.select_prev();
+    /// Sol ok: yalnızca ızgarada bir satırın başındaki öğeyi seçer.
+    pub fn move_selection_left(&mut self, win_w: usize) {
+        self.move_selection_left_ext(win_w, SelectMod::None);
+    }
+
+    /// Sol ok + değiştiriciler. Izgarada satır başındaki öğeye döner.
+    pub fn move_selection_left_ext(&mut self, win_w: usize, mods: SelectMod) {
+        if self.view_mode != ViewMode::Grid {
+            return;
+        }
+        let cols = Self::grid_columns(self.list_width(win_w)).max(1);
+        let row_start = self.selected_idx.saturating_sub(self.selected_idx % cols);
+        if row_start != self.selected_idx {
+            self.move_cursor_to(row_start, mods);
         }
     }
 
     /// Sağ ok: yalnızca ızgarada sonraki hücre.
-    pub fn move_selection_right(&mut self) {
-        if self.view_mode == ViewMode::Grid && self.selected_idx + 1 < self.file_count {
-            self.select_next();
+    pub fn move_selection_right(&mut self, win_w: usize) {
+        self.move_selection_right_ext(win_w, SelectMod::None);
+    }
+
+    /// Sağ ok + değiştiriciler. Izgarada satır sonundaki öğeye gider.
+    pub fn move_selection_right_ext(&mut self, win_w: usize, mods: SelectMod) {
+        if self.view_mode != ViewMode::Grid {
+            return;
         }
+        let cols = Self::grid_columns(self.list_width(win_w)).max(1);
+        let row_start = self.selected_idx.saturating_sub(self.selected_idx % cols);
+        let row_end = (row_start + cols - 1).min(self.file_count.saturating_sub(1));
+        if row_end != self.selected_idx {
+            self.move_cursor_to(row_end, mods);
+        }
+    }
+
+    /// Tüm öğeleri seçer (Ctrl+A). `..` öğesi hariç.
+    pub fn select_all(&mut self) -> usize {
+        self.selected_items = [false; MAX_ITEMS];
+        let mut n = 0usize;
+        for i in 0..self.file_count {
+            if self.search_matches(i) && self.files[i].display_name() != ".." {
+                self.selected_items[i] = true;
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Seçimi temizler (Ctrl+Shift+A / Esc). Dönen değer önceden seçili miydi?
+    pub fn clear_selection(&mut self) -> bool {
+        let had = self.selected_items.iter().any(|&s| s);
+        self.selected_items = [false; MAX_ITEMS];
+        had
+    }
+
+    /// Mevcut seçimdeki (seçili) öğe sayısı.
+    pub fn selected_count(&self) -> usize {
+        self.selected_items.iter().filter(|&&s| s).count()
     }
 
     /// Seçili öğeyi görünür tutacak kaydırma konusunu döndürür.
@@ -958,30 +1208,60 @@ impl FileManagerApp {
 
     /// Listenin ilk öğesini seçer (Home).
     pub fn select_first(&mut self) {
+        self.select_first_ext(SelectMod::None);
+    }
+
+    /// Home + değiştiriciler.
+    pub fn select_first_ext(&mut self, mods: SelectMod) {
         if let Some(first) = (0..self.file_count).find(|&i| self.search_matches(i)) {
-            self.selected_idx = first;
+            self.move_cursor_to(first, mods);
         }
     }
 
     /// Listenin son öğesini seçer (End).
     pub fn select_last(&mut self) {
+        self.select_last_ext(SelectMod::None);
+    }
+
+    /// End + değiştiriciler.
+    pub fn select_last_ext(&mut self, mods: SelectMod) {
         if let Some(last) = (0..self.file_count).rev().find(|&i| self.search_matches(i)) {
-            self.selected_idx = last;
+            self.move_cursor_to(last, mods);
         }
     }
 
     /// Sayfa sayfa gezinme (PageUp / PageDown).
     pub fn select_page(&mut self, down: bool, rows: usize) {
+        self.select_page_ext(down, rows, SelectMod::None);
+    }
+
+    /// PageUp / PageDown + değiştiriciler.
+    ///
+    /// Sayfa adımı, listenin ucuna bir sayfadan yakın olduğunda o uca atlar
+    /// (Windows Gezgini davranışı): son sayfada PageDown → son öğe, ilk
+    /// sayfada PageUp → ilk öğe.
+    pub fn select_page_ext(&mut self, down: bool, rows: usize, mods: SelectMod) {
         if self.visible_count() == 0 {
             return;
         }
-        let step = rows.max(1);
-        for _ in 0..step {
-            if down {
-                self.select_next();
-            } else {
-                self.select_prev();
+        let step = rows.max(1) as isize;
+        let first = (0..self.file_count).find(|&i| self.search_matches(i));
+        let last = (0..self.file_count).rev().find(|&i| self.search_matches(i));
+        let target = if down {
+            match self.search_index(self.selected_idx, step) {
+                Some(t) => Some(t),
+                // Son sayfa: tek adım bile kalmasa da son öğeye git.
+                None => last,
             }
+        } else {
+            match self.search_index(self.selected_idx, -step) {
+                Some(t) => Some(t),
+                // İlk sayfa: tek adım bile kalmadıysa ilk öğeye git.
+                None => first,
+            }
+        };
+        if let Some(t) = target {
+            self.move_cursor_to(t, mods);
         }
     }
 
@@ -1032,6 +1312,8 @@ impl FileManagerApp {
             confirm_name_buf: [0; 64],
             confirm_name_len: 0,
             confirm_cursor: 0,
+            progress: None,
+            progress_toast: None,
         }
     }
 
@@ -1116,7 +1398,7 @@ impl FileManagerApp {
             up.dyn_name_len = 2;
             up.is_dir = true;
             up.icon_tag = "DIR";
-            up.file_type = crate::gui::ui_text("Ust Klasor", "Parent Folder");
+            up.file_type = crate::gui::tr(crate::gui::I18nKey::ParentFolder);
             let mut s = TextBuf::new();
             s.push_str("<UP>");
             up.size_str = s;
@@ -1167,7 +1449,7 @@ impl FileManagerApp {
             row.dyn_name_len = take;
             row.is_dir = true;
             row.icon_tag = "DIR";
-            row.file_type = crate::gui::ui_text("Klasor", "Folder");
+            row.file_type = crate::gui::tr(crate::gui::I18nKey::Folder);
             row.size_str = format_size(0, true);
             self.files[self.file_count] = row;
             self.file_count += 1;
@@ -1188,40 +1470,53 @@ impl FileManagerApp {
             row.file_type = match row.icon_tag {
                 "TXT" => crate::gui::ui_text("Metin Belgesi", "Text Document"),
                 "3D" => crate::gui::ui_text("3D Model", "3D Model"),
-                "IMG" => crate::gui::ui_text("Resim Imaji", "Image"),
+                "IMG" => crate::gui::tr(crate::gui::I18nKey::ImageFile),
                 "SND" => crate::gui::ui_text("Ses Dosyası", "Audio"),
-                "VID" => crate::gui::ui_text("Video Kaydi", "Video"),
-                "WEB" => crate::gui::ui_text("Web Sayfasi", "Web Page"),
+                "VID" => crate::gui::ui_text("Video Kaydı", "Video"),
+                "WEB" => crate::gui::tr(crate::gui::I18nKey::WebPage),
                 "CFG" => crate::gui::ui_text("Ayar Dosyası", "Config"),
-                "LOG" => crate::gui::ui_text("Sistem Gunlugu", "Log"),
+                "LOG" => crate::gui::tr(crate::gui::I18nKey::SystemLog),
                 _ => crate::gui::ui_text("Dosya", "File"),
             };
             row.size_str = format_size(it.size, false);
             self.files[self.file_count] = row;
             self.file_count += 1;
-
-            // Izgara / önizleme için gerekliyse küçük resimleri (thumbnail) tazele.
-            self.thumbs.clear();
-            if self.view_mode == ViewMode::Grid || self.preview_open {
-                self.rebuild_thumbs(vfs);
-            }
-            self.preview_key.clear();
-            if self.preview_open {
-                self.update_preview(vfs);
-            }
-
-            // Mevcut sıralama kriterine göre dosyaları sırala
-            self.resort_files();
-
-            self.status = "";
         }
+
+        // Izgara / önizleme için gerekliyse küçük resimleri (thumbnail) bir kez
+        // (liste tamamlandıktan sonra) tazele. Eskiden bu çağrı her dosya için
+        // yapılıyordu; liste O(n²) kez yeniden çözülüyordu.
+        self.thumbs.clear();
+        if self.view_mode == ViewMode::Grid || self.preview_open {
+            self.rebuild_thumbs(vfs);
+        }
+        self.preview_key.clear();
+        if self.preview_open {
+            self.update_preview(vfs);
+        }
+
+        // Mevcut sıralama kriterine göre dosyaları sırala
+        self.resort_files();
+
+        self.status = "";
     }
 
     /// Görünür görsel öğeler için küçük resimleri (thumbnail) çözer.
+    ///
+    /// PNG/JPEG çözúmú uzun sürebilir; işlem süresince pencere içinde gerçek
+    /// ilerleme (işlenen görsel / toplam görsel) gösterilir.
     fn rebuild_thumbs(&mut self, vfs: &VirtualFileSystem) {
         self.thumbs.clear();
         let mut budget = 48usize;
         let base = String::from(self.path());
+        // İlerleme yalnızca çözúlecek görsel varsa başlat.
+        let image_total = (0..self.file_count)
+            .filter(|&i| !self.files[i].is_dir && self.files[i].icon_tag == "IMG")
+            .count();
+        let mut image_done = 0usize;
+        if image_total > 0 {
+            self.begin_progress(("Küçük resimler", "Thumbnails"), image_total, 0);
+        }
         for i in 0..self.file_count {
             let file = self.files[i];
             let is_img = !file.is_dir && file.icon_tag == "IMG";
@@ -1245,6 +1540,11 @@ impl FileManagerApp {
                 budget -= 1;
             }
             self.thumbs.push(thumb);
+            image_done += 1;
+            self.update_progress(image_done, image_total);
+        }
+        if image_total > 0 {
+            self.finish_progress();
         }
     }
 
@@ -1387,28 +1687,39 @@ impl FileManagerApp {
             self.selected_idx = idx;
             return;
         }
-        if shift {
-            self.selected_items = [false; MAX_ITEMS];
-            let start = self.selection_anchor.min(idx);
-            let end = self.selection_anchor.max(idx);
-            for i in start..=end.min(self.file_count.saturating_sub(1)) {
-                if self.search_matches(i) && self.files[i].display_name() != ".." {
-                    self.selected_items[i] = true;
-                }
-            }
-        } else if ctrl {
+        // Klavye ile aynı seçim kuralları (tek kod yolu).
+        let mods = SelectMod::from_keys(shift, ctrl);
+        if mods == SelectMod::Ctrl {
+            // Ctrl+tık: öğeyi seçime ekle/çıkar.
             self.selected_items[idx] = !self.selected_items[idx];
             self.selection_anchor = idx;
+            self.selected_idx = idx;
         } else {
-            self.selected_items = [false; MAX_ITEMS];
-            self.selected_items[idx] = true;
-            self.selection_anchor = idx;
+            self.move_cursor_to(idx, mods);
         }
-        self.selected_idx = idx;
     }
 
+    /// Öğe seçili mi?
+    ///
+    /// Seçim durumu `selected_items` üzerinden okunur; imleç (odak) satırı
+    /// ayrıca odak halkası ile işaretlenir (`is_cursor_row`). Böylece Ctrl
+    /// ile seçimden çıkarılan bir öğe, imleç orada olsa da seçili görünmez.
     pub fn is_row_selected(&self, idx: usize) -> bool {
-        self.selected_items.get(idx).copied().unwrap_or(false) || idx == self.selected_idx
+        self.selected_items.get(idx).copied().unwrap_or(false)
+    }
+
+    /// İmlecin (klavye odağının) üzerinde olduğu satır mı?
+    pub fn is_cursor_row(&self, idx: usize) -> bool {
+        idx == self.selected_idx
+    }
+
+    /// Klavye odağının üzerindeki öğe; listenin boş olması hâlinde `None`.
+    pub fn cursor_item(&self) -> Option<&FileItem> {
+        if self.selected_idx < self.file_count {
+            Some(&self.files[self.selected_idx])
+        } else {
+            None
+        }
     }
 
     pub fn copy_selection(&mut self, clipboard: &mut FileClipboard, cut: bool) {
@@ -1447,8 +1758,6 @@ impl FileManagerApp {
         clipboard: &mut FileClipboard,
         vfs: &mut VirtualFileSystem,
     ) -> usize {
-        // Kopyalama/kesme-taşıma disk I/O'su içerebilir; imleç kum saati olsun.
-        let _busy = crate::gui::screens::BusyScope::new();
         let dest = String::from(self.path());
         if dest == "/media/cdrom" {
             self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only.");
@@ -1456,12 +1765,28 @@ impl FileManagerApp {
         }
 
         let total_files = clipboard.count;
-        let mut done = 0;
-        let start_ms = crate::monotonic_ms();
+        if total_files == 0 {
+            self.status = crate::gui::tr(crate::gui::I18nKey::NothingToPaste);
+            return 0;
+        }
+        // Kopyalama/kesme-taşıma disk I/O'su içerebilir; pencere içinde gerçek
+        // ilerleme bandı gösterilir (begin_progress/update_progress/finish_progress).
+        let mut tracker = crate::apps::file_ops::ProgressTracker::new(total_files);
+        let was_cut = clipboard.cut;
+        let label = if was_cut {
+            ("Taşınıyor", "Moving")
+        } else {
+            ("Kopyalanıyor", "Copying")
+        };
+        self.begin_progress(label, total_files, 0);
 
-        for i in 0..clipboard.count {
-            let src = String::from(clipboard.paths[i].as_str());
-            let result = if clipboard.cut {
+        let mut done = 0;
+        let mut last_pct = 0usize;
+        let mut failed: Option<String> = None;
+
+        for path in clipboard.paths.iter().take(clipboard.count) {
+            let src = String::from(path.as_str());
+            let result = if was_cut {
                 vfs.move_item(&src, &dest).map(|_| ())
             } else {
                 vfs.copy_item(&src, &dest).map(|_| ())
@@ -1469,47 +1794,130 @@ impl FileManagerApp {
 
             if result.is_ok() {
                 done += 1;
-
-                // Progress update every 5 files or at the end
-                if done % 5 == 0 || done == total_files {
-                    let elapsed_ms = crate::monotonic_ms().saturating_sub(start_ms);
-                    // Tahmini kalan süre (yalnızca ilerleme raporlaması için hesaplanır).
-                    let _remaining = if done > 0 && done < total_files {
-                        let avg_time_ms = elapsed_ms / done as u64;
-                        let est_remaining_ms = avg_time_ms * (total_files - done) as u64;
-                        let remaining_secs = est_remaining_ms / 1000;
-                        alloc::format!(" (≈{}s remaining)", remaining_secs.max(1))
-                    } else {
-                        String::new()
-                    };
-
-                    let _pct = (done as f64 / total_files as f64) * 100.0;
-                    self.status = crate::gui::ui_text("Kopyalanıyor", "Copying");
-                }
-            } else {
-                // Copy failed - show error and offer retry
-                self.status =
-                    crate::gui::ui_text("Kopyalama hatası, tekrar deneyin?", "Copy failed, retry?");
-                // Store failed operation for retry logic
+            }
+            let pct = tracker.step();
+            // Her öğede yüzde değiştiyse bandı güncelle (gerçek ilerleme).
+            if pct != last_pct {
+                last_pct = pct;
+                self.update_progress(done, total_files);
+            }
+            if result.is_err() {
+                failed = Some(src);
                 break;
             }
         }
 
-        if clipboard.cut && done > 0 {
+        if was_cut && done > 0 {
             clipboard.count = 0;
             clipboard.cut = false;
         }
         self.refresh_from_vfs(vfs);
+        self.finish_progress();
+        if let Some(failed_path) = failed {
+            let name = failed_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(failed_path.as_str());
+            let mut msg = TextBuf::new();
+            msg.push_str(crate::gui::ui_text("Kopyalama hatası: ", "Copy failed: "));
+            msg.push_str(name);
+            self.set_status_text(msg.as_str());
+            return done;
+        }
         self.status = if done > 0 {
-            if clipboard.cut {
-                crate::gui::ui_text("Tamamlandi.", "Completed.")
+            if was_cut {
+                crate::gui::ui_text("Tamamlandı.", "Completed.")
             } else {
-                crate::gui::ui_text("Yapistirma tamamlandi.", "Paste completed.")
+                crate::gui::tr(crate::gui::I18nKey::PasteCompleted)
             }
         } else {
-            crate::gui::ui_text("Yapistirilecek oge yok.", "Nothing to paste.")
+            crate::gui::tr(crate::gui::I18nKey::NothingToPaste)
         };
         done
+    }
+
+    /// İşlem bandını başlatır (başlangıç yüzdesi ile).
+    pub fn begin_progress(&mut self, label: (&'static str, &'static str), total: usize, start: u8) {
+        let mut p = OpProgress::new(label, total);
+        p.set_percent(start);
+        self.progress = Some(p);
+    }
+
+    /// İşlem bandını başlatır ve varsa sistem toast kuyruğunda da eşzamanlı
+    /// bir ilerleme bildirimi açar. İki gösterim aynı yüzdeyi paylaşır.
+    pub fn begin_progress_with_toast(
+        &mut self,
+        compositor: &mut MinGuiCompositor,
+        label: (&'static str, &'static str),
+        detail: &str,
+        total: usize,
+        start: u8,
+    ) {
+        self.begin_progress(label, total, start);
+        let title = if crate::gui::ui_english() {
+            label.1
+        } else {
+            label.0
+        };
+        let slot = compositor.push_progress_toast(
+            crate::gui::ToastKind::Info,
+            title,
+            detail,
+            crate::monotonic_ms(),
+            start,
+        );
+        self.progress_toast = Some(slot);
+    }
+
+    /// İşlem bandındaki adım ilerlemesini günceller.
+    pub fn update_progress(&mut self, done: usize, total: usize) {
+        if let Some(p) = self.progress.as_mut() {
+            p.set_steps(done, total);
+        }
+    }
+
+    /// İşlem bandındaki yüzdeyi doğrudan ayarlar.
+    pub fn set_progress_percent(&mut self, pct: u8) {
+        if let Some(p) = self.progress.as_mut() {
+            p.set_percent(pct);
+        }
+    }
+
+    /// Toast ilerleme bildirimini bandın güncel yüzdesiyle eşitler.
+    pub fn sync_progress_toast(&self, compositor: &mut MinGuiCompositor) {
+        if let (Some(slot), Some(p)) = (self.progress_toast, self.progress) {
+            compositor.update_toast_progress(slot, p.percent);
+        }
+    }
+
+    /// İşlem bandını kapatır (işlem bitti/başarısız).
+    pub fn finish_progress(&mut self) {
+        self.progress = None;
+        self.progress_toast = None;
+    }
+
+    /// İşlem bandını kapatır ve ilgili toast'u sonuç/başarısızlık durumuna
+    /// getirir (`ok == false` ise hata bildirimi).
+    pub fn finish_progress_with_toast(
+        &mut self,
+        compositor: &mut MinGuiCompositor,
+        message: &str,
+        ok: bool,
+    ) {
+        if let Some(slot) = self.progress_toast.take() {
+            let now = crate::monotonic_ms();
+            if ok {
+                compositor.complete_toast_progress(slot, message, now);
+            } else {
+                compositor.fail_toast_progress(slot, message, now);
+            }
+        }
+        self.progress = None;
+    }
+
+    /// Arka planda uzun bir işlem sürüyor mu?
+    pub fn is_busy(&self) -> bool {
+        self.progress.is_some()
     }
 
     /// İmza adı/paketi verilen dosyayı doğrudan oluşturur (onay sorulmaz).
@@ -1703,6 +2111,18 @@ impl FileManagerApp {
             return false;
         }
         let is_trash = self.path() == crate::fs::vfs::TRASH_DIR;
+        // Seçilen öğe sayısını say ve ilerleme çubuğu başlat.
+        let total = (0..self.file_count)
+            .filter(|&i| {
+                self.selected_items[i]
+                    && self.search_matches(i)
+                    && self.files[i].display_name() != ".."
+            })
+            .count();
+        let mut done = 0usize;
+        if total > 0 {
+            self.begin_progress(("Siliniyor", "Deleting"), total, 0);
+        }
         let mut any = false;
         for i in (0..self.file_count).rev() {
             if !self.selected_items[i] || !self.search_matches(i) {
@@ -1727,7 +2147,14 @@ impl FileManagerApp {
             } else {
                 vfs.move_to_trash(&full_path)
             };
+            done += 1;
+            if total > 0 {
+                self.update_progress(done, total);
+            }
             any |= ok;
+        }
+        if total > 0 {
+            self.finish_progress();
         }
         if any {
             self.refresh_from_vfs(vfs);
@@ -1849,7 +2276,6 @@ impl FileManagerApp {
     /// Geri Dönüşüm Kutusu'nda seçili öğeyi önceki konumuna değil, `/root/Documents`
     /// klasörüne geri yükler. Öğe adı çakışırsa numaralandırılır.
     pub fn restore_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
-        let _busy = crate::gui::screens::BusyScope::new();
         if self.path() != crate::fs::vfs::TRASH_DIR {
             return false;
         }
@@ -1857,14 +2283,18 @@ impl FileManagerApp {
             return false;
         }
         let item = &self.files[self.selected_idx];
-        let name = item.display_name();
+        let name = String::from(item.display_name());
         if name == ".." {
             return false;
         }
+        // Tek öğelik geri yükleme için gerçek ilerleme çubuğu göster.
+        self.begin_progress(("Geri yükleniyor", "Restoring"), 1, 0);
         let mut trash_path = String::from(crate::fs::vfs::TRASH_DIR);
         trash_path.push('/');
-        trash_path.push_str(name);
+        trash_path.push_str(&name);
         let ok = vfs.restore_from_trash(&trash_path, "/root/Documents");
+        self.update_progress(1, 1);
+        self.finish_progress();
         if ok {
             self.refresh_from_vfs(vfs);
             self.status = crate::gui::ui_text("Öğe geri yüklendi.", "Item restored.");
@@ -1876,8 +2306,20 @@ impl FileManagerApp {
 
     /// Geri Dönüşüm Kutusu'nu boşaltır.
     pub fn empty_trash(&mut self, vfs: &mut VirtualFileSystem) -> usize {
-        let _busy = crate::gui::screens::BusyScope::new();
+        // Boşaltma tek bir VFS çağrısıdır ama disk yazımını bekler: ENGEL
+        // yerine gerçek bir adım ilerlemesi göster (öğe sayısı kadar).
+        let total = vfs.trash_count();
+        self.begin_progress(
+            ("Çöp kutusu boşaltılıyor", "Emptying Recycle Bin"),
+            total,
+            0,
+        );
+        if total > 0 {
+            self.set_progress_percent(50);
+        }
         let n = vfs.empty_trash();
+        self.update_progress(total, total);
+        self.finish_progress();
         if self.path() == crate::fs::vfs::TRASH_DIR {
             self.refresh_from_vfs(vfs);
         }
@@ -1959,6 +2401,56 @@ impl FileManagerApp {
         p
     }
 
+    /// Backspace: üst klasöre çıkar (kök dizinde etkisizdir).
+    ///
+    /// Dönen değer, yol gerçekten değiştiyse `true`; bu durumda çağıran
+    /// `refresh_from_vfs` ile listeyi yenilemelidir.
+    pub fn go_up(&mut self) -> bool {
+        let cur = self.path();
+        if cur == "/" || cur.is_empty() {
+            return false;
+        }
+        let parent = match cur.rfind('/') {
+            Some(0) => "/",
+            Some(pos) => &cur[..pos],
+            None => "/",
+        };
+        let parent = String::from(parent);
+        if parent == cur {
+            return false;
+        }
+        self.set_path(&parent);
+        true
+    }
+
+    /// Seçili (veya seçim yoksa imleçteki) öğelerin tam yollarını döndürür.
+    /// `..` öğesi her zaman atlanır.
+    pub fn selected_paths(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let base = String::from(self.path());
+        let has_sel = self.selected_items.iter().any(|&s| s);
+        for i in 0..self.file_count {
+            if self.files[i].display_name() == ".." {
+                continue;
+            }
+            let picked = if has_sel {
+                self.selected_items[i]
+            } else {
+                i == self.selected_idx
+            };
+            if !picked {
+                continue;
+            }
+            let mut p = base.clone();
+            if !p.ends_with('/') {
+                p.push('/');
+            }
+            p.push_str(self.files[i].display_name());
+            out.push(p);
+        }
+        out
+    }
+
     pub fn row_count(&self) -> usize {
         self.file_count
     }
@@ -2031,7 +2523,7 @@ impl FileManagerApp {
         my: usize,
     ) -> Option<DropTarget> {
         let sidebar_w = 110;
-        let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
+        let sidebar_h = win_h.saturating_sub(status_h() + 60);
 
         // Sidebar drop target check
         if mx >= win_x + 6
@@ -2047,7 +2539,7 @@ impl FileManagerApp {
 
         // File list drop target check (must be a directory and not the item being dragged)
         let list_top = win_y + LIST_TOP;
-        let list_bottom = win_y + win_h - STATUS_H;
+        let list_bottom = win_y + win_h - status_h();
         for i in 0..self.file_count {
             if self.files[i].is_dir
                 && Some(i) != self.drag_item
@@ -2364,7 +2856,7 @@ impl FileManagerApp {
         let list_x = Self::list_x(win_x);
         let list_w = self.list_width(win_w);
         let list_top = win_y + LIST_TOP;
-        let list_bottom = win_y + win_h - STATUS_H;
+        let list_bottom = win_y + win_h - status_h();
         let list_view_h = list_bottom.saturating_sub(list_top);
         let content_h = self.content_height(win_w);
         let sy = scroll.y.min(content_h.saturating_sub(list_view_h));
@@ -2417,8 +2909,8 @@ impl FileManagerApp {
             }
         }
 
-        // Üst klasör butonu (kullanılabilirse)
-        if path != "/" && path != "/desktop" {
+        // Üst klasör butonu (kullanılabilirse ve ekranda yer varsa)
+        if path != "/" && path != "/desktop" && win_w >= 300 {
             let up_label = crate::gui::ui_text("⬆ Üst Klasör", "⬆ Parent");
             let up_w = MinGuiCompositor::text_width(up_label, 1) + 16;
             let up_x = win_x + win_w - up_w - 120; // Sağ tarafta, arama kutusunun solunda
@@ -2500,7 +2992,7 @@ impl FileManagerApp {
         }
 
         // Sol Gezinti Paneli (Sidebar) — Sürücüler ve Hızlı Klasörler
-        let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
+        let sidebar_h = win_h.saturating_sub(status_h() + 60);
         fb.draw_rect(
             win_x + 6,
             win_y + 60,
@@ -2708,6 +3200,43 @@ impl FileManagerApp {
         }
 
         // Dosya ve Klasör Listesi / Izgarası.
+        if self.visible_count() == 0 {
+            let empty_y = list_top + 10;
+            let empty_h = list_view_h.saturating_sub(20);
+            let empty_title = if self.search_len > 0 {
+                crate::gui::ui_text("Eşleşen dosya yok", "No matching files")
+            } else {
+                crate::gui::tr(crate::gui::I18nKey::EmptyFolder)
+            };
+            let empty_sub = if self.search_len > 0 {
+                crate::gui::ui_text(
+                    "Farklı bir arama terimi deneyin.",
+                    "Try a different search query.",
+                )
+            } else {
+                crate::gui::ui_text(
+                    "Yeni dosya veya klasör ekleyebilirsiniz.",
+                    "You can add new files or folders.",
+                )
+            };
+            let action_lbl = if self.search_len > 0 {
+                Some(crate::gui::tr(crate::gui::I18nKey::Refresh))
+            } else {
+                Some(crate::gui::tr(crate::gui::I18nKey::CreateFolder))
+            };
+            crate::gui::ui_helpers::draw_empty_state(
+                fb,
+                list_x,
+                empty_y,
+                list_w,
+                empty_h,
+                crate::gui::ui_helpers::EmptyStateIcon::Folder,
+                empty_title,
+                empty_sub,
+                action_lbl,
+                false,
+            );
+        }
         let mut visible_idx = 0usize;
         for i in 0..self.file_count {
             if !self.search_matches(i) {
@@ -2720,6 +3249,9 @@ impl FileManagerApp {
             }
             let file = &self.files[i];
             let is_sel = self.is_row_selected(i);
+            // Klavye imleci: seçim olmasa da görünür olsun (odak halkası) — görme
+            // engeli dışındaki "hangi öğe odakta?" sorusu klavyeyle cevaplanır.
+            let is_cursor = self.is_cursor_row(i);
             let is_drag_target =
                 self.drag_active && self.drag_target == Some(DropTarget::Folder(i));
             let is_drag_source = self.drag_active && self.drag_item == Some(i);
@@ -2762,6 +3294,10 @@ impl FileManagerApp {
                     if self.focused_control == 5 {
                         fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_BLUE);
                     }
+                } else if is_cursor && self.focused_control == 5 {
+                    // Odakta ama seçili değil (ör. Ctrl ile seçimden çıkarıldı):
+                    // noktalı olmayan ince bir imleç halkası çiz.
+                    fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::TEXT_MUTED);
                 }
 
                 if file.is_dir {
@@ -2910,8 +3446,13 @@ impl FileManagerApp {
             self.render_preview(fb, win_x, win_y, win_w, win_h);
         }
 
+        // Uzun işlem bandı (kopyalama/silme/küçük resim/boşaltma): gerçek yüzde.
+        if let Some(p) = self.progress {
+            Self::render_progress_banner(fb, p, win_x, win_y, win_w, win_h);
+        }
+
         // Alt Durum Çubuğu
-        let status_y = win_y + win_h - STATUS_H + 6;
+        let status_y = win_y + win_h - status_h() + 6;
         fb.draw_rect(win_x + 6, status_y, win_w - 12, 18, Color::TASKBAR_BG);
         let mut sb = TextBuf::new();
         if self.rename_active {
@@ -3052,13 +3593,20 @@ impl FileManagerApp {
         let mut yy = py + 26;
 
         if self.preview_kind == PreviewKind::Empty {
-            MinGuiCompositor::draw_string_clipped(
+            crate::gui::ui_helpers::draw_empty_state(
                 fb,
                 inner_x,
                 yy,
-                crate::gui::ui_text("Seçim yok", "No selection"),
-                Color::TEXT_MUTED,
-                clip,
+                inner_w,
+                ph.saturating_sub(34),
+                crate::gui::ui_helpers::EmptyStateIcon::NoSelection,
+                crate::gui::tr(crate::gui::I18nKey::NoSelection),
+                crate::gui::ui_text(
+                    "Önizlemek için bir öğe seçin.",
+                    "Select an item to preview.",
+                ),
+                None,
+                false,
             );
             return;
         }
@@ -3140,6 +3688,55 @@ impl FileManagerApp {
     }
 
     /// Onay iletişim kutusunu çizer.
+    /// Uzun işlem bandını durum çubuğunun hemen üstünde çizer.
+    ///
+    /// Kart: işlem adı + yüzde + adım sayısı + yuvarlatılmış ilerleme çubuğu.
+    fn render_progress_banner(
+        fb: &mut Framebuffer,
+        p: OpProgress,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
+        let margin = 12usize;
+        let banner_w = win_w.saturating_sub(margin * 2);
+        if banner_w < 80 || win_h < STATUS_H + 80 {
+            return;
+        }
+        let banner_h = 44usize;
+        let bx = win_x + margin;
+        let by = win_y + win_h - STATUS_H - banner_h - 6;
+        fb.draw_shadow(bx, by, banner_w, banner_h, Color::SHADOW);
+        fb.draw_rounded_rect(bx, by, banner_w, banner_h, 6, Color::TASKBAR_BG);
+        fb.draw_rounded_rect_outline(bx, by, banner_w, banner_h, 6, Color::ACCENT_BLUE);
+
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            bx + 10,
+            by + 6,
+            p.label_str(),
+            Color::TEXT_MAIN,
+            (bx + 8, by + 4, banner_w.saturating_sub(120), 16),
+        );
+        let detail = p.detail_text();
+        let dw = MinGuiCompositor::text_width(detail.as_str(), 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            bx + banner_w.saturating_sub(dw + 10),
+            by + 6,
+            detail.as_str(),
+            Color::TEXT_MUTED,
+        );
+        let bar = (
+            bx + 10,
+            by + banner_h.saturating_sub(16),
+            banner_w.saturating_sub(20),
+            6usize,
+        );
+        MinGuiCompositor::render_toast_progress_bar(fb, bar, p.percent, Color::ACCENT_BLUE);
+    }
+
     fn render_confirm_dialog(
         &self,
         fb: &mut Framebuffer,
@@ -3438,4 +4035,191 @@ pub fn format_size(bytes: usize, is_dir: bool) -> TextBuf {
         out.push_str(" B");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test listesi: ".." + üç dosya. `..` öğesi hiçbir zaman seçilmez.
+    fn sample_app() -> FileManagerApp {
+        let mut app = FileManagerApp::new();
+        let names = ["..", "a.txt", "b.txt", "c.txt"];
+        for (i, n) in names.iter().enumerate() {
+            let mut item = FileItem::empty();
+            item.name = n;
+            item.is_dir = *n == "..";
+            app.files[i] = item;
+        }
+        app.file_count = names.len();
+        app.selected_idx = 0;
+        app.selected_items = [false; MAX_ITEMS];
+        app.selection_anchor = 0;
+        app
+    }
+
+    #[test]
+    fn plain_down_moves_cursor_and_selects_only_it() {
+        let mut app = sample_app();
+        app.move_selection_down_ext(500, SelectMod::None);
+        assert_eq!(app.selected_idx, 1);
+        assert!(app.is_row_selected(1));
+        assert_eq!(app.selected_count(), 1);
+        app.move_selection_down_ext(500, SelectMod::None);
+        assert_eq!(app.selected_idx, 2);
+        assert!(app.is_row_selected(2));
+        assert!(!app.is_row_selected(1), "tek seçim öncekini bırakmalı");
+    }
+
+    #[test]
+    fn shift_arrows_build_a_range_from_the_anchor() {
+        let mut app = sample_app();
+        // İlk görünür öğeye in, çapayı orada kur.
+        app.move_selection_down_ext(500, SelectMod::None);
+        assert_eq!(app.selected_idx, 1);
+        app.move_selection_down_ext(500, SelectMod::Shift);
+        app.move_selection_down_ext(500, SelectMod::Shift);
+        assert_eq!(app.selected_idx, 3);
+        // Çapa sabit: 1..=3 aralığı seçili.
+        for i in 1..=3 {
+            assert!(app.is_row_selected(i), "satır {i} aralıkta olmalı");
+        }
+        assert!(!app.is_row_selected(0), "'..' seçilmemeli");
+        // Yukarı dönünce aralık daralır (çapa yine 1'de).
+        app.move_selection_up_ext(500, SelectMod::Shift);
+        assert_eq!(app.selected_idx, 2);
+        assert!(app.is_row_selected(1) && app.is_row_selected(2));
+        assert!(!app.is_row_selected(3));
+    }
+
+    #[test]
+    fn ctrl_arrows_move_the_cursor_without_touching_the_selection() {
+        let mut app = sample_app();
+        app.move_selection_down_ext(500, SelectMod::None); // a.txt seçili
+        app.move_selection_down_ext(500, SelectMod::Ctrl);
+        assert_eq!(app.selected_idx, 2);
+        assert!(app.is_row_selected(1), "Ctrl seçimi korumalı");
+        assert!(!app.is_row_selected(2), "Ctrl yeni satır seçmemeli");
+        assert!(app.is_cursor_row(2), "imleç yeni satırda");
+    }
+
+    #[test]
+    fn ctrl_shift_toggles_individual_rows() {
+        let mut app = sample_app();
+        app.move_selection_down_ext(500, SelectMod::None); // 1 seçili
+        app.move_selection_down_ext(500, SelectMod::CtrlShift); // 2 ekle
+        assert!(app.is_row_selected(1) && app.is_row_selected(2));
+        app.move_selection_up_ext(500, SelectMod::CtrlShift); // 1 çıkar
+        assert!(!app.is_row_selected(1));
+        assert!(app.is_row_selected(2));
+    }
+
+    #[test]
+    fn select_all_skips_parent_entry_and_clear_removes_it() {
+        let mut app = sample_app();
+        assert_eq!(app.select_all(), 3);
+        assert_eq!(app.selected_count(), 3);
+        assert!(!app.is_row_selected(0));
+        assert!(app.clear_selection());
+        assert_eq!(app.selected_count(), 0);
+        assert!(!app.clear_selection(), "boş seçimi temizlemek etkisiz");
+    }
+
+    #[test]
+    fn home_and_end_respect_modifiers() {
+        let mut app = sample_app();
+        app.select_last_ext(SelectMod::None);
+        assert_eq!(app.selected_idx, 3);
+        app.select_first_ext(SelectMod::Shift);
+        assert_eq!(app.selected_idx, 1);
+        // 1..=3 aralığı seçili olmalı (çapa 3'te).
+        assert!(app.is_row_selected(1) && app.is_row_selected(3));
+    }
+
+    #[test]
+    fn go_up_walks_to_root_and_stops() {
+        let mut app = FileManagerApp::new();
+        app.set_path("/root/Documents");
+        assert_eq!(app.path(), "/root/Documents");
+        assert!(app.go_up());
+        assert_eq!(app.path(), "/root");
+        assert!(app.go_up());
+        assert_eq!(app.path(), "/");
+        assert!(!app.go_up(), "kök dizinde Backspace etkisiz");
+        assert_eq!(app.path(), "/");
+    }
+
+    #[test]
+    fn out_of_range_targets_are_ignored() {
+        let mut app = sample_app();
+        app.move_cursor_to(99, SelectMod::None);
+        assert_eq!(app.selected_idx, 0);
+        assert_eq!(app.selected_count(), 0);
+    }
+
+    #[test]
+    fn mod_is_derived_from_shift_and_ctrl_flags() {
+        assert_eq!(SelectMod::from_keys(false, false), SelectMod::None);
+        assert_eq!(SelectMod::from_keys(true, false), SelectMod::Shift);
+        assert_eq!(SelectMod::from_keys(false, true), SelectMod::Ctrl);
+        assert_eq!(SelectMod::from_keys(true, true), SelectMod::CtrlShift);
+        assert!(SelectMod::Shift.is_range());
+        assert!(!SelectMod::Ctrl.is_range());
+    }
+
+    #[test]
+    fn op_progress_is_monotonic_and_counts_steps() {
+        let mut p = OpProgress::new(("Kopyalanıyor", "Copying"), 4);
+        assert_eq!(p.percent, 0);
+        p.set_steps(1, 4);
+        assert_eq!(p.percent, 25);
+        // Geri sarma yüzdeyi düşürmez.
+        p.set_steps(0, 4);
+        assert_eq!(p.percent, 25);
+        p.set_steps(3, 4);
+        assert_eq!(p.percent, 75);
+        assert_eq!(p.done, 3);
+        p.set_steps(4, 4);
+        assert_eq!(p.percent, 100);
+        // Sıfır toplam = belirsiz işlem, %100'e yuvarlanır.
+        let mut z = OpProgress::new(("x", "x"), 0);
+        z.set_steps(0, 0);
+        assert_eq!(z.percent, 100);
+    }
+
+    #[test]
+    fn op_progress_detail_text_has_percent_and_steps() {
+        let mut p = OpProgress::new(("Siliniyor", "Deleting"), 8);
+        p.set_steps(2, 8);
+        assert_eq!(p.detail_text().as_str(), "25%  2/8");
+        let q = OpProgress::new(("x", "x"), 0);
+        assert_eq!(q.detail_text().as_str(), "0%");
+    }
+
+    #[test]
+    fn progress_banner_lifecycle() {
+        let mut app = sample_app();
+        assert!(!app.is_busy());
+        app.begin_progress(("Kopyalanıyor", "Copying"), 4, 0);
+        assert!(app.is_busy());
+        app.update_progress(2, 4);
+        assert_eq!(app.progress.map(|p| p.percent), Some(50));
+        app.finish_progress();
+        assert!(!app.is_busy());
+        assert!(app.progress.is_none());
+    }
+
+    #[test]
+    fn selected_paths_prefers_multi_selection() {
+        let mut app = sample_app();
+        app.move_cursor_to(1, SelectMod::None);
+        let single = app.selected_paths();
+        assert_eq!(single.len(), 1);
+        assert!(single[0].ends_with("/a.txt"), "yol: {}", single[0]);
+
+        app.select_all();
+        let many = app.selected_paths();
+        assert_eq!(many.len(), 3);
+        assert!(many.iter().all(|p| !p.ends_with("/..")));
+    }
 }

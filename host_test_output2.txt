@@ -1,0 +1,19 @@
+[BILGI] Font atlasÄ± Ã¼retimi iÃ§in cargo build Ã§alÄ±ÅŸtÄ±rÄ±lÄ±yor...
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+[BILGI] Font atlasÄ± dizini: D:\minos\target\x86_64-minos\debug\build\minos-kernel\72ca7503cfad1f9f\out
+[1/3] Cargo bagimliliklari indiriliyor...
+[2/3] Host testleri derleniyor...
+D:\minos\target\host-tests\deps\libadler2.rlib
+        miniz_oxide -> D:\minos\target\host-tests\deps\libminiz_oxide.rlib
+        brotli-decompressor -> D:\minos\target\host-tests\deps\libbrotli_decompressor.rlib
+        heapless -> D:\minos\target\host-tests\deps\libheapless.rlib
+error: linking with `link.exe` failed: exit code: 1104
+ |
+ = note: "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe" "/NOLOGO" "D:\\minos\\target\\host-tests\\rustcysaqF0\\symbols.o" "<17 object files omitted>" "D:\\minos\\target\\host-tests\\deps/{libminiz_oxide,libadler2}.rlib" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib/{libtest-*,libgetopts-*,librustc_std_workspace_std-*,libstd-*,libpanic_unwind-*,libcfg_if-*,libwindows_link-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libunwind-*,librustc_std_workspace_core-*}.rlib" "D:\\minos\\target\\host-tests\\deps/{libbrotli_decompressor,liballoc_no_stdlib,libheapless,libhash32,libbyteorder}.rlib" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib/{liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "kernel32.lib" "kernel32.lib" "kernel32.lib" "ntdll.lib" "userenv.lib" "ws2_32.lib" "dbghelp.lib" "synchronization.lib" "/defaultlib:msvcrt" "/NXCOMPAT" "/OUT:D:\\minos\\target\\host-tests\\host_tests.exe" "/OPT:REF,NOICF" "/DEBUG" "/PDBALTPATH:%_PDB%" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\intrinsic.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\liballoc.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libcore.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libstd.natvis"
+ = note: some arguments are omitted. use `--verbose` to show all linker arguments
+ = note: LINK : fatal error LNK1104: cannot open file 'D:\minos\target\host-tests\host_tests.exe'
+         
+System.Management.Automation.RemoteException
+error: aborting due to 1 previous error
+System.Management.Automation.RemoteException
+[HATA] Derleme basarisiz.

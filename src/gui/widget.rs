@@ -13,7 +13,7 @@ use core::any::Any;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::drivers::video::Framebuffer;
-use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
+use crate::gui::{gap_small, pad_medium, sp, Color, MinGuiCompositor, TextBuf};
 
 static NEXT_WIDGET_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -400,8 +400,6 @@ fn text_top(rect: Rect) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Çocuk denetimleri tek eksende yerleştiren bileşen.
-pub const DEFAULT_PADDING: usize = 8;
-
 pub struct Container {
     id: u32,
     rect: Rect,
@@ -419,8 +417,8 @@ impl Container {
             id: next_id(),
             rect: Rect::default(),
             axis,
-            padding: Insets::all(DEFAULT_PADDING),
-            spacing: sp(6),
+            padding: Insets::all(pad_medium()),
+            spacing: gap_small(),
             width: Sizing::Content,
             height: Sizing::Content,
             children: Vec::new(),

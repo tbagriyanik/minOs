@@ -106,11 +106,22 @@ static mut CARD_DMA: u8 = 0;
 // Yardımcılar
 // ---------------------------------------------------------------------------
 
+/// `driver:ne2000` hedefli INFO kayıtları; `log=driver:ne2000:off` ile susturulur.
+#[inline]
+fn ne2k_log_enabled() -> bool {
+    crate::logging::enabled(crate::logging::LEVEL_INFO, "driver:ne2000")
+}
+
 fn print(s: &str) {
-    crate::serial::print(s);
+    if ne2k_log_enabled() {
+        crate::serial::print(s);
+    }
 }
 
 fn print_hex(v: u8) {
+    if !ne2k_log_enabled() {
+        return;
+    }
     let hex = b"0123456789ABCDEF";
     crate::serial::write_byte(hex[(v >> 4) as usize]);
     crate::serial::write_byte(hex[(v & 0xF) as usize]);

@@ -12,7 +12,6 @@
 //! geçişleri doğrulanır.
 
 use crate::arch::x86_64::sync::SpinMutex;
-use crate::boot::console::serial_print;
 
 /// İzlenen donanım sürücüsü kimlikleri.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -313,9 +312,8 @@ fn update(id: DriverId, f: impl FnOnce(&mut DriverStatusEntry)) {
 /// uzunluk sınırını kullanır.
 fn log_status(id: DriverId, phase: DriverPhase, elapsed_ms: u64, code: u16, detail: &str) {
     let clamped = elapsed_ms.min(u32::MAX as u64) as u32;
-    let line = crate::drivers::api::log_line(id, phase, clamped, code, detail);
-    serial_print(&line);
-    serial_print("\n");
+    let _line = crate::drivers::api::log_line(id, phase, clamped, code, detail);
+    crate::kinfo!("driver", "{}\n", _line);
 }
 
 /// Şu anki monotonik zaman (ms). `probe_start` ile birlikte kullanılır.

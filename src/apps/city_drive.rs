@@ -1475,8 +1475,8 @@ impl CityDriveApp {
         }
 
         // İçerik alanı pencere başlık çubuğunun altında kalır.
-        let top = win_y + crate::gui::titlebar_h();
-        let view_h = win_h.saturating_sub(crate::gui::titlebar_h() + 1);
+        let top = win_y + crate::gui::scaled_titlebar_h();
+        let view_h = win_h.saturating_sub(crate::gui::scaled_titlebar_h() + 1);
         if view_h < 64 {
             return true;
         }

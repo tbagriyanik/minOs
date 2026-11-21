@@ -1030,9 +1030,10 @@ impl Http2Connection {
                                 .cert_error()
                                 .map(|e| alloc::format!("{:?}", e))
                                 .unwrap_or_else(|| "bilinmeyen hata".to_string());
-                            crate::serial_print(&alloc::format!(
+                            crate::kerror!(
+                                "net",
                                 "[HTTPS] {host}: sertifika doğrulama başarısız: {err_txt}\n"
-                            ));
+                            );
                             return Err(super::http::E_CERT);
                         }
 
@@ -1049,9 +1050,7 @@ impl Http2Connection {
                 if let Ok(v6) = socket::resolve_host_aaaa(host) {
                     let fd6 =
                         socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {
-                            crate::serial_print("[H2v6] socket oluşturulamadı: ");
-                            crate::serial_print(&e.to_string());
-                            crate::serial_print("\n");
+                            crate::kwarn!("net", "[H2v6] socket oluşturulamadı: {}\n", e);
                         })?;
                     let _ = socket::set_timeout(fd6, 8000);
                     if socket::connect_v6(fd6, v6, port).is_ok() {
@@ -1070,9 +1069,7 @@ impl Http2Connection {
                 let ip = socket::resolve_host(host)?;
                 let fd4 =
                     socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
-                        crate::serial_print("[H2] socket oluşturulamadı: ");
-                        crate::serial_print(&e.to_string());
-                        crate::serial_print("\n");
+                        crate::kwarn!("net", "[H2] socket oluşturulamadı: {}\n", e);
                     })?;
                 let _ = socket::set_timeout(fd4, 8000);
                 socket::connect(fd4, ip, port).inspect_err(|_| {

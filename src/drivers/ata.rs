@@ -162,8 +162,11 @@ fn report_io_progress(done: usize, total: usize) {
     }
 }
 
+/// `driver:ata` hedefli INFO kayıtları; `log=driver:ata:off` ile susturulur.
 fn serial(s: &str) {
-    crate::serial::print(s);
+    if crate::logging::enabled(crate::logging::LEVEL_INFO, "driver:ata") {
+        crate::serial::print(s);
+    }
 }
 
 fn print_num(mut v: u64) {

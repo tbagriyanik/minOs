@@ -126,11 +126,17 @@ mod heapless_compat {
 #[cfg(test)]
 use heapless_compat::{HeaplessString, HeaplessVec};
 
-/// Seri port tanılama çıktısı. Host testlerinde (`--test` modu) `crate::serial`
-/// bulunmadığından çağrı sessizce atlanır.
+/// TLS tanılama çıktısı `driver:tls` hedefli debug seviyesine bağlıdır;
+/// `log=driver:tls:trace` ile açılır, varsayılanda `debug` genel seviyeye
+/// tabi olarak susturulabilir. Parça parça yazılan mesajlar bozulmasın diye
+/// doğrudan seri çıktıya süzgeç uygulanır (seviye öneki eklenmez).
+/// Host testlerinde (`--test` modu) `crate::serial` bulunmadığından çağrı
+/// sessizce atlanır.
 #[cfg(not(test))]
 fn serial_print(text: &str) {
-    crate::serial::print(text);
+    if crate::logging::enabled(crate::logging::LEVEL_DEBUG, "driver:tls") {
+        crate::serial::print(text);
+    }
 }
 
 #[cfg(test)]

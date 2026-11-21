@@ -1,5 +1,5 @@
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor};
+use crate::gui::{scaled_statusbar_h, scaled_toolbar_h, Color, MinGuiCompositor};
 
 /// Tuval üzerinde tutulabilecek en fazla nokta.
 const MAX_POINTS: usize = 4096;
@@ -9,8 +9,16 @@ const MAX_BRUSH_SIZE: usize = 24;
 /// Silginin yarıçapı (px).
 const ERASER_RADIUS: usize = 14;
 /// Araç çubuğu yüksekliği (px). Pencere içi tuvalin üst boşluğu buradan gelir.
-pub const TOOLBAR_H: usize = 82;
-pub const STATUS_H: usize = 24;
+pub const TOOLBAR_H: usize = 0; // Use scaled_toolbar_h() instead
+pub const STATUS_H: usize = 0; // Use scaled_statusbar_h() instead
+
+pub fn toolbar_h() -> usize {
+    scaled_toolbar_h()
+}
+
+pub fn status_h() -> usize {
+    scaled_statusbar_h()
+}
 /// Tuval renkleri tema jetonu değildir; seçilen RGB değerleri çizimde ve BMP'de sabit kalır.
 pub const PALETTE: [u32; 4] = [0x0078D7, 0xE53935, 0x2E8B57, 0x000000];
 /// Renk seçicide sunulan geniş palet (6 x 4).
@@ -190,7 +198,7 @@ impl PaintApp {
     }
     /// Tuvalin başlangıç Y koordinatı (pencere içi, araç çubuğunun altı).
     pub fn canvas_y() -> usize {
-        TOOLBAR_H
+        toolbar_h()
     }
 
     /// Tuval alanının (x, y, w, h) pencere içi ölçülerini hesaplar.
@@ -198,7 +206,7 @@ impl PaintApp {
         let x = Self::canvas_x();
         let y = Self::canvas_y();
         let cw = w.saturating_sub(16);
-        let ch = h.saturating_sub(TOOLBAR_H + STATUS_H + 6);
+        let ch = h.saturating_sub(toolbar_h() + status_h() + 6);
         (x, y, cw, ch)
     }
 

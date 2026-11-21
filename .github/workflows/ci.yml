@@ -53,6 +53,16 @@ jobs:
             -Zbuild-std=core,alloc \
             -Zbuild-std-features=compiler-builtins-mem
 
+      - name: Clippy Kernel (no_std / x86_64-minos, Blocking)
+        # Çekirdek kodu host hedefinden farklı cfg yolları derler; ayrı
+        # lint kapısı olmadan no_std'e özgü uyarılar CI'dan kaçabilir.
+        run: |
+          cargo clippy \
+            --target x86_64-minos.json \
+            -Zbuild-std=core,alloc \
+            -Zbuild-std-features=compiler-builtins-mem \
+            -- -D warnings
+
       - name: Build Kernel (Release)
         run: cargo build --release
 

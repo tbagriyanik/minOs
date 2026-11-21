@@ -220,7 +220,10 @@ pub fn init() {
         return;
     }
 
-    crate::serial::print("[CAMERA] UVC (USB Video Class) kamera alt sistemi başlatılıyor...\n");
+    crate::kinfo!(
+        "driver:camera",
+        "[CAMERA] UVC (USB Video Class) kamera alt sistemi başlatılıyor...\n"
+    );
 
     // USB aygıtları arasında Class 0x0E (Video) arayüzü olup olmadığını denetle
     unsafe {
@@ -243,8 +246,9 @@ pub fn init() {
         CAMERA_DEVICE = cam;
     }
 
-    crate::serial::print(
-        "[CAMERA] UVC sürücüsü hazır (640x480 @ 30 FPS, YUY2 / MJPEG destekli).\n",
+    crate::kinfo!(
+        "driver:camera",
+        "[CAMERA] UVC sürücüsü hazır (640x480 @ 30 FPS, YUY2 / MJPEG destekli).\n"
     );
 }
 

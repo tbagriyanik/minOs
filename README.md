@@ -6,8 +6,8 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-198%2C046%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-527%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-202%2C689%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-531%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Çekirdek `no_std` ve `no_main` kullanır; grafik masaüstü ve yerleşik uygulamalar sunar.
@@ -50,7 +50,7 @@ Host testlerini çalıştırmak için:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Son doğrulama: **527 host testi geçti** (`527 passed; 0 failed`). Projede toplam **198.378 Rust satırı** bulunur; bunun **187.726 satırı `src/`**, **4.874 satırı test kodudur**. Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
+Son doğrulama: **531 host testi geçti** (`531 passed; 0 failed`). Projede toplam **202.689 Rust satırı** bulunur; bunun **192.029 satırı `src/`**, **4.881 satırı test kodudur** (`target/` hariç). Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
 
 ## Özellikler
 

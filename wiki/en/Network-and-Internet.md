@@ -96,7 +96,8 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | `virtio_net.rs` | VirtIO-net | 🟢 Full |
 | `atheros.rs` | Atheros Ethernet | 🟡 Partial |
 | `marvell.rs` | Marvell Ethernet | 🟡 Partial |
-| `wifi.rs` | Wi-Fi 802.11 | 🔴 Skeleton |
+| `wifi.rs` | Wi-Fi 802.11 | 🟡 Partial |
+| `rtl8xxx.rs` | RTL8188/8192 USB Wi-Fi | 🟡 Partial |
 
 ### Driver selection
 

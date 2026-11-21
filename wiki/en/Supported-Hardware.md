@@ -34,10 +34,10 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA |
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
 | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Full | High-speed virtualized network adapter |
-| Atheros Ethernet | `atheros.rs` | 🟡 Partial | PCI detection + 2D mode-set skeleton, basic RX/TX; checksum offload and filters TODO |
-| Marvell Ethernet | `marvell.rs` | 🟡 Partial | PCI detection + 2D mode-set skeleton, basic RX/TX; checksum offload and filters TODO |
+| Atheros Ethernet | `atheros.rs` | 🟡 Partial | PCI detection + BDF/MAC read; no RX/TX; filter/checksum-offload skeleton + `net diag` readback self-test; real card validation pending |
+| Marvell Ethernet | `marvell.rs` | 🟡 Partial | PCI detection + BDF/MAC read; no RX/TX; filter/checksum-offload skeleton + `net diag` readback self-test; real card validation pending |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Partial | Command (0x01), ACL (0x02), Event (0x04), Inquiry, connection management (A2DP/GATT TODO) |
-| Wi-Fi (802.11 Wireless) | `wifi.rs` | 🟡 Partial | 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake, PCI/USB interface detection; real PHY/RX-TX not yet |
+| Wi-Fi (802.11 Wireless) | `wifi.rs` + `rtl8xxx.rs` | 🟡 Partial | 802.11 frame structures, WPA2-PSK PMK/PTK, 4-way handshake, PCI/USB detection; `rtl8xxx.rs` RTL8188/8192 USB detection + bulk/firmware skeleton; real PHY/RX-TX and scan validation pending |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Full | VMware PCI vendor `0x15AD`, MAC address, link polling |
 
 ---
@@ -57,11 +57,11 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | Hardware / Device | Driver Module | Status | Scope & Capabilities |
 | :--- | :--- | :---: | :--- |
 | ATA / IDE / ATAPI | `ata.rs` | 🟢 Full | LBA28/48, hard disk and CD/DVD-ROM |
-| AHCI / SATA | `ahci.rs` | 🟢 Full | SATA SSD and HDD block I/O |
-| NVMe SSD (PCIe M.2) | `nvme.rs` | 🟢 Full | NVMe command queues and block read/write |
+| AHCI / SATA | `ahci.rs` | 🟡 Partial | Real LBA48 DMA sector read/write; boot-time `[AHCI-TEST]` write+read self-test (backup-GPT guarded); QEMU/real hardware validation pending |
+| NVMe SSD (PCIe M.2) | `nvme.rs` | 🔴 Skeleton | PCI/MMIO detection only; no admin/I/O command queues or sector data path (read/write unsupported) |
 | VirtIO-blk (QEMU/KVM) | `virtio_blk.rs` | 🟢 Full | Virtual block device integration |
 | USB Mass Storage (Flash Drive) | `usb_mass_storage.rs` | 🟢 Full | Storage over the SCSI BOT transfer protocol |
-| SD / MMC Card | `sdmmc.rs` | 🟡 Partial | Sector reading active (CSD parsing and reliable writes WIP) |
+| SD / MMC Card | `sdmmc.rs` | 🟡 Partial | SDHCI PIO sector read + CSD v1/v2 capacity parsing; writes deliberately rejected (explicit error) |
 
 ---
 
@@ -83,7 +83,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | :--- | :--- | :---: | :--- |
 | Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Full | DMA stream rings, mixer, WAV/MP3 playback |
 | PC Speaker (PWM) | `audio.rs` | 🟢 Full | Hardware timer beeps and PWM tones |
-| USB Audio | `usb_audio.rs` | 🟡 Partial | Speaker/headphone output (microphone recording TODO) |
+| USB Audio | `usb_audio.rs` | 🟡 Partial | Generic USB transfer layer + UAC1/UAC2 format/Feature Unit parsing + isochronous playback/record streaming + volume/mute; real hardware validation pending |
 
 ---
 

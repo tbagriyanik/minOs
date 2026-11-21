@@ -96,7 +96,8 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 | `virtio_net.rs` | VirtIO-net | 🟢 Tam |
 | `atheros.rs` | Atheros Ethernet | 🟡 Kısmi |
 | `marvell.rs` | Marvell Ethernet | 🟡 Kısmi |
-| `wifi.rs` | Wi-Fi 802.11 | 🔴 İskelet |
+| `wifi.rs` | Wi-Fi 802.11 | 🟡 Kısmi |
+| `rtl8xxx.rs` | RTL8188/8192 USB Wi-Fi | 🟡 Kısmi |
 
 ### Sürücü seçimi
 

@@ -34,10 +34,10 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
 | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Tam | Yüksek hızlı sanallaştırılmış ağ adaptörü |
-| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
-| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
+| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + BDF/MAC okuma; RX/TX yok; filtre/checksum-offload iskeleti + `net diag` readback self-test; gerçek kart doğrulaması bekliyor |
+| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + BDF/MAC okuma; RX/TX yok; filtre/checksum-offload iskeleti + `net diag` readback self-test; gerçek kart doğrulaması bekliyor |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
-| Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
+| Wi-Fi (802.11 Kablosuz) | `wifi.rs` + `rtl8xxx.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PMK/PTK, 4-way el sıkışması, PCI/USB tespit; `rtl8xxx.rs` RTL8188/8192 USB algılama + bulk/firmware iskeleti; gerçek PHY/RX-TX ve tarama doğrulaması bekliyor |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Tam | VMware PCI vendor `0x15AD`, MAC adresi, bağlantı yoklaması |
 
 ---
@@ -57,11 +57,11 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | Donanım / Aygıt | Sürücü Modülü | Durum | Kapsam & Yetenekler |
 | :--- | :--- | :---: | :--- |
 | ATA / IDE / ATAPI | `ata.rs` | 🟢 Tam | LBA28/48, sabit disk ve CD/DVD-ROM |
-| AHCI / SATA | `ahci.rs` | 🟢 Tam | SATA SSD ve HDD blok I/O |
-| NVMe SSD (PCIe M.2) | `nvme.rs` | 🟢 Tam | NVMe komut kuyrukları ve blok okuma/yazma |
+| AHCI / SATA | `ahci.rs` | 🟡 Kısmi | Gerçek LBA48 DMA sektör okuma/yazma; boot'ta `[AHCI-TEST]` yaz+oku self-testi (yedek-GPT korumalı); QEMU/gerçek donanım doğrulaması bekliyor |
+| NVMe SSD (PCIe M.2) | `nvme.rs` | 🔴 İskelet | Yalnızca PCI/MMIO tespiti; admin/I/O komut kuyruğu ve sektör veri yolu yok (okuma/yazma desteklenmiyor) |
 | VirtIO-blk (QEMU/KVM) | `virtio_blk.rs` | 🟢 Tam | Sanal blok aygıtı entegrasyonu |
 | USB Mass Storage (Flash Disk) | `usb_mass_storage.rs` | 🟢 Tam | SCSI BOT transfer protokolü ile depolama |
-| SD / MMC Kart | `sdmmc.rs` | 🟡 Kısmi | Sektör okuma aktif (CSD ayrıştırma ve güvenilir yazma WIP) |
+| SD / MMC Kart | `sdmmc.rs` | 🟡 Kısmi | SDHCI PIO sektör okuma + CSD v1/v2 kapasite ayrıştırma; yazma bilinçli olarak reddedilir (açık hata döner) |
 
 ---
 
@@ -83,7 +83,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | :--- | :--- | :---: | :--- |
 | Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Tam | DMA akış halkaları, mikser, WAV/MP3 oynatma |
 | PC Speaker (PWM) | `audio.rs` | 🟢 Tam | Donanımsal zamanlayıcı bip ve PWM tonları |
-| USB Audio | `usb_audio.rs` | 🟡 Kısmi | Hoparlör/kulaklık çıkışı (mikrofon kaydı TODO) |
+| USB Audio | `usb_audio.rs` | 🟡 Kısmi | Genel USB transfer katmanı + UAC1/UAC2 format/Feature Unit ayrıştırma + isokronik playback/kayıt streaming + volume/mute; gerçek donanım doğrulaması bekliyor |
 
 ---
 

@@ -5,25 +5,110 @@ use crate::gui;
 use crate::gui::metrics::scaled_taskbar_h;
 
 /// Holds all application instances for the GUI.
+///
+/// Yerleşik (shell) uygulamalar — dosya yöneticisi, masaüstü dosyaları ve
+/// ayarlar — her zaman bellekte kalır; diğer kullanıcı uygulamaları yalnızca
+/// tıklanıp açıldığında yüklenir ve kapanınca bellekten düşürülür
+/// (`Option<App>`: `None` = bellekte yok).
 pub struct AppInstances {
+    /// Kabuk uygulamaları: her zaman yüklü.
     pub filemanager_app: apps::filemanager::FileManagerApp,
     pub desktop_files: apps::filemanager::FileManagerApp,
     pub settings_app: apps::settings::SystemSettings,
-    pub notepad_app: apps::notepad::NotepadApp,
+    /// Kullanıcı uygulamaları: `None` bellekte yok demektir.
+    pub notepad_app: Option<apps::notepad::NotepadApp>,
     pub browser_app: apps::browser::BrowserApp,
-    pub imageviewer_app: apps::imageviewer::ImageViewerApp,
+    pub imageviewer_app: Option<apps::imageviewer::ImageViewerApp>,
     pub musicplayer_app: apps::musicplayer::MusicPlayerApp,
-    pub videoplayer_app: apps::videoplayer::VideoPlayerApp,
+    pub videoplayer_app: Option<apps::videoplayer::VideoPlayerApp>,
     pub taskmgr_app: apps::taskmgr::TaskManagerApp,
-    pub calculator_app: apps::calculator::CalculatorApp,
+    pub calculator_app: Option<apps::calculator::CalculatorApp>,
     pub paint_apps: alloc::vec::Vec<Option<apps::paint::PaintApp>>,
-    pub terminal_app: apps::terminal::TerminalApp,
-    pub installer_app: apps::installer::InstallerApp,
-    pub viewer3d_app: apps::viewer3d::Viewer3DApp,
-    pub pkgmgr_app: apps::pkgmgr::PackageManagerApp,
-    pub fps_game_app: apps::game::GameApp,
-    pub fps_3d_app: apps::fps_game::FpsGameApp,
-    pub city_drive_app: apps::city_drive::CityDriveApp,
+    pub terminal_app: Option<apps::terminal::TerminalApp>,
+    pub installer_app: Option<apps::installer::InstallerApp>,
+    pub viewer3d_app: Option<apps::viewer3d::Viewer3DApp>,
+    pub pkgmgr_app: Option<apps::pkgmgr::PackageManagerApp>,
+    pub fps_game_app: Option<apps::game::GameApp>,
+    pub fps_3d_app: Option<apps::fps_game::FpsGameApp>,
+    pub city_drive_app: Option<apps::city_drive::CityDriveApp>,
+}
+
+impl AppInstances {
+    /// Uygulama kimliğine göre örneğin yüklü olup olmadığını döner.
+    /// Kabuk uygulamaları (0, 1, 3, 5, 7) ve kontrol paneli (14, durum global)
+    /// her zaman yüklü sayılır; boya pencereleri (9) ayrı `paint_apps` dizisinde
+    /// tutulur.
+    pub fn is_loaded(&self, app_id: usize) -> bool {
+        match app_id {
+            0 | 1 | 3 | 5 | 7 | 14 => true,
+            2 => self.notepad_app.is_some(),
+            4 => self.imageviewer_app.is_some(),
+            6 => self.videoplayer_app.is_some(),
+            8 => self.calculator_app.is_some(),
+            10 => self.terminal_app.is_some(),
+            11 => self.installer_app.is_some(),
+            12 => self.viewer3d_app.is_some(),
+            13 => self.pkgmgr_app.is_some(),
+            15 => self.fps_game_app.is_some(),
+            16 => self.fps_3d_app.is_some(),
+            17 => self.city_drive_app.is_some(),
+            _ => false,
+        }
+    }
+
+    /// Uygulamayı ilk kez belleğe yükler (constructor çağrısı). Zaten yüklüyse
+    /// hiçbir şey yapmaz. VFS gerektiren başlatma (paket listesi, sürücüler,
+    /// imişaretleri) burada yapılır.
+    pub fn load(&mut self, app_id: usize, vfs: &crate::fs::vfs::VirtualFileSystem) {
+        if self.is_loaded(app_id) {
+            return;
+        }
+        match app_id {
+            2 => self.notepad_app = Some(apps::notepad::NotepadApp::new()),
+            4 => self.imageviewer_app = Some(apps::imageviewer::ImageViewerApp::new()),
+            6 => self.videoplayer_app = Some(apps::videoplayer::VideoPlayerApp::new()),
+            8 => self.calculator_app = Some(apps::calculator::CalculatorApp::new()),
+            10 => {
+                let mut terminal = apps::terminal::TerminalApp::new();
+                terminal.init_banner();
+                self.terminal_app = Some(terminal);
+            }
+            11 => {
+                let mut installer = apps::installer::InstallerApp::new();
+                installer.refresh_drives();
+                self.installer_app = Some(installer);
+            }
+            12 => self.viewer3d_app = Some(apps::viewer3d::Viewer3DApp::new()),
+            13 => {
+                let mut pkgmgr = apps::pkgmgr::PackageManagerApp::new();
+                pkgmgr.refresh_installed(vfs);
+                self.pkgmgr_app = Some(pkgmgr);
+            }
+            15 => self.fps_game_app = Some(apps::game::GameApp::new()),
+            16 => self.fps_3d_app = Some(apps::fps_game::FpsGameApp::new()),
+            17 => self.city_drive_app = Some(apps::city_drive::CityDriveApp::new()),
+            _ => {}
+        }
+    }
+
+    /// Uygulama örneğini bellekten düşür (serbest bırak). Son pencere kapatıldığında
+    /// çağrılır; kabuk uygulamaları için hiçbir şey yapmaz.
+    pub fn unload(&mut self, app_id: usize) {
+        match app_id {
+            2 => self.notepad_app = None,
+            4 => self.imageviewer_app = None,
+            6 => self.videoplayer_app = None,
+            8 => self.calculator_app = None,
+            10 => self.terminal_app = None,
+            11 => self.installer_app = None,
+            12 => self.viewer3d_app = None,
+            13 => self.pkgmgr_app = None,
+            15 => self.fps_game_app = None,
+            16 => self.fps_3d_app = None,
+            17 => self.city_drive_app = None,
+            _ => {}
+        }
+    }
 }
 
 /// Kurulum çıktısı: tüm uygulama örnekleri ve pencere yöneticisi.
@@ -53,21 +138,21 @@ pub fn init_apps(
             filemanager_app: apps::filemanager::FileManagerApp::new(),
             desktop_files: apps::filemanager::FileManagerApp::new(),
             settings_app: apps::settings::SystemSettings::default(),
-            notepad_app: apps::notepad::NotepadApp::new(),
+            notepad_app: None,
             browser_app: apps::browser::BrowserApp::new(),
-            imageviewer_app: apps::imageviewer::ImageViewerApp::new(),
+            imageviewer_app: None,
             musicplayer_app: apps::musicplayer::MusicPlayerApp::new(),
-            videoplayer_app: apps::videoplayer::VideoPlayerApp::new(),
+            videoplayer_app: None,
             taskmgr_app: apps::taskmgr::TaskManagerApp::new(),
-            calculator_app: apps::calculator::CalculatorApp::new(),
+            calculator_app: None,
             paint_apps: (0..gui::MAX_WINDOWS).map(|_| None).collect(),
-            terminal_app: apps::terminal::TerminalApp::new(),
-            installer_app: apps::installer::InstallerApp::new(),
-            viewer3d_app: apps::viewer3d::Viewer3DApp::new(),
-            pkgmgr_app: apps::pkgmgr::PackageManagerApp::new(),
-            fps_game_app: apps::game::GameApp::new(),
-            fps_3d_app: apps::fps_game::FpsGameApp::new(),
-            city_drive_app: apps::city_drive::CityDriveApp::new(),
+            terminal_app: None,
+            installer_app: None,
+            viewer3d_app: None,
+            pkgmgr_app: None,
+            fps_game_app: None,
+            fps_3d_app: None,
+            city_drive_app: None,
         },
         compositor: gui::MinGuiCompositor::new(),
     });
@@ -117,9 +202,8 @@ pub fn init_apps(
 
     let _ = apps_all.browser_app.load_bookmarks_from_vfs(&fs_mgr.vfs);
 
-    apps_all.terminal_app.init_banner();
-    apps_all.installer_app.refresh_drives();
-    apps_all.pkgmgr_app.refresh_installed(&fs_mgr.vfs);
+    // terminal/installer/pkgmgr başlatımı (banner, sürücüler, paket listesi)
+    // artık ilk açılışta `AppInstances::load` ile yapılır; bellekte tutulmazlar.
     compositor.sync_installed_apps(&fs_mgr.vfs);
 
     setup

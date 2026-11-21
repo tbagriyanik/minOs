@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-202%2C689%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-200%2C141%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![Host Tests](https://img.shields.io/badge/Host%20Tests-543%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
@@ -14,6 +14,8 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 
 ## Current · v2.6.0
 
+- The Paint app UI was redesigned end-to-end: two scale-aware tool strips, visible buttons with hover/press animation (Open/Save/Undo/Redo/Clear/Brush/Eraser/shapes), a color-picker popup, brush-tip preview, right-drag erase and Ctrl+N/Ctrl+O/Ctrl+S shortcuts; fast strokes and erasing are now gap-free via interpolation.
+- Application instances are lazily loaded: shell apps (File Manager, Settings, Browser, Music, Task Manager) stay resident; all other apps are loaded on first launch via `AppInstances::load` and dropped from memory when their last window closes — idle apps consume no RAM.
 - Driver visibility and debugging: a shared status model tracks every hardware driver as `Ready` / `Unavailable` / `Error`, logging error codes and init timing to serial. The Control Panel gained a **Drivers** tab (status table + network/graphics/audio/storage details + **Rescan**); apps whose driver failed are safely blocked.
 - File Manager and the Installation Wizard now use confirmation dialogs: creating a new file/folder, renaming and deleting (move to Recycle Bin or permanent delete) all require a labeled confirm window — Enter confirms, Esc cancels. The wizard's `Format` and `One-Click Install` steps ask for the same confirmation.
 - Frozen-app monitoring now runs independently of the main loop, and the FPS 3D app reports real frame-rate measurements.
@@ -50,7 +52,7 @@ Run host tests with:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Latest verification: **543 host tests passed** (`543 passed; 0 failed`). The project contains **202,689 Rust lines** in total: **192,029 lines under `src/`** and **4,881 lines of test code** (excluding `target/`). Counts are physical lines in the current working tree's `.rs` files.
+Latest verification: **543 host tests passed** (`543 passed; 0 failed`). The project contains **200,141 Rust lines** in total: **195,028 lines under `src/`** and **5,113 lines of test code** (excluding `target/`). Counts are physical lines in the current working tree's `.rs` files.
 
 ## Documentation
 

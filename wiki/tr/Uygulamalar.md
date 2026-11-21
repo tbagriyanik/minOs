@@ -1,6 +1,8 @@
 # Yerleşik 17 Uygulama + Başlat Menüsü
 minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerleşik uygulama** (app ID 0–16) ve pencere yöneticisi içerir. Aşağıdaki tabloda ayrıca masaüstü kabuğunun parçası olan **Başlat Menüsü** de listelenir; bu nedenle tablo 18 satır içerir.
 
+> **Tembel yükleme (v2.6.0+):** Kabuk uygulamaları (Dosya Yöneticisi, Sistem Ayarları, Web Tarayıcısı, Müzik Çalar, Görev Yöneticisi) her zaman bellekte kalır. Diğer uygulamalar ilk açılışta `AppInstances::load` ile yüklenir ve son penceresi kapanınca bellekten düşürülür — boşta duran uygulamalar RAM kaplamaz. `[APP-MEM]` seri raporu yalnızca yüklü örnekleri listeler.
+
 | Uygulama | Açıklama |
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
@@ -81,7 +83,7 @@ minOs, tarayıcı `<script>` blokları için kullanılan minimal bir istemci tar
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, çok çekirdekli (SMP) per-core CPU çubukları, görev tablosu, süreç sonlandırma (`Kill`), alfabetik "Program Aç" başlatma menüsü ve RAM doluluk çubuğu. Pencere altına sabitlenmiş durum çubuğu ile ferah performans izleme. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
-| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
+| **🎨 Çizim Tahtası** | Yeniden tasarlanan iki şeritli araç çubuğu (menü + araç şeridi, UI ölçeğine duyarlı), hover/basma animasyonlu düğmeler, renk seçici açılır penceresi, fırça ucu önizlemesi, şekil araçları (çizgi/dikdörtgen/daire) ve dairesel silgi. Fare basılı tutuldukça noktalar arası **enterpolasyonla kesintisiz çizim/silme**; sağ tuşla sürükleme de siler. Ctrl+N/O/S kısayolları, Geri Al/Yinele (20 adımlık geçmiş), doğrudan `/root/Documents/cizim.bmp` kaydetme/açma ve durum çubuğunda canlı koordinat/fırça/zoom bilgisi. |
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `format` ile disk biçimlendirme (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. `Biçimlendir` ve `Tek Tıkla Kur` adımları **onay diyaloğu** ile onaylatılır. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |

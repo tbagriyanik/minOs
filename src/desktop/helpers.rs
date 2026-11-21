@@ -62,7 +62,15 @@ pub fn terminate_window_process(idx: usize) -> bool {
 }
 
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
-pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
+///
+/// Uygulama hâlâ yüklü değilse önce `AppInstances::load` ile belleğe
+/// yüklenir (lazy load); açık pencere ⇒ örnek bellekte vardır.
+pub fn open_app(
+    compositor: &mut gui::MinGuiCompositor,
+    apps: &mut crate::gui::setup::AppInstances,
+    vfs: &crate::fs::vfs::VirtualFileSystem,
+    app_id: usize,
+) {
     // Sürücü hatası: ilgili uygulama güvenli biçimde pasifleşir; kullanıcıya
     // nedeni toast ile bildirilir (ör. ağ/sürücü hatası → tarayıcı açılmaz).
     if let Some(reason) = crate::drivers::status::blocked_reason(app_id, crate::gui::ui_english()) {
@@ -80,6 +88,7 @@ pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
         );
         return;
     }
+    apps.load(app_id, vfs);
     if let Some(idx) = compositor.launch_app_window(app_id) {
         if let Some(win) = compositor.windows[idx].as_mut() {
             win.is_open = true;
@@ -268,8 +277,10 @@ pub fn open_image_file(
     path: &str,
     vfs: &fs::vfs::VirtualFileSystem,
     _paints: &[Option<apps::paint::PaintApp>],
-    viewer: &mut apps::imageviewer::ImageViewerApp,
+    viewer: &mut Option<apps::imageviewer::ImageViewerApp>,
 ) {
+    // Görüntüleyici lazy yüklenir: ilk açılışta örnek oluşturulur.
+    let viewer = viewer.get_or_insert_with(apps::imageviewer::ImageViewerApp::new);
     // Görüntü çözme (PNG/JPEG/GIF/BMP) uzun sürebilir; imleç kum saati olsun.
     let _busy = gui::screens::BusyScope::new();
     let display_name = if path.ends_with("cizim.bmp") {
@@ -325,23 +336,7 @@ pub fn keep_windows_on_screen(
 pub fn terminate_app(
     idx: usize,
     compositor: &mut gui::MinGuiCompositor,
-    fm: &mut apps::filemanager::FileManagerApp,
-    settings: &mut apps::settings::SystemSettings,
-    notepad: &mut apps::notepad::NotepadApp,
-    browser: &mut apps::browser::BrowserApp,
-    imageviewer: &mut apps::imageviewer::ImageViewerApp,
-    musicplayer: &mut apps::musicplayer::MusicPlayerApp,
-    videoplayer: &mut apps::videoplayer::VideoPlayerApp,
-    taskmgr: &mut apps::taskmgr::TaskManagerApp,
-    calculator: &mut apps::calculator::CalculatorApp,
-    paint: &mut Option<apps::paint::PaintApp>,
-    terminal: &mut apps::terminal::TerminalApp,
-    installer: &mut apps::installer::InstallerApp,
-    viewer3d: &mut apps::viewer3d::Viewer3DApp,
-    pkgmgr: &mut apps::pkgmgr::PackageManagerApp,
-    fps: &mut apps::game::GameApp,
-    fps_3d: &mut apps::fps_game::FpsGameApp,
-    city: &mut apps::city_drive::CityDriveApp,
+    apps: &mut crate::gui::setup::AppInstances,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     crate::watchdog::unwatch(idx);
@@ -364,34 +359,32 @@ pub fn terminate_app(
         .any(|slot| slot.is_some_and(|window| window.app_id as usize == app_id && window.is_open));
     if !another_instance_open {
         match app_id {
-            0 => *fm = apps::filemanager::FileManagerApp::new(),
-            1 => settings.active_tab = 0,
-            2 => notepad.clear(),
-            3 => *browser = apps::browser::BrowserApp::new(),
-            4 => *imageviewer = apps::imageviewer::ImageViewerApp::new(),
+            0 => apps.filemanager_app = apps::filemanager::FileManagerApp::new(),
+            1 => apps.settings_app.active_tab = 0,
+            // Kullanıcı uygulamaları son pencere kapanınca bellekten düşürülür.
+            2 => apps.notepad_app = None,
+            3 => apps.browser_app = apps::browser::BrowserApp::new(),
+            4 => apps.imageviewer_app = None,
             5 => {
-                *musicplayer = apps::musicplayer::MusicPlayerApp::new();
+                apps.musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
                 drivers::hda::silence();
                 // PC speaker çıkışını da kapat.
                 let mut audio = drivers::audio::AudioDevice::new();
                 audio.set_pc_speaker_tone(0);
             }
-            6 => *videoplayer = apps::videoplayer::VideoPlayerApp::new(),
-            7 => *taskmgr = apps::taskmgr::TaskManagerApp::new(),
-            8 => *calculator = apps::calculator::CalculatorApp::new(),
-            9 => *paint = None,
-            10 => {
-                *terminal = apps::terminal::TerminalApp::new();
-                terminal.init_banner();
-            }
-            11 => *installer = apps::installer::InstallerApp::new(),
-            12 => *viewer3d = apps::viewer3d::Viewer3DApp::new(),
-            13 => *pkgmgr = apps::pkgmgr::PackageManagerApp::new(),
+            6 => apps.videoplayer_app = None,
+            7 => apps.taskmgr_app = apps::taskmgr::TaskManagerApp::new(),
+            8 => apps.calculator_app = None,
+            9 => apps.paint_apps[idx] = None,
+            10 => apps.terminal_app = None,
+            11 => apps.installer_app = None,
+            12 => apps.viewer3d_app = None,
+            13 => apps.pkgmgr_app = None,
             14 => apps::controlpanel::reset(),
-            15 => *fps = apps::game::GameApp::new(),
-            16 => *fps_3d = apps::fps_game::FpsGameApp::new(),
+            15 => apps.fps_game_app = None,
+            16 => apps.fps_3d_app = None,
             17 => {
-                *city = apps::city_drive::CityDriveApp::new();
+                apps.city_drive_app = None;
                 // Motor sesi kalsin diye PC speaker susturulur.
                 let mut audio = drivers::audio::AudioDevice::new();
                 audio.set_pc_speaker_tone(0);
@@ -495,7 +488,7 @@ pub fn window_content_size(
     natural_w: usize,
     natural_h: usize,
     fm: &apps::filemanager::FileManagerApp,
-    np: &apps::notepad::NotepadApp,
+    np: &Option<apps::notepad::NotepadApp>,
     br: &apps::browser::BrowserApp,
     settings_tab: usize,
 ) -> (usize, usize) {
@@ -510,16 +503,20 @@ pub fn window_content_size(
         }
         // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
         // Satır yüksekliği ve karakter genişliği font ölçeğine duyarlı olmalı.
+        // Uygulama henüz yüklü değilse görünüm boyutu döner.
         2 => {
             let char_w = gui::sp(12);
             let line_h = gui::sp(16);
             let text_w = win_w.saturating_sub(gui::sp(12) + gui::sp(32) + gui::sp(16));
             let wrap_cols = (text_w / char_w.max(1)).max(1);
-            let (lines, _) = np.text_extent(wrap_cols);
+            let (lines, _) = np
+                .as_ref()
+                .map(|np| np.text_extent(wrap_cols))
+                .unwrap_or((0, 0));
             let full_h = lines * line_h + gui::sp(58) + gui::sp(22);
             (view_w, full_h.saturating_sub(gui::scaled_titlebar_h()))
         }
-        // Web Tarayıcısı: yalnızca HTML/lik geçmiş içeriği kaydırılabilir.
+        // Web Tarayıcısı: her zaman bellekte (kabuk uygulaması), içerik yüksekliği.
         3 => (view_w, br.content_height()),
         // Ayarlar ve Kontrol Paneli: etkin sekmenin tam içeriği için kaydırma.
         1 => {
@@ -547,7 +544,7 @@ pub fn window_content_h(
     win_h: usize,
     win_w: usize,
     fm: &apps::filemanager::FileManagerApp,
-    np: &apps::notepad::NotepadApp,
+    np: &Option<apps::notepad::NotepadApp>,
     br: &apps::browser::BrowserApp,
 ) -> usize {
     let view_h = win_h.saturating_sub(gui::scaled_titlebar_h() + 1);
@@ -687,10 +684,7 @@ pub fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
 pub fn launch_installed_pkg(
     app_name: &str,
     compositor: &mut gui::MinGuiCompositor,
-    terminal: &mut apps::terminal::TerminalApp,
-    _notepad: &mut apps::notepad::NotepadApp,
-    _calc: &mut apps::calculator::CalculatorApp,
-    _paint: &mut alloc::vec::Vec<Option<apps::paint::PaintApp>>,
+    apps: &mut crate::gui::setup::AppInstances,
     vfs: &mut fs::vfs::VirtualFileSystem,
     pmm: &mut crate::mm::pmm::PhysicalMemoryManager,
     now: &crate::drivers::rtc::DateTime,
@@ -704,15 +698,18 @@ pub fn launch_installed_pkg(
         .unwrap_or(app_name);
     let lower = clean.to_ascii_lowercase();
     if lower == "notepad" || lower == "not defteri" || lower == "tiny-editor" {
-        open_app(compositor, 2);
+        open_app(compositor, apps, vfs, 2);
     } else if lower == "calculator" || lower == "hesap makinesi" {
-        open_app(compositor, 8);
+        open_app(compositor, apps, vfs, 8);
     } else if lower == "paint" || lower == "cizim tahtasi" {
-        open_app(compositor, 9);
+        open_app(compositor, apps, vfs, 9);
     } else if lower == "browser" || lower == "web tarayicisi" {
-        open_app(compositor, 3);
+        open_app(compositor, apps, vfs, 3);
     } else {
-        open_app(compositor, 10);
+        open_app(compositor, apps, vfs, 10);
+        let terminal = apps
+            .terminal_app
+            .get_or_insert_with(apps::terminal::TerminalApp::new);
         let path = if app_name.ends_with(".elf") || app_name.ends_with(".pkg") {
             alloc::format!("/bin/{}", app_name)
         } else if vfs

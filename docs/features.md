@@ -13,6 +13,8 @@ Uygulama kataloğu, sistem yetenekleri ve proje yol haritası.
 - Çekirdek KASLR ile her açılışta rastgele adreslenir; `SYS_SECCOMP` syscall filtreleme ve ELF yükleyici güvenlik sertleştirmesi eklendi. `test_stress_24h.ps1` ile yapılandırılabilir süreli QEMU soak/panik testi çalıştırılabilir.
 - **QEMU varsayılan çalıştırmasında klavye ve fare artık çalışıyor:** `run.ps1` varsayılan olarak `qemu-xhci + usb-kbd + usb-mouse` (USB HID) aygıtlarını bağlar; QEMU 11'in varsayılan `pc` makinesinde i8042 denetleyicisi olduğu ancak bir PS/2 klavye/fare aygıtı bağlanmadığı için giriş olayları gelmemişti. Bu düzeltmeyle masaüstüne gelindiği anda klavyen ve fare çalışır hale gelir.
 - **3D nesneler:** FPS Oyunu'nda düşmanlar ve Şehir Sürüş oyununda trafik araçları ve toplanabilir ödüller artık düz billboard yerine ön/üst/yan yüzeyleriyle 3D kutu olarak render edilir; derinlik ve z-buffer testi ile duvarların arkasından sızdırılmazlar.
+- **Çizim Tahtası UI/UX:** İki şeritli ölçeklenebilir araç çubuğu, hover/basma animasyonlu düğmeler, renk seçici, fırça ucu önizlemesi, enterpolasyonla kesintisiz çizim/silme, sağ tuşla sürükleyerek silme ve Ctrl+N/O/S kısayolları.
+- **Tembel uygulama yükleme:** Kabuk uygulamaları (Dosya Yöneticisi, Ayarlar, Tarayıcı, Müzik, Görev Yöneticisi) her zaman yüklüdür; diğer uygulamalar ilk açılışta belleğe yüklenir (`AppInstances::load`) ve son pencere kapanınca düşürülür — kapalı uygulamalar RAM kaplamaz.
 
 Önceki sürümlerin ayrıntıları için [sürüm günlüğüne](CHANGELOG.md), tam değişiklik listesi için [değişiklik arşivine](releases.md) bakın.
 
@@ -34,7 +36,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerle
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, çok çekirdekli (SMP) per-core CPU çubukları, görev tablosu, süreç sonlandırma (`Kill`), alfabetik "Program Aç" başlatma menüsü ve RAM doluluk çubuğu. Pencere altına sabitlenmiş durum çubuğu ile ferah performans izleme. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
-| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
+| **🎨 Çizim Tahtası** | Yeniden tasarlanan iki şeritli araç çubuğu (menü + araç şeridi), hover/basma animasyonlu düğmeler, renk seçici açılır penceresi, fırça ucu önizlemesi ve şekil araçları (çizgi/dikdörtgen/daire). Fare basılı tutuldukça noktalar arası **enterpolasyonla kesintisiz çizim/silme**, sağ tuşla sürükleyerek silme, Ctrl+N/O/S kısayolları, Geri Al/Yinele ve doğrudan `/root/Documents/cizim.bmp` kaydetme/açma. |
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `format` ile disk biçimlendirme (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. Tab ile kontroller arasında gezinilir, Enter ile etkinleştirilir ve onay pencereleri Esc ile kapatılabilir. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |
@@ -66,13 +68,13 @@ Derleme profilleri, QEMU örnekleri ve ayrıntılı donanım sınırları için 
 
 | Ölçüm | Değer |
 | :--- | :--- |
-| **Rust Kaynak Dosyası (`src/`)** | 210 dosya |
-| **Toplam Kod Satırı (`src/*.rs`)** | 172.941 satır (ham) / 158.907 satır (boşlukları hariç) |
-| **Test Dosyaları (`tests/*.rs`)** | 3.933 satır (12 dosya) |
+| **Rust Kaynak Dosyası (`src/`)** | 232 dosya |
+| **Toplam Kod Satırı (`src/*.rs`)** | 194.267 satır (ham) / 179.005 satır (boşlukları hariç) |
+| **Test Dosyaları (`tests/*.rs`)** | 4.881 satır (17 dosya) |
 | **Derleme Komut Dosyası (`build.rs`)** | 210 satır |
-| **Toplam (`src/` + `tests/` + `build.rs`)** | 177.084 satır (ham) |
+| **Toplam (`src/` + `tests/` + `build.rs`)** | 199.358 satır (ham) |
 
-Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 158.907, yorum satırları da hariç 142.650 satırdır. Host birim testleri: **443 test (443 geçti / 0 hata)**.
+Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 179.005, yorum satırları da hariç ~151.800 satırdır. Host birim testleri: **543 test (543 geçti / 0 hata)**.
 
 ---
 

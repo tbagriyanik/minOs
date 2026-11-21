@@ -82,7 +82,7 @@ Desktop usage, MinShell commands and shortcut reference.
 - **Theme Change:** Use the taskbar color swatch, System Settings > Change, or the theme palette strip.
 - **Desktop Right-Click Menu:** On an empty area, use **New** to create a file/folder, **Refresh** to update the desktop list, or open **Task Manager**.
 - **Notepad Shortcuts:** `Ctrl+C` (Copy), `Ctrl+X` (Cut), `Ctrl+V` (Paste), `Ctrl+A` (Select All), `Ctrl+Z` (Undo), `Ctrl+Y` (Redo), `Delete`, `Home`/`End`, `Shift+Arrow keys`.
-- **Paint:** Select color, Eraser, Open or Save; draw with left mouse button held. `C` clears, `E` toggles eraser. Saved as 24-bit BMP to `/root/Documents/cizim.bmp`.
+- **Paint:** The top strip holds the **File** menu, **Open**/**Save**/**Undo**/**Redo**/**Clear** and the brush size (`-`/`+`); the bottom strip has quick colors, the **Colors** picker, **Brush**, **Eraser**, shape tools (Line/Rectangle/Circle) and zoom (`-`/`+`). Draw with the left button held — fast strokes stay gap-free via interpolation. **Hold the right button and drag** to erase as well. `Ctrl+N` new canvas, `Ctrl+O` opens a BMP, `Ctrl+S` saves, `C` clears, `E` toggles the eraser. Saved as 24-bit BMP to `/root/Documents/cizim.bmp`.
 - **Image Viewer:** `+`/`=` zoom in, `-` zoom out, `0` default scale.
 - **Image Viewer Wallpaper:** Press **Tile on desktop** for an opened image to use it as the desktop wallpaper.
 - **Desktop Images:** System Settings includes **Desktop 1**, **Desktop 2** and **Desktop 3** wallpaper choices.

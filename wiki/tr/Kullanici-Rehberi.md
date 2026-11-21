@@ -82,7 +82,7 @@ Masaüstü kullanımı, MinShell komutları ve kısayol referansı.
 - **Tema Değiştirme:** Görev çubuğundaki renk örneği, Sistem Ayarları > Değiştir veya tema palet şeridinden yapılır.
 - **Masaüstü Sağ Tık Menüsü:** Boş alanda **Yeni** alt menüsüyle dosya/klasör oluşturabilir, masaüstünü **Yenile**'yebilir veya **Görev Yöneticisi**'ni açabilirsiniz.
 - **Not Defteri Kısayolları:** `Ctrl+C` (Kopyala), `Ctrl+X` (Kes), `Ctrl+V` (Yapıştır), `Ctrl+A` (Tümünü Seç), `Ctrl+Z` (Geri Al), `Ctrl+Y` (İleri Al), `Delete`, `Home`/`End`, `Shift+Ok tuşları`.
-- **Çizim Tahtası:** Renk, Silgi, Aç veya Kaydet seçin; sol tuşu basılı tutarak çizin. `C` temizler, `E` silgiyi açar/kapar. 24-bit BMP olarak `/root/Documents/cizim.bmp` konumuna kaydedilir.
+- **Çizim Tahtası:** Üst şeritten **Dosya** menüsü, **Aç**/**Kaydet**/**Geri Al**/**Yinele**/**Temizle** ve fırça boyutu (`-`/`+`), alt şeritten hızlı renkler, **Renkler** seçici, **Fırça**, **Silgi**, şekil araçları (Çizgi/Dikdörtgen/Daire) ve zoom (`-`/`+`) kullanılır. Sol tuşu basılı tutarak çizin; hızlı hareketlerde çizgi otomatik enterpolasyonla kesintisiz kalır. **Sağ tuşu basılı tutup sürüklemek** de silgi darbesi yapar. `Ctrl+N` yeni tuval, `Ctrl+O` BMP açar, `Ctrl+S` kaydeder, `C` temizler, `E` silgiyi açar/kapar. 24-bit BMP olarak `/root/Documents/cizim.bmp` konumuna kaydedilir.
 - **Resim Görüntüleyici:** `+`/`=` yakınlaştırır, `-` uzaklaştırır, `0` varsayılan ölçeğe döner.
 - **Resim Görüntüleyici Arka Planı:** Açık resimde **Masaüstüne döşe** düğmesine basarak görüntüyü masaüstü arka planı yapın.
 - **Masaüstü Görselleri:** Sistem Ayarları'ndaki **Masaüstü 1**, **Masaüstü 2** ve **Masaüstü 3** seçenekleri yeni PNG görsellerini kullanır.

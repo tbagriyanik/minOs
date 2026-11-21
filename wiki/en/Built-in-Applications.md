@@ -2,6 +2,8 @@
 
 minOs includes **17 registered built-in applications** (app ID 0–16) and a window manager, providing a full desktop experience. The table below also lists the **Start Menu**, which is part of the desktop shell rather than a registered app, so it has 18 rows.
 
+> **Lazy loading (v2.6.0+):** Shell applications (File Manager, System Settings, Web Browser, Music Player, Task Manager) stay resident in memory. All other applications are loaded on first launch via `AppInstances::load` and dropped from memory when their last window closes — idle apps consume no RAM. The `[APP-MEM]` serial report lists only currently loaded instances.
+
 | Application | Description |
 | :--- | :--- |
 | **🔘 Start Menu** | Category menus (`System`, `Productivity`, `Media`, `Power`) with iconified graphical listing. Keyboard arrow keys, Enter, mouse wheel navigation and search. |
@@ -82,7 +84,7 @@ minOs includes a minimal client-side JavaScript engine (`src/apps/js.rs`, `no_st
 | **🎬 Video Player** | Live synthwave horizon scene, neon sun scanlines, downward-flowing 3D perspective grid road and cyber vehicle simulation. |
 | **📊 Task Manager** | Kernel memory usage, CPU fluctuation graph, multi-core (SMP) per-core CPU bars, process table, process termination (`Kill`), alphabetical "Launch Program" start menu and RAM fill bar. Status bar pinned below window for comfortable performance monitoring. |
 | **🧮 Calculator** | Keyboard-input expression calculator (`+`, `-`, `*`, `/`); wide number range with 128-bit fixed-point arithmetic and up to six decimal places precision. `Backspace` and `Esc` for editing/clearing. |
-| **🎨 Paint** | Pixel-based free drawing canvas, color palette and circular eraser tool. **Continuous/smooth drawing** while mouse button held, automatic brush edge clipping, save/open directly as `/root/Documents/cizim.bmp` and 4096-point canvas history. |
+| **🎨 Paint** | Redesigned two-strip tool bar (menu + tool strip, UI-scale aware), buttons with hover/press animation, color-picker popup, brush-tip preview, shape tools (line/rectangle/circle) and a circular eraser. **Gap-free interpolated drawing/erasing** while the mouse button is held; right-drag also erases. Ctrl+N/O/S shortcuts, undo/redo (20-step history), direct save/open as `/root/Documents/cizim.bmp` and a status bar with live coordinates/brush/zoom info. |
 | **⌨️ Command Prompt (MinShell)** | UNIX/DOS-like interactive shell: file/folder management, memory status, network diagnostics, `curl` HTTP download, `format` disk formatting (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab completion and command history. |
 | **💽 One-Click Install (Installation Wizard)** | Step-by-step installation window: **1)** target disk selection (ATA hard disk / QCOW2), **2)** `Format (FAT32)` button to format disk, **3)** `One-Click Install` for permanent installation. Installation writes `MINOS.SYS` marker file, `README.TXT`, current `settings.cfg` settings and the entire VFS tree (`VFS.DAT` snapshot) to disk. `Format` and `One-Click Install` steps are confirmed via **confirmation dialogs**. |
 | **🧊 3D Viewer** | Cube, cylinder, sphere and pyramid meshes displayed in solid shading or wireframe mode; drag to rotate, zoom, auto-rotate and load shape/text from `.3d` files. Back-face culling and far-to-near painter's algorithm for correct solid object appearance. |

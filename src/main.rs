@@ -94,13 +94,15 @@ pub extern "C" fn _start() -> ! {
 /// Terminalde `edit <dosya>` / `start <dosya>` calistirildiysa istenen
 /// dosyayi uygun uygulamada acar (metin -> Not Defteri, digerleri -> Gezgin).
 pub(crate) fn handle_terminal_open_request(
-    terminal_app: &mut apps::terminal::TerminalApp,
+    apps: &mut crate::gui::setup::AppInstances,
     vfs: &mut fs::vfs::VirtualFileSystem,
-    notepad_app: &mut apps::notepad::NotepadApp,
-    browser_app: &mut apps::browser::BrowserApp,
     compositor: &mut gui::MinGuiCompositor,
 ) {
-    let Some(path) = terminal_app.take_open_request() else {
+    let Some(path) = apps
+        .terminal_app
+        .as_mut()
+        .and_then(|t| t.take_open_request())
+    else {
         return;
     };
 
@@ -118,15 +120,16 @@ pub(crate) fn handle_terminal_open_request(
                     .flatten()
                     .find(|w| w.app_id == 3u8)
                     .map_or(700, |w| w.width.saturating_sub(40));
-                browser_app.set_url(path.as_bytes());
-                browser_app.load_html(&data, wrap, 256, Some(&mut *vfs));
-                open_app(compositor, 3);
+                apps.browser_app.set_url(path.as_bytes());
+                apps.browser_app
+                    .load_html(&data, wrap, 256, Some(&mut *vfs));
+                open_app(compositor, apps, vfs, 3);
                 return;
             }
             None => {
-                browser_app.set_url(path.as_bytes());
-                browser_app.navigate();
-                open_app(compositor, 3);
+                apps.browser_app.set_url(path.as_bytes());
+                apps.browser_app.navigate();
+                open_app(compositor, apps, vfs, 3);
                 return;
             }
         }
@@ -135,13 +138,17 @@ pub(crate) fn handle_terminal_open_request(
     match vfs.read_file(&path) {
         Some(data) => {
             let data: alloc::vec::Vec<u8> = alloc::vec::Vec::from(data);
-            notepad_app.open_file(&path, &data);
-            open_app(compositor, 2);
+            apps.load(2, vfs);
+            let notepad = apps.notepad_app.as_mut().unwrap();
+            notepad.open_file(&path, &data);
+            open_app(compositor, apps, vfs, 2);
         }
         None => {
             // Dosya yoksa Not Defteri'ni bos olarak acip yolu hazirlar.
-            notepad_app.open_file(&path, b"");
-            open_app(compositor, 2);
+            apps.load(2, vfs);
+            let notepad = apps.notepad_app.as_mut().unwrap();
+            notepad.open_file(&path, b"");
+            open_app(compositor, apps, vfs, 2);
         }
     }
 }

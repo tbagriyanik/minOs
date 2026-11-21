@@ -52,35 +52,36 @@ pub fn render_full_frame(
 
     st: &apps::settings::SystemSettings,
 
-    np: &apps::notepad::NotepadApp,
+    // Not Defteri lazy yüklenir; açık pencere yoksa None.
+    np: &mut Option<apps::notepad::NotepadApp>,
 
     br: &apps::browser::BrowserApp,
 
-    iv: &apps::imageviewer::ImageViewerApp,
+    iv: &mut Option<apps::imageviewer::ImageViewerApp>,
 
     mp: &apps::musicplayer::MusicPlayerApp,
 
-    vp: &apps::videoplayer::VideoPlayerApp,
+    vp: &mut Option<apps::videoplayer::VideoPlayerApp>,
 
     tm: &apps::taskmgr::TaskManagerApp,
 
-    calc: &apps::calculator::CalculatorApp,
+    calc: &mut Option<apps::calculator::CalculatorApp>,
 
     paint: &[Option<apps::paint::PaintApp>],
 
-    term: &apps::terminal::TerminalApp,
+    term: &mut Option<apps::terminal::TerminalApp>,
 
-    inst: &apps::installer::InstallerApp,
+    inst: &mut Option<apps::installer::InstallerApp>,
 
-    v3d: &apps::viewer3d::Viewer3DApp,
+    v3d: &mut Option<apps::viewer3d::Viewer3DApp>,
 
-    pkg: &apps::pkgmgr::PackageManagerApp,
+    pkg: &mut Option<apps::pkgmgr::PackageManagerApp>,
 
-    fps: &apps::game::GameApp,
+    fps: &mut Option<apps::game::GameApp>,
 
-    fps_3d: &mut apps::fps_game::FpsGameApp,
+    fps_3d: &mut Option<apps::fps_game::FpsGameApp>,
 
-    city: &mut apps::city_drive::CityDriveApp,
+    city: &mut Option<apps::city_drive::CityDriveApp>,
 
     now: &drivers::rtc::DateTime,
 
@@ -411,19 +412,35 @@ pub fn render_full_frame(
                     },
                 ),
 
-                2 => np.render_content(fb, rx, ry, rw, rh, tick, &win.scroll),
+                2 => {
+                    if let Some(np) = np.as_mut() {
+                        np.render_content(fb, rx, ry, rw, rh, tick, &win.scroll);
+                    }
+                }
 
                 3 => br.render_content(fb, rx, ry, rw, rh, &win.scroll),
 
-                4 => iv.render_content(fb, rx, ry, rw, rh),
+                4 => {
+                    if let Some(iv) = iv.as_mut() {
+                        iv.render_content(fb, rx, ry, rw, rh);
+                    }
+                }
 
                 5 => mp.render_content(fb, rx, ry, rw, rh, tick),
 
-                6 => vp.render_content(fb, rx, ry, rw, rh, tick),
+                6 => {
+                    if let Some(vp) = vp.as_mut() {
+                        vp.render_content(fb, rx, ry, rw, rh, tick);
+                    }
+                }
 
                 7 => tm.render_content(fb, rx, ry, rw, rh),
 
-                8 => calc.render_content(fb, rx, ry, rw, rh),
+                8 => {
+                    if let Some(calc) = calc.as_mut() {
+                        calc.render_content(fb, rx, ry, rw, rh);
+                    }
+                }
 
                 9 => {
                     if let Some(app) = paint[idx].as_ref() {
@@ -431,13 +448,29 @@ pub fn render_full_frame(
                     }
                 }
 
-                10 => term.render_content(fb, rx, ry, rw, rh, win.is_focused),
+                10 => {
+                    if let Some(term) = term.as_mut() {
+                        term.render_content(fb, rx, ry, rw, rh, win.is_focused);
+                    }
+                }
 
-                11 => inst.render_content(fb, rx, ry, rw, rh),
+                11 => {
+                    if let Some(inst) = inst.as_mut() {
+                        inst.render_content(fb, rx, ry, rw, rh);
+                    }
+                }
 
-                12 => v3d.render_content(fb, rx, ry, rw, rh),
+                12 => {
+                    if let Some(v3d) = v3d.as_mut() {
+                        v3d.render_content(fb, rx, ry, rw, rh);
+                    }
+                }
 
-                13 => pkg.render_content(fb, rx, ry, rw, rh),
+                13 => {
+                    if let Some(pkg) = pkg.as_mut() {
+                        pkg.render_content(fb, rx, ry, rw, rh);
+                    }
+                }
 
                 14 => apps::controlpanel::render_content(
                     fb,
@@ -451,18 +484,24 @@ pub fn render_full_frame(
                     kbd.layout,
                 ),
 
-                15 => fps.render_content(fb, rx, ry, rw, rh),
+                15 => {
+                    if let Some(fps_app) = fps.as_mut() {
+                        fps_app.render_content(fb, rx, ry, rw, rh);
+                    }
+                }
 
                 16 => {
                     // FPS 3D raycasting render'ı QEMU/VM gibi yavaş ortamlarda
                     // Duvar raycast'inin ortasında kesilmesi yarım duvar
                     // bırakabildiği için 3D sahneye geniş bir bütçe verilir.
                     let fps3d_budget: u64 = 160;
-                    let render_completed =
-                        fps_3d.render_content_with_budget(fb, rx, ry, rw, rh, fps3d_budget);
-                    if render_completed {
-                        let frame_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
-                        fps_3d.record_completed_frame(frame_ms);
+                    if let Some(fps3d) = fps_3d.as_mut() {
+                        let render_completed =
+                            fps3d.render_content_with_budget(fb, rx, ry, rw, rh, fps3d_budget);
+                        if render_completed {
+                            let frame_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
+                            fps3d.record_completed_frame(frame_ms);
+                        }
                     }
                 }
 
@@ -471,7 +510,9 @@ pub fn render_full_frame(
                     // şekilde 80 ms bütçe kullanılır (yavaş sanal ortamlarda
                     // yarım kare, boş ekrandan iyidir).
                     let city_budget: u64 = 80;
-                    city.render_content_with_budget(fb, rx, ry, rw, rh, city_budget);
+                    if let Some(city_app) = city.as_mut() {
+                        city_app.render_content_with_budget(fb, rx, ry, rw, rh, city_budget);
+                    }
                 }
 
                 _ => {}

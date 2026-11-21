@@ -179,3 +179,19 @@ pub fn broadcast_hotplug(event: HotplugEvent) {
 pub fn count() -> usize {
     registry().len()
 }
+
+/// Kayıt defterindeki tüm sürücü durumlarını tek satırlık
+/// `[DRIVER-REGISTRY]` kayıtlarıyla seri günlüğe döker. Boot özeti ve
+/// Sistem Bilgisi ekranı için otomatik durum raporu sağlar.
+pub fn log_registry_states() {
+    for (name, state) in registry().states() {
+        let state_key = match state {
+            DriverState::Registered => "registered",
+            DriverState::Probed => "probed",
+            DriverState::Ready => "ready",
+            DriverState::Failed => "failed",
+            DriverState::Shutdown => "shutdown",
+        };
+        crate::kinfo!("driver", "[DRIVER-REGISTRY] {} state={}\n", name, state_key);
+    }
+}

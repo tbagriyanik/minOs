@@ -1,4 +1,4 @@
-# File: test_perf.ps1
+﻿# File: test_perf.ps1
 # minOs Performans Testi Dogrulama Betigi (test_perf.ps1)
 #
 # Bu betik:

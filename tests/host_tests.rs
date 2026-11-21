@@ -138,6 +138,10 @@ pub mod netstack_mod;
 #[path = "../src/drivers/status.rs"]
 pub mod driver_status;
 
+// Ortak hata/timeout/yeniden deneme yardimcilari (saf mantik).
+#[path = "../src/drivers/retry.rs"]
+pub mod driver_retry;
+
 pub fn serial_print(_s: &str) {}
 
 // Çekirdek `src/logging.rs` modülünün host yedeği: test derlemesinde tüm
@@ -156,10 +160,13 @@ pub mod logging {
     }
 }
 
-/// Çekirdek `kinfo!` makrosunun host yedeği: testlerde kayıtlar yutulur.
+/// Çekirdek `kinfo!` makrosunun host yedeği: testlerde kayıtlar yutulur,
+/// ancak argümanlar değerlendirilir ki `unused_variables` uyarısı çıkmasın.
 #[macro_export]
 macro_rules! kinfo {
-    ($($t:tt)*) => {{}};
+    ($($t:tt)*) => {{
+        let _ = ($($t)*);
+    }};
 }
 
 pub mod serial {

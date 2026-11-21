@@ -98,7 +98,7 @@ fn scan(refresh: bool) {
         drivers::ahci::init,
         "AHCI denetleyicisi yok",
         "ahci init hatasi",
-        "kontrolor hazir; blok okuma/yazma yolu henuz yok",
+        "sata portu hazir; LBA48 DMA okuma/yazma aktif",
         refresh,
     );
     probe_storage_controller(
@@ -116,7 +116,7 @@ fn scan(refresh: bool) {
         drivers::sdmmc::init,
         "SDHCI denetleyicisi yok",
         "sdhci init hatasi",
-        "kontrolor hazir; blok okuma/yazma yolu henuz yok",
+        "sd kart hazir; PIO blok okuma aktif, yazma desteklenmiyor",
         refresh,
     );
     probe_storage_controller(
@@ -272,7 +272,9 @@ fn refresh_input() {
     }
 }
 
-/// Surucu durum ozetini seri gunluge yazar (teshis icin).
+/// Surucu durum ozetini seri gunluge yazar (teshis icin): once ozet
+/// satiri, sonra her surucu icin tek satirlik detay ve varsa registry
+/// (framework) durumlari.
 pub fn log_status_summary() {
     let (ready, unavailable, error, other) = status::summary();
     kinfo!(
@@ -283,4 +285,6 @@ pub fn log_status_summary() {
         error,
         other
     );
+    status::log_all_entries();
+    drivers::framework::log_registry_states();
 }

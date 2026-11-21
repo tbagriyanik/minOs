@@ -1,4 +1,4 @@
-# File: test.ps1
+﻿# File: test.ps1
 # minOs tek giriş noktalı test kosucusu (test.ps1)
 #
 # Kullanim:
@@ -31,7 +31,12 @@ Write-Host "=========================================" -ForegroundColor Cyan
 
 switch ($Mode) {
     "Host" {
-        & powershell -ExecutionPolicy Bypass -File ".\test_host.ps1" -NoRun:$NoRun
+        # `-NoRun:$NoRun` biçimi powershell.exe -File üzerinden switch
+        # parametresine "System.String" olarak ulaşabiliyor; koşullu
+        # argüman dizisi güvenli.
+        $hostArgs = @()
+        if ($NoRun) { $hostArgs += "-NoRun" }
+        & powershell -ExecutionPolicy Bypass -File ".\test_host.ps1" @hostArgs
     }
     "Qemu" {
         & powershell -ExecutionPolicy Bypass -File ".\test_qemu.ps1"

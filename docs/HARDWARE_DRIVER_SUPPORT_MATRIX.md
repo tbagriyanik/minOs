@@ -77,47 +77,47 @@ ağ ve ses aygıtları yalnızca `minimal` dışındaki profillerde eklenir.
 
 ### Ağ
 
-| Bileşen | Sürücü | Durum | Not |
-| :--- | :--- | :---: | :--- |
-| Intel e1000/e1000e | `e1000.rs` | ✅ | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS |
-| Intel I219-V | `i219.rs` | 🟢 | Gigabit Ethernet |
-| Realtek RTL8139 | `e1000.rs` | 🟢 | I/O port, C+ modu |
-| Realtek PCIe (RTL8168/8169/8125/8101) | `e1000.rs` | 🟢 | C+ modu, 64-bit RX/TX |
-| NE2000 / RTL8019AS (ISA PnP) | `ne2000.rs` | 🟢 | ISA PnP, uzak DMA |
-| NE2000 PCI (RTL8029AS) | `ne2000.rs` | 🟢 | PCI I/O BAR |
-| Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 | MAC hash, RX/TX |
-| VirtIO-net | `virtio_net.rs` | ✅ | Sanal ağ |
-| VMware VMXNET3 | `e1000.rs` | 🟢 | PCI 0x15AD |
-| Atheros / Marvell Ethernet | `atheros.rs`, `marvell.rs` | 🟡 | Temel RX/TX; checksum offload TODO |
-| Wi-Fi 802.11 | `wifi.rs` | 🔴 | WPA2 türetimi var; gerçek PHY/RX-TX yok |
-| Bluetooth HCI | `bluetooth.rs` | 🔴 | HCI paketleri; gerçek denetleyici yok |
+| Bileşen | Sürücü | Durum | Son Doğrulama | Not |
+| :--- | :--- | :---: | :--- | :--- |
+| Intel e1000/e1000e | `e1000.rs` | ✅ | QEMU `default` 2026-11-17 | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS |
+| Intel I219-V | `i219.rs` | 🟢 | — | Gigabit Ethernet |
+| Realtek RTL8139 | `e1000.rs` | 🟢 | — | I/O port, C+ modu |
+| Realtek PCIe (RTL8168/8169/8125/8101) | `e1000.rs` | 🟢 | — | C+ modu, 64-bit RX/TX |
+| NE2000 / RTL8019AS (ISA PnP) | `ne2000.rs` | 🟢 | — | ISA PnP, uzak DMA |
+| NE2000 PCI (RTL8029AS) | `ne2000.rs` | 🟢 | — | PCI I/O BAR |
+| Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 | — | MAC hash, RX/TX |
+| VirtIO-net | `virtio_net.rs` | ✅ | QEMU `default` 2026-11-17 | Sanal ağ |
+| VMware VMXNET3 | `e1000.rs` | 🟢 | — | PCI 0x15AD |
+| Atheros / Marvell Ethernet | `atheros.rs`, `marvell.rs` | 🟡 | — | RX/TX yolu yok; BDF düzeltmesi + filtre/checksum iskeleti eklendi, donanım doğrulaması bekliyor |
+| Wi-Fi 802.11 | `wifi.rs` | 🔴 | — | WPA2 el sıkışması + Ayarlar'da simüle ağ listesi UI'ı var; gerçek PHY/RX-TX yok |
+| Bluetooth HCI | `bluetooth.rs` | 🔴 | — | HCI paketleri; gerçek denetleyici yok |
 
 ### Ses
 
-| Bileşen | Sürücü | Durum | Not |
-| :--- | :--- | :---: | :--- |
-| Intel HDA | `hda.rs`, `audio.rs` | ✅ | 48 kHz stereo DMA, WAV/MP3 |
-| PC Speaker (PWM) | `audio.rs` | 🟢 | Zamanlayıcı bip ve ton |
-| USB Audio | `usb_audio.rs` | 🔴 | İskelet |
+| Bileşen | Sürücü | Durum | Son Doğrulama | Not |
+| :--- | :--- | :---: | :--- | :--- |
+| Intel HDA | `hda.rs`, `audio.rs` | ✅ | QEMU `default` 2026-11-17 | 48 kHz stereo DMA, WAV/MP3 |
+| PC Speaker (PWM) | `audio.rs` | 🟢 | — | Zamanlayıcı bip ve ton |
+| USB Audio | `usb_audio.rs` | 🟡 | — | UAC1/UAC2 arayüz + iso-chronous endpoint keşfi (xHCI enumerasyonundan beslenir); streaming yok |
 
 ### Depolama
 
-| Bileşen | Sürücü | Durum | Not |
-| :--- | :--- | :---: | :--- |
-| ATA / IDE / ATAPI | `ata.rs` | 🟢 | LBA28/48, CD/DVD-ROM |
-| AHCI / SATA | `ahci.rs` | 🟢 | SSD/HDD blok I/O |
-| NVMe | `nvme.rs` | 🟢 | Komut kuyrukları |
-| VirtIO-blk | `virtio_blk.rs` | ✅ | Sanal blok |
-| USB Mass Storage | `usb_mass_storage.rs` | 🟢 | SCSI BOT |
-| SD / MMC | `sdmmc.rs` | 🟡 | Okuma; yazma WIP |
+| Bileşen | Sürücü | Durum | Son Doğrulama | Not |
+| :--- | :--- | :---: | :--- | :--- |
+| ATA / IDE / ATAPI | `ata.rs` | 🟢 | — | LBA28/48, CD/DVD-ROM |
+| AHCI / SATA | `ahci.rs` | 🟡 | — | DMA komut listesi/FIS/PRDT tahsisi ve gerçek sektör okuma-yazma uygulandı; QEMU AHCI ve gerçek donanım doğrulaması bekliyor |
+| NVMe | `nvme.rs` | 🟢 | — | Komut kuyrukları |
+| VirtIO-blk | `virtio_blk.rs` | ✅ | QEMU `default` 2026-11-17 | Sanal blok |
+| USB Mass Storage | `usb_mass_storage.rs` | 🟡 | — | Gerçek enumerasyon olmadan "bulundu" raporlamaz; yazma desteklenmiyor olarak işaretli |
+| SD / MMC | `sdmmc.rs` | 🟡 | — | SDHCI PIO okuma + CSD kapasite ayrıştırma; yazma bilinçli olarak reddedilir (desteklenmiyor) |
 
 ### Giriş
 
 | Bileşen | Sürücü | Durum | Not |
 | :--- | :--- | :---: | :--- |
 | PS/2 klavye & fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 | Kesme tabanlı, TR/EN |
-| USB HID klavye & fare | `usb_hid.rs` | ✅ | xHCI (EHCI/UHCI/OHCI handoff), hotplug |
-| USB dokunmatik ekran | `usb_touchscreen.rs` | 🟡 | HID Digitizer, çoklu dokunma; kalibrasyon yok |
+| USB HID klavye & fare | `usb_hid.rs` | ✅ | QEMU `high` profili | xHCI (EHCI/UHCI/OHCI handoff), hotplug |
+| USB dokunmatik ekran | `usb_touchscreen.rs` | 🟡 | — | HID Digitizer, çoklu dokunma; kalibrasyon yok |
 
 ---
 
@@ -182,9 +182,10 @@ sonuç elde edildiğinde ilgili hücreyi `✅` / `❌` ve tarihle güncelleyin.
 ## ⚠️ Bilinen Sınırlamalar
 
 - **SMP:** Çoğu gerçek dizüstünde APIC/AP başlatma reset ürettiği için BSP'de (tek çekirdek) açılır.
-- **Wi-Fi / Bluetooth:** Protokol iskeletleri var; gerçek PHY/HCI yok.
-- **USB Audio / Printer / Kamera:** İskelet sürücüler.
-- **SD/MMC yazma:** Güvenilir değil.
+- **Wi-Fi / Bluetooth:** WPA2 el sıkışması ve Ayarlar'da ağ listesi UI'ı var; gerçek PHY/RX-TX yok (ağ listesi simüle edilir).
+- **USB Audio / Printer / Kamera:** USB Audio'da arayüz/endpoint keşfi var; streaming, yazıcı ve kamera iskelet.
+- **SD/MMC yazma:** Bilinçli olarak desteklenmiyor; yazma istekleri açık hata döndürür.
+- **AHCI:** DMA blok I/O kodu mevcut; henüz QEMU/gerçek donanımda doğrulanmadı.
 - **GPU 3D:** AMD/NVIDIA yalnızca 2D mode-set iskeleti.
 - **Fan/EC profilleri:** Örnek ofsetler; anakart özel doğrulama gerekir.
 

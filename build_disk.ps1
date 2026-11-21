@@ -1,4 +1,4 @@
-# minOs Disk Hazirlama Betigi (build_disk.ps1)
+﻿# minOs Disk Hazirlama Betigi (build_disk.ps1)
 # MBR + 1MiB hizali FAT32 bolumu, Limine BIOS boot, kernel + VFS agaci.
 param(
     [string]$DiskImage = ".\disk.qcow2",

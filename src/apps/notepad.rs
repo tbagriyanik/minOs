@@ -633,8 +633,11 @@ impl NotepadApp {
         if self.undo_len == 0 {
             return;
         }
+        let Some(prev) = self.history.undo.pop() else {
+            self.undo_len = self.history.undo.len() as u8;
+            return;
+        };
         let cur = self.snapshot();
-        let prev = self.history.undo.pop().unwrap();
         if self.history.redo.len() == HISTORY_DEPTH {
             self.history.redo.remove(0);
         }
@@ -649,8 +652,11 @@ impl NotepadApp {
         if self.redo_len == 0 {
             return;
         }
+        let Some(next) = self.history.redo.pop() else {
+            self.redo_len = self.history.redo.len() as u8;
+            return;
+        };
         let cur = self.snapshot();
-        let next = self.history.redo.pop().unwrap();
         if self.history.undo.len() == HISTORY_DEPTH {
             self.history.undo.remove(0);
         }
@@ -1515,26 +1521,16 @@ impl NotepadApp {
         let rep_chars: alloc::vec::Vec<char> = self.replace_str().chars().collect();
 
         // Check if current selection matches needle
-        let is_match = if let (Some(s), Some(e)) = (self.selection_start, self.selection_end) {
-            if e - s == needle_chars.len() {
-                let mut ok = true;
-                for j in 0..needle_chars.len() {
-                    if !self.buffer[s + j].eq_ignore_ascii_case(&needle_chars[j]) {
-                        ok = false;
-                        break;
-                    }
-                }
-                ok
-            } else {
-                false
+        let selection = match (self.selection_start, self.selection_end) {
+            (Some(s), Some(e)) if e.checked_sub(s) == Some(needle_chars.len()) && e <= self.len => {
+                let matches = (0..needle_chars.len())
+                    .all(|j| self.buffer[s + j].eq_ignore_ascii_case(&needle_chars[j]));
+                matches.then_some((s, e))
             }
-        } else {
-            false
+            _ => None,
         };
 
-        if is_match {
-            let s = self.selection_start.unwrap();
-            let e = self.selection_end.unwrap();
+        if let Some((s, e)) = selection {
             self.push_history();
             // Delete selection
             let del_len = e - s;

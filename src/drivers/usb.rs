@@ -72,11 +72,10 @@ static mut DISKS: [DiskDevice; MAX_DISKS] = [DiskDevice::empty(); MAX_DISKS];
 static mut DISK_COUNT: usize = 0;
 static mut INITIALIZED: bool = false;
 
-pub fn init() {
+/// ATA aygıt tablosundan `DISKS` dizisini yeniden kurar.
+/// `init` ve sıcak takma taraması aynı kodu kullanır.
+fn enumerate_disks() {
     unsafe {
-        if INITIALIZED {
-            return;
-        }
         DISK_COUNT = 0;
 
         for drive in 0..4u8 {
@@ -139,13 +138,119 @@ pub fn init() {
                 }
             }
         }
+    }
+}
 
+pub fn init() {
+    unsafe {
+        if INITIALIZED {
+            return;
+        }
+        enumerate_disks();
         INITIALIZED = true;
     }
 }
 
 pub fn initialized() -> bool {
     unsafe { INITIALIZED }
+}
+
+// ---------------------------------------------------------------------------
+// Depolama sıcak takma (hotplug) olayları
+// ---------------------------------------------------------------------------
+//
+// ATA köprülü USB bellekler `ata::rescan` ile yeniden tanımlanır;
+// değişen disk kümesi `StorageHotplugEvent` olarak kuyruğa düşer ve
+// GUI döngüsü toast + dosya yöneticisi yenilemesi yapar.
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StorageHotplugAction {
+    Connected,
+    Disconnected,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StorageHotplugEvent {
+    pub action: StorageHotplugAction,
+    /// ATA sürücü numarası (0-3).
+    pub drive: u8,
+    /// Bağlantı medya türü (takıldığında dolu, çıkarıldığında son bilinen).
+    pub storage_type: StorageType,
+}
+
+const MAX_STORAGE_EVENTS: usize = 8;
+static mut STORAGE_QUEUE: [Option<StorageHotplugEvent>; MAX_STORAGE_EVENTS] =
+    [None; MAX_STORAGE_EVENTS];
+static mut STORAGE_HEAD: usize = 0;
+static mut STORAGE_TAIL: usize = 0;
+static mut STORAGE_LAST_CHECK_MS: u64 = 0;
+
+/// İki disk tablosunun "USB bellek var/yok" farkını kuyruğa yazar.
+unsafe fn diff_and_enqueue(old: &[DiskDevice; MAX_DISKS], new_count: usize) {
+    for drive in 0..4u8 {
+        let was_usb = (0..MAX_DISKS).any(|i| {
+            let d = &old[i];
+            d.drive_id == drive && d.storage_type == StorageType::UsbDrive
+        });
+        let is_usb = (0..new_count).any(|i| {
+            let d = &DISKS[i];
+            d.drive_id == drive && d.storage_type == StorageType::UsbDrive
+        });
+        if was_usb == is_usb {
+            continue;
+        }
+        let next = (STORAGE_TAIL + 1) % MAX_STORAGE_EVENTS;
+        if next == STORAGE_HEAD {
+            break;
+        }
+        STORAGE_QUEUE[STORAGE_TAIL] = Some(StorageHotplugEvent {
+            action: if is_usb {
+                StorageHotplugAction::Connected
+            } else {
+                StorageHotplugAction::Disconnected
+            },
+            drive,
+            storage_type: StorageType::UsbDrive,
+        });
+        STORAGE_TAIL = next;
+    }
+}
+
+/// Disk envanterini yeniden tarar; USB bellek tak/çıkar değişimi varsa
+/// olay kuyruğuna yazar. Dönüş: tarama yapıldı mı.
+///
+/// `poll` çağrıları arasında en az `min_interval_ms` beklenir —
+/// IDENTIFY komutları port I/O yaptığı için her karede çalıştırılmaz.
+pub fn poll_storage_hotplug(min_interval_ms: u64) -> bool {
+    unsafe {
+        if !INITIALIZED {
+            return false;
+        }
+        let now = crate::monotonic_ms();
+        if now.wrapping_sub(STORAGE_LAST_CHECK_MS) < min_interval_ms {
+            return false;
+        }
+        STORAGE_LAST_CHECK_MS = now;
+
+        let old_disks = DISKS;
+        ata::rescan();
+        enumerate_disks();
+        diff_and_enqueue(&old_disks, DISK_COUNT);
+        true
+    }
+}
+
+/// Sıradaki depolama hotplug olayını döndürür.
+pub fn pop_storage_hotplug_event() -> Option<StorageHotplugEvent> {
+    unsafe {
+        if STORAGE_HEAD == STORAGE_TAIL {
+            None
+        } else {
+            let ev = STORAGE_QUEUE[STORAGE_HEAD].take();
+            STORAGE_HEAD = (STORAGE_HEAD + 1) % MAX_STORAGE_EVENTS;
+            ev
+        }
+    }
 }
 
 pub fn disk_count() -> usize {

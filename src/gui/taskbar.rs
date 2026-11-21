@@ -236,13 +236,43 @@ impl MinGuiCompositor {
                     Color::TITLE_BAR_INACTIVE
                 };
                 let hovered = in_rect(mx, my, rect);
-                // Sekme ipucu: yerleşik uygulama başlığını gösterir;
-                // kullanıcı uygulamalarında (statik metin yok) atlanır.
+                // Sekme ipucu: uygulama başlığı + bu çalışma alanındaki açık
+                // pencere sayısı + çalışma alanı numarası (çok satırlı).
+                // Kullanıcı uygulamalarında (statik metin yok) yalnızca
+                // sayaç satırı gösterilir.
                 if hovered {
-                    let tip = Self::window_title(win.app_id as usize, ui_english());
-                    if !tip.is_empty() {
-                        self.tooltip_offer(rect, tip);
+                    let title = Self::window_title(win.app_id as usize, ui_english());
+                    let count = self
+                        .windows
+                        .iter()
+                        .flatten()
+                        .filter(|w| {
+                            w.app_id == win.app_id
+                                && w.is_open
+                                && w.workspace == self.active_workspace
+                        })
+                        .count();
+                    let mut tip = alloc::string::String::new();
+                    if !title.is_empty() {
+                        tip.push_str(title);
+                        tip.push('\n');
                     }
+                    if count > 1 {
+                        tip.push_str(&alloc::format!(
+                            "{} {} · {} {}",
+                            count,
+                            ui_text("açık pencere", "open windows"),
+                            ui_text("Çalışma Alanı", "Workspace"),
+                            self.active_workspace + 1
+                        ));
+                    } else {
+                        tip.push_str(&alloc::format!(
+                            "{} {}",
+                            ui_text("Çalışma Alanı", "Workspace"),
+                            self.active_workspace + 1
+                        ));
+                    }
+                    self.tooltip_offer_text(rect, &tip);
                 }
                 let bg = if hovered { Self::shade(base, 20) } else { base };
                 fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);

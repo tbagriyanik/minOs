@@ -1,4 +1,4 @@
-# File: test_stress_24h.ps1
+﻿# File: test_stress_24h.ps1
 # minOs Uzun Sureli Stres Testi ve Otomatik Panik Tespiti (24h Panic Test)
 #
 # Bu betik:

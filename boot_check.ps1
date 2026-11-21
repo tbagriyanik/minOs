@@ -1,4 +1,4 @@
-# File: boot_check.ps1
+﻿# File: boot_check.ps1
 # minOs ISO'yu bassiz (headless) QEMU'da acar, seri kaydi bir dosyaya yazar.
 # Kullanici: powershell -NoProfile -ExecutionPolicy Bypass -File .\boot_check.ps1 -Seconds 60
 # Cikti: boot_cow.log (varsayilan) + marker ozeti.

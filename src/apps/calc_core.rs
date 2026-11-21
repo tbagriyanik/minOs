@@ -227,7 +227,9 @@ mod tests {
         calc.set_expression(expression);
         let mut out = [0u8; INPUT_CAP];
         let len = CalcCore::format_value(calc.value(), &mut out);
-        alloc::string::String::from(core::str::from_utf8(&out[..len]).unwrap())
+        alloc::string::String::from(
+            core::str::from_utf8(&out[..len]).expect("formatted calculator output must be UTF-8"),
+        )
     }
 
     #[test]

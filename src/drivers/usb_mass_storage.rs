@@ -111,10 +111,11 @@ pub fn detect() -> bool {
         // USB cihazları arasında Mass Storage cihaz ara
         // Class = 0x08, Subclass = 0x06 (SCSI), Protocol = 0x50 (Bulk-Only)
 
-        // TODO: USB device enumeration ile gerçek Mass Storage tespiti
-
-        STATE = MassStorageState::Detected;
-        DEVICE_FOUND = true;
+        // TODO: USB device enumeration ile gerçek Mass Storage tespiti.
+        // Şu an USB sınıfı taraması yapılmadığı için cihaz varlığı
+        // doğrulanamaz; sahte "bulundu" raporlamak yerine false döner.
+        STATE = MassStorageState::NotDetected;
+        DEVICE_FOUND = false;
 
         DEVICE_FOUND
     }
@@ -283,9 +284,10 @@ pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
         cb[8] = (buffer.len() / 512) as u8;
         let _ = cb;
 
-        // OUT direction için CBW_DIR_OUT kullan
-        // TODO: Implement write direction
+        // Bulk-Only OUT yönü (CBW_DIR_OUT + CSW) henüz uygulanmadı;
+        // sahte başarı yerine false döner.
+        let _ = SCSI_WRITE_10;
 
-        true
+        false
     }
 }

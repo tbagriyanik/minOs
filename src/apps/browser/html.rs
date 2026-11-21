@@ -2931,6 +2931,7 @@ pub fn render_html_to_lines(
                             format!("details_{}", n)
                         });
                     let has_open = extract_attr(attrs, b"open").is_some();
+                    let is_open = details_is_open(&key, has_open);
                     details_stack.push(DetailsCtx {
                         key,
                         has_open_attr: has_open,
@@ -2941,10 +2942,7 @@ pub fn render_html_to_lines(
                     // Kapalı details: <summary> hariç tüm içerik gizlenir.
                     // hidden_until_close "details" adıyla derinlik takibi yapar;
                     // ilk <summary> öğesi summary_passthrough ile görünür kalır.
-                    if !details_is_open(
-                        &details_stack.last().unwrap().key,
-                        details_stack.last().unwrap().has_open_attr,
-                    ) {
+                    if !is_open {
                         hidden_until_close = Some((b"details".to_vec(), 1));
                         flush_line(
                             out_lines,

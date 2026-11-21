@@ -460,6 +460,42 @@ fn render_device_inventory(
         draw(&line, Color::TEXT_MAIN);
     }
 
+    // --- Sürücü Durum Tablosu (Ortak `drivers::status` kayıtları) ---
+    // Sürücü adı, aygıt modeli, bağlantı durumu, hata sayısı ve destek
+    // seviyesi tek satırda gösterilir.
+    {
+        let mut head = DeviceLine::new();
+        head.push(if english {
+            "Drivers: name | device | status | errors | support"
+        } else {
+            "Sürücüler: ad | aygıt | durum | hata | destek"
+        });
+        draw(&head, Color::ACCENT_YELLOW);
+
+        for id in crate::drivers::status::DriverId::ALL {
+            let e = crate::drivers::status::entry(id);
+            let mut line = DeviceLine::new();
+            line.push("  ");
+            line.push(id.label(english));
+            line.push(" | ");
+            line.push(id.device_model());
+            line.push(" | ");
+            line.push(e.phase.label(english));
+            line.push(" | ");
+            line.push(if english { "err=" } else { "hata=" });
+            line.number(e.error_count as u64);
+            line.push(" | ");
+            line.push(id.support_label(english));
+            let color = match e.phase.severity() {
+                crate::drivers::status::Severity::Ok => Color::ACCENT_GREEN,
+                crate::drivers::status::Severity::Info => Color::TEXT_MAIN,
+                crate::drivers::status::Severity::Warn => Color::ACCENT_YELLOW,
+                crate::drivers::status::Severity::Fail => Color::ACCENT_RED,
+            };
+            draw(&line, color);
+        }
+    }
+
     drop(draw);
     if row == 5 {
         let mut line = DeviceLine::new();
@@ -556,6 +592,20 @@ pub struct SystemSettings {
     pub test_trail_len: u8,
     pub test_trail_head: u8,
 
+    // Wi-Fi (Ağ sekmesi)
+    /// Seçili ağın SSID'si (scan sonuçlarındaki indeks yerine metin
+    /// saklanır; liste yenilense bile seçim korunur).
+    pub wifi_selected_ssid: [u8; 33],
+    pub wifi_selected_len: usize,
+    pub wifi_selected_set: bool,
+    /// Parola giriş alanı.
+    pub wifi_pass: [u8; 63],
+    pub wifi_pass_len: usize,
+    pub wifi_pass_edit: bool,
+    /// Son tarama bayrağı: liste `scan_count()/get_ap()` ile okunur.
+    pub wifi_scanned: bool,
+    pub wifi_msg: &'static str,
+
     pub status_msg: &'static str,
 }
 
@@ -621,6 +671,14 @@ impl SystemSettings {
             test_trail: [0u32; 96],
             test_trail_len: 0,
             test_trail_head: 0,
+            wifi_selected_ssid: [0u8; 33],
+            wifi_selected_len: 0,
+            wifi_selected_set: false,
+            wifi_pass: [0u8; 63],
+            wifi_pass_len: 0,
+            wifi_pass_edit: false,
+            wifi_scanned: false,
+            wifi_msg: "",
             status_msg: "",
         }
     }
@@ -1111,6 +1169,122 @@ impl SystemSettings {
         self.static_ip_octet = (self.static_ip_octet + 1) % 4;
         self.static_ip_value = 0;
         self.static_ip_digits = 0;
+    }
+
+    // --- Wi-Fi (Tab 2 / Ağ) ---
+    /// "Ağları Tara" butonu.
+    pub fn wifi_scan_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (
+            win_x + CONTENT_X + 280,
+            win_y + sp(UI_TOP_Y + 8 * UI_ROW_STEP),
+            sp(140),
+            sp(24),
+        )
+    }
+
+    /// Taranan ağ listesindeki i. satır (tıklanabilir).
+    pub fn wifi_ap_row_rect(
+        win_x: usize,
+        win_y: usize,
+        row: usize,
+    ) -> (usize, usize, usize, usize) {
+        (
+            win_x + CONTENT_X,
+            win_y + sp(UI_TOP_Y + (9 + row) * UI_ROW_STEP),
+            sp(420),
+            sp(UI_ROW_STEP - 8),
+        )
+    }
+
+    /// Parola giriş alanı.
+    pub fn wifi_pass_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (
+            win_x + CONTENT_X + 70,
+            win_y + sp(UI_TOP_Y + 16 * UI_ROW_STEP),
+            sp(280),
+            sp(24),
+        )
+    }
+
+    /// "Bağlan" butonu.
+    pub fn wifi_connect_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (
+            win_x + CONTENT_X + 360,
+            win_y + sp(UI_TOP_Y + 16 * UI_ROW_STEP),
+            sp(110),
+            sp(24),
+        )
+    }
+
+    /// "Bağlantıyı Kes" butonu.
+    pub fn wifi_disconnect_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (
+            win_x + CONTENT_X + 480,
+            win_y + sp(UI_TOP_Y + 16 * UI_ROW_STEP),
+            sp(120),
+            sp(24),
+        )
+    }
+
+    /// Listeye tıklanan ağı seçer.
+    pub fn wifi_select_ap(&mut self, index: usize) {
+        if let Some(ap) = crate::drivers::wifi::get_ap(index) {
+            let ssid = ap.ssid_str().as_bytes();
+            let n = ssid.len().min(self.wifi_selected_ssid.len());
+            self.wifi_selected_ssid[..n].copy_from_slice(&ssid[..n]);
+            self.wifi_selected_len = n;
+            self.wifi_selected_set = true;
+        }
+    }
+
+    /// Parola alanına karakter ekler (yazdırılabilir karakterler).
+    pub fn wifi_pass_char(&mut self, ch: char) {
+        if !self.wifi_pass_edit || self.wifi_pass_len >= self.wifi_pass.len() {
+            return;
+        }
+        if ch.is_ascii() && !ch.is_control() {
+            self.wifi_pass[self.wifi_pass_len] = ch as u8;
+            self.wifi_pass_len += 1;
+        }
+    }
+
+    pub fn wifi_pass_backspace(&mut self) {
+        if self.wifi_pass_edit && self.wifi_pass_len > 0 {
+            self.wifi_pass_len -= 1;
+        }
+    }
+
+    pub fn wifi_pass_cancel(&mut self) {
+        self.wifi_pass_edit = false;
+    }
+
+    /// Seçili SSID + parola ile bağlanmayı dener.
+    pub fn wifi_connect(&mut self) {
+        if !self.wifi_selected_set || self.wifi_selected_len == 0 {
+            self.wifi_msg = crate::gui::ui_text(
+                "Önce listeden bir ağ seçin.",
+                "Select a network from the list first.",
+            );
+            return;
+        }
+        let ssid = match core::str::from_utf8(&self.wifi_selected_ssid[..self.wifi_selected_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                self.wifi_msg = crate::gui::ui_text("Geçersiz SSID.", "Invalid SSID.");
+                return;
+            }
+        };
+        let pass = core::str::from_utf8(&self.wifi_pass[..self.wifi_pass_len]).unwrap_or_default();
+        self.wifi_msg = if crate::drivers::wifi::connect(ssid, pass) {
+            crate::gui::ui_text("Wi-Fi bağlantısı kuruldu.", "Wi-Fi connected.")
+        } else {
+            crate::gui::ui_text("Bağlantı başarısız.", "Connection failed.")
+        };
+    }
+
+    pub fn wifi_disconnect(&mut self) {
+        crate::drivers::wifi::disconnect();
+        self.wifi_msg = crate::gui::ui_text("Wi-Fi bağlantısı kesildi.", "Wi-Fi disconnected.");
     }
 
     // --- Ortak Butonlar ---
@@ -2856,6 +3030,190 @@ impl SystemSettings {
                             Color::TEXT_MAIN
                         },
                     );
+
+                    // --- Wi-Fi (Kablosuz Ağ) ---
+                    let wifi_y = win_y + sp(UI_TOP_Y + 8 * UI_ROW_STEP + UI_LABEL_OFFSET);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        wifi_y,
+                        crate::gui::ui_text("Kablosuz Ağ (Wi-Fi):", "Wireless (Wi-Fi):"),
+                        Color::ACCENT_YELLOW,
+                    );
+
+                    let wst = crate::drivers::wifi::status();
+                    let mut wline = DeviceLine::new();
+                    match wst.state {
+                        crate::drivers::wifi::WifiState::Connected => {
+                            wline.push(crate::gui::ui_text("Bağlı: ", "Connected: "));
+                            wline.push(wst.ssid_str());
+                            wline.push("  IP: ");
+                            for (i, oct) in wst.ip_addr.iter().enumerate() {
+                                if i > 0 {
+                                    wline.push(".");
+                                }
+                                wline.number(*oct as u64);
+                            }
+                            wline.push("  RSSI: ");
+                            wline.push(if wst.rssi < 0 { "-" } else { "" });
+                            wline.number(wst.rssi.unsigned_abs() as u64);
+                            wline.push(" dBm");
+                        }
+                        crate::drivers::wifi::WifiState::Failed => {
+                            wline.push(crate::gui::ui_text(
+                                "Bağlantı başarısız",
+                                "Connection failed",
+                            ));
+                        }
+                        _ => {
+                            wline.push(crate::gui::ui_text(
+                                "Bağlı değil (simüle AP listesi)",
+                                "Disconnected (simulated AP list)",
+                            ));
+                        }
+                    }
+                    draw_device_line(
+                        fb,
+                        win_x + CONTENT_X + sp(200),
+                        wifi_y,
+                        win_w.saturating_sub(CONTENT_X + sp(210)),
+                        &wline,
+                        if wst.state == crate::drivers::wifi::WifiState::Connected {
+                            Color::ACCENT_GREEN
+                        } else {
+                            Color::TEXT_MAIN
+                        },
+                    );
+
+                    let scan_btn = Self::wifi_scan_btn_rect(win_x, win_y);
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        scan_btn,
+                        Color::ACCENT_BLUE,
+                        crate::gui::ui_text("Ağları Tara", "Scan Networks"),
+                        Color::DARK_BG,
+                        false,
+                    );
+
+                    if self.wifi_scanned {
+                        let count = crate::drivers::wifi::scan_count().min(5);
+                        if count == 0 {
+                            MinGuiCompositor::draw_string(
+                                fb,
+                                win_x + CONTENT_X,
+                                scan_btn.1 + sp(30),
+                                crate::gui::ui_text("Ağ bulunamadı.", "No networks found."),
+                                Color::TEXT_MUTED,
+                            );
+                        }
+                        for i in 0..count {
+                            let ap = match crate::drivers::wifi::get_ap(i) {
+                                Some(a) => a,
+                                None => continue,
+                            };
+                            let row = Self::wifi_ap_row_rect(win_x, win_y, i);
+                            let selected = self.wifi_selected_set
+                                && self.wifi_selected_len == ap.ssid_len
+                                && self.wifi_selected_ssid[..ap.ssid_len] == ap.ssid[..ap.ssid_len];
+                            if selected {
+                                fb.draw_rect(row.0, row.1, row.2, row.3, Color::ACCENT_BLUE);
+                            } else {
+                                fb.draw_rect(row.0, row.1, row.2, row.3, Color::TASKBAR_BG);
+                            }
+                            let mut line = TextBuf::new();
+                            line.push_str(ap.ssid_str());
+                            line.push_str("  ");
+                            line.push_str(ap.security.label());
+                            line.push_str("  CH ");
+                            line.push_usize(ap.channel as usize);
+                            line.push_str("  %");
+                            line.push_usize(ap.signal_percent() as usize);
+                            MinGuiCompositor::draw_string(
+                                fb,
+                                row.0 + sp(8),
+                                row.1 + sp(7),
+                                line.as_str(),
+                                if selected {
+                                    Color::WHITE
+                                } else {
+                                    Color::TEXT_MAIN
+                                },
+                            );
+                        }
+                    } else {
+                        MinGuiCompositor::draw_string(
+                            fb,
+                            win_x + CONTENT_X,
+                            scan_btn.1 + sp(30),
+                            crate::gui::ui_text(
+                                "Ağ listesini görmek için 'Ağları Tara'ya basın.",
+                                "Click 'Scan Networks' to list wireless networks.",
+                            ),
+                            Color::TEXT_MUTED,
+                        );
+                    }
+
+                    // Parola alanı + bağlan/kes butonları
+                    let pass_label_y = win_y + sp(UI_TOP_Y + 16 * UI_ROW_STEP + UI_LABEL_OFFSET);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        pass_label_y,
+                        crate::gui::ui_text("Parola:", "Password:"),
+                        Color::TEXT_MAIN,
+                    );
+                    let pass_r = Self::wifi_pass_rect(win_x, win_y);
+                    fb.draw_rect_outline(
+                        pass_r.0,
+                        pass_r.1,
+                        pass_r.2,
+                        pass_r.3,
+                        if self.wifi_pass_edit {
+                            Color::ACCENT_YELLOW
+                        } else {
+                            Color::BORDER
+                        },
+                    );
+                    let mut shown = TextBuf::new();
+                    for _ in 0..self.wifi_pass_len {
+                        shown.push_byte(b'*');
+                    }
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        pass_r.0 + sp(6),
+                        pass_r.1 + sp(6),
+                        shown.as_str(),
+                        Color::TEXT_MAIN,
+                    );
+
+                    let conn_r = Self::wifi_connect_btn_rect(win_x, win_y);
+                    let disc_r = Self::wifi_disconnect_btn_rect(win_x, win_y);
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        conn_r,
+                        Color::ACCENT_GREEN,
+                        crate::gui::ui_text("Bağlan", "Connect"),
+                        Color::DARK_BG,
+                        false,
+                    );
+                    MinGuiCompositor::draw_button(
+                        fb,
+                        disc_r,
+                        Color::ACCENT_RED,
+                        crate::gui::ui_text("Bağlantıyı Kes", "Disconnect"),
+                        Color::WHITE,
+                        false,
+                    );
+
+                    if !self.wifi_msg.is_empty() {
+                        MinGuiCompositor::draw_string(
+                            fb,
+                            win_x + CONTENT_X,
+                            conn_r.1 + sp(30),
+                            self.wifi_msg,
+                            Color::ACCENT_YELLOW,
+                        );
+                    }
                 }
             }
             3 => {

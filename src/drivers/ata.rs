@@ -142,6 +142,9 @@ impl Device {
 pub static mut DEVICES: [Device; 4] = [Device::empty(); 4];
 static mut INITIALIZED: bool = false;
 static mut LAST_DISK_ERROR: u8 = 0;
+/// AHCI/SATA aygıtının `DEVICES` içindeki yuvası; -1 = yok.
+/// Bu yuvaya yapılan tüm okuma/yazma istekleri `ahci` sürücüsüne yönlendirilir.
+static mut AHCI_SLOT: i8 = -1;
 static mut IO_PROGRESS_HOOK: Option<fn(*mut (), usize, usize)> = None;
 static mut IO_PROGRESS_CONTEXT: *mut () = core::ptr::null_mut();
 static mut SINGLE_SECTOR_WRITES: usize = 0;
@@ -432,6 +435,74 @@ pub fn init() {
         }
 
         INITIALIZED = true;
+
+        // AHCI/SATA köprüsü: IDE taramasında boş kalan ilk yuvaya
+        // AHCI aygıtını kaydet (varsa). Okuma/yazma `ahci` sürücüsüne
+        // yönlendirilir; IDENTIFY PIO'su bu yolda kullanılmaz.
+        AHCI_SLOT = -1;
+        if crate::drivers::ahci::detect() && crate::drivers::ahci::init() {
+            for (slot, dev) in DEVICES.iter_mut().enumerate() {
+                if dev.kind == DeviceKind::None {
+                    let sectors = crate::drivers::ahci::capacity_sectors();
+                    *dev = Device {
+                        kind: DeviceKind::Ata,
+                        role: DriveRole::HardDisk,
+                        sectors,
+                        model: {
+                            let mut m = [0u8; 40];
+                            m[..16].copy_from_slice(b"AHCI SATA (DMA)");
+                            m
+                        },
+                        model_len: 16,
+                    };
+                    AHCI_SLOT = slot as i8;
+                    serial("[ATA] AHCI/SATA aygiti surucuye kaydedildi (DMA yol).");
+                    serial("  Kapasite: ");
+                    print_num(sectors * 512 / (1024 * 1024));
+                    serial(" MB\n");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Tüm sürücü kanallarını yeniden tanımlar (hotplug algılama için).
+///
+/// `init` bir kez çalıştıktan sonra çağrılır; IDENTIFY komutlarını
+/// yeniden gönderip `DEVICES` tablosunu günceller. ATAPI cihazlarında
+/// sektör sayısı `atapi_capacity` ile ayrıca okunduğundan, yeniden
+/// taramada mevcut değer korunur (aygıt hâlâ takılıysa).
+pub fn rescan() {
+    unsafe {
+        if !INITIALIZED {
+            return;
+        }
+        outb(0x3F6, 0x02);
+        outb(0x376, 0x02);
+
+        for drive in 0..4u8 {
+            let idx = drive as usize;
+            // AHCI köprü yuvası PIO IDENTIFY ile yeniden tanımlanmaz.
+            if AHCI_SLOT >= 0 && idx == AHCI_SLOT as usize {
+                continue;
+            }
+            let old = DEVICES[idx];
+            let mut dev = identify(drive, false);
+            if dev.kind == DeviceKind::None {
+                dev = identify(drive, true);
+            }
+            // ATAPI kapasitesi IDENTIFY'da yok; aygıt aynı kaldıysa
+            // önceki değeri koru, yeni takıldıysa yeniden oku.
+            if dev.kind == DeviceKind::Atapi {
+                if let Some(caps) = atapi_capacity(drive) {
+                    dev.sectors = caps as u64;
+                } else if old.kind == DeviceKind::Atapi {
+                    dev.sectors = old.sectors;
+                }
+            }
+            DEVICES[idx] = dev;
+        }
     }
 }
 
@@ -478,6 +549,10 @@ pub fn drive_capacity_sectors(drive: u8) -> u64 {
 }
 
 pub fn flush_cache(drive: u8) {
+    // AHCI yazmaları DMA ile doğrudan tamamlanır; ayrıca flush gerekmez.
+    if is_ahci_slot(drive) {
+        return;
+    }
     if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } {
         return;
     }
@@ -516,6 +591,12 @@ pub fn last_error() -> u8 {
 // Sektör Okuma (PIO Mode)
 // ---------------------------------------------------------------------------
 
+/// `drive` AHCI köprü yuvası mı? (okuma/yazma `ahci` sürücüsüne gider)
+#[inline]
+fn is_ahci_slot(drive: u8) -> bool {
+    unsafe { AHCI_SLOT >= 0 && drive as usize == AHCI_SLOT as usize }
+}
+
 pub fn read_sector(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
     if drive >= 4 {
         return false;
@@ -524,6 +605,9 @@ pub fn read_sector(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
         if DEVICES[drive as usize].kind != DeviceKind::Ata {
             return false;
         }
+    }
+    if is_ahci_slot(drive) {
+        return crate::drivers::ahci::read_sector(lba as u64, &mut buf[..]);
     }
     for attempt in 0..3 {
         if read_sector_once(drive, lba, buf) {
@@ -570,6 +654,21 @@ pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize 
     let n = count.min(max);
     if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } {
         return 0;
+    }
+    if is_ahci_slot(drive) {
+        let mut done = 0usize;
+        while done < n {
+            let ok = crate::drivers::ahci::read_sector(
+                lba as u64 + done as u64,
+                &mut buf[done * SECTOR_SIZE..(done + 1) * SECTOR_SIZE],
+            );
+            if !ok {
+                break;
+            }
+            done += 1;
+            report_io_progress(done, n);
+        }
+        return done;
     }
     let mut done = 0usize;
     // UI duyarlılığını korumak için tek seferde azami 32 sektör (16 KiB) işle;
@@ -666,6 +765,9 @@ pub fn write_sector_unflushed(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> b
             return false;
         }
     }
+    if is_ahci_slot(drive) {
+        return crate::drivers::ahci::write_sector(lba as u64, &buf[..]);
+    }
     for attempt in 0..3 {
         if write_sector_once(drive, lba, buf) {
             unsafe {
@@ -743,6 +845,21 @@ pub fn write_sectors_unflushed(drive: u8, lba: u32, count: usize, buf: &[u8]) ->
     let n = count.min(buf.len() / SECTOR_SIZE);
     if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } {
         return 0;
+    }
+    if is_ahci_slot(drive) {
+        let mut done = 0usize;
+        while done < n {
+            let ok = crate::drivers::ahci::write_sector(
+                lba as u64 + done as u64,
+                &buf[done * SECTOR_SIZE..(done + 1) * SECTOR_SIZE],
+            );
+            if !ok {
+                break;
+            }
+            done += 1;
+            report_io_progress(done, n);
+        }
+        return done;
     }
     let mut done = 0usize;
     const IO_CHUNK_SECTORS: usize = 32;

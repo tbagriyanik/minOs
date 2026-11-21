@@ -1,4 +1,4 @@
-# File: test_panic_crash.ps1
+﻿# File: test_panic_crash.ps1
 # minOs Kernel Panik ve Uygulama Çökmesi Testi
 #
 # Bu betik:

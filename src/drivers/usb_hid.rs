@@ -2308,6 +2308,11 @@ unsafe fn enumerate_device(
     }
 
     let config_slice = core::slice::from_raw_parts(buffer, n.min(PAGE as usize));
+
+    // Ses sınıfı aygıtları da burada yakalanır; USB Audio sürücüsü
+    // yapılandırmayı ayrıştırıp "cihaz görüldü" durumunu günceller.
+    crate::drivers::usb_audio::note_config_descriptor(config_slice, vendor, product);
+
     let mut candidates = [HidCandidate::empty(); MAX_HID_INTERFACES];
     let found = parse_hid_interfaces(config_slice, &mut candidates);
     if found == 0 {

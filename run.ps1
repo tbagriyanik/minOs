@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$BuildOnly,
     [switch]$Debug,
     [switch]$UsbDisks,

@@ -115,6 +115,58 @@ impl DriverId {
             self.label_tr()
         }
     }
+
+    /// Destek olgunluk seviyesi (docs/driver-maturity.md ile uyumlu).
+    ///
+    /// `0` = Tam, `1` = Kısmi, `2` = İskelet/Deneysel. UI'da renk ve
+    /// etiket seçimi için kullanılır.
+    pub fn support_level(self) -> u8 {
+        match self {
+            DriverId::Pci
+            | DriverId::Ata
+            | DriverId::Ahci
+            | DriverId::Net
+            | DriverId::Display
+            | DriverId::Audio
+            | DriverId::Usb
+            | DriverId::Input => 0,
+            // Denetleyici hazır ama blok I/O veya DMA yolu eksik:
+            // NVMe/VirtIO-blk init-only, SD/MMC PIO (DMA'sız).
+            DriverId::Nvme | DriverId::Sdmmc | DriverId::VirtioBlk => 1,
+        }
+    }
+
+    /// `support_level` için kısa etiket.
+    pub fn support_label(self, english: bool) -> &'static str {
+        match (self.support_level(), english) {
+            (0, false) => "Tam",
+            (0, true) => "Full",
+            (1, false) => "Kısmi",
+            (1, true) => "Partial",
+            (_, false) => "İskelet",
+            (_, true) => "Skeleton",
+        }
+    }
+
+    /// Sürücünün tanıdığı aygıt modelini kısa statik etiketle döndürür.
+    ///
+    /// Dinamik model dizgileri (ör. ATA IDENTIFY modeli) yerine sürücü
+    /// ailesinin bilinen adı kullanılır; ayrıntı `entry.detail`'dedir.
+    pub fn device_model(self) -> &'static str {
+        match self {
+            DriverId::Pci => "PCI Host Bridge",
+            DriverId::Ata => "IDE/ATAPI",
+            DriverId::Ahci => "AHCI SATA",
+            DriverId::Nvme => "NVMe Controller",
+            DriverId::Sdmmc => "SDHCI",
+            DriverId::VirtioBlk => "virtio-blk",
+            DriverId::Net => "Ethernet NIC",
+            DriverId::Display => "Framebuffer/GPU",
+            DriverId::Audio => "HDA / PC Speaker",
+            DriverId::Usb => "USB Host",
+            DriverId::Input => "HID / PS/2",
+        }
+    }
 }
 
 /// Sürücünün ortak yaşam döngüsü durumu.
@@ -272,6 +324,12 @@ pub struct DriverStatusEntry {
     pub error_code: u16,
     /// Hata veya kısıt için kısa açıklama.
     pub detail: &'static str,
+    /// Probe sonrasında oluşan çalışma zamanı hatalarının toplam sayısı.
+    /// `note_error` ile artırılır; UI'daki "hata sayısı" alanını besler.
+    pub error_count: u32,
+    /// Son çalışma zamanı hatasının kodu (`note_error`); hiç hata
+    /// olmadıysa `ERR_NONE`. Probe `error_code`'undan ayrıdır.
+    pub last_error: u16,
 }
 
 impl DriverStatusEntry {
@@ -281,6 +339,8 @@ impl DriverStatusEntry {
         elapsed_ms: 0,
         error_code: ERR_NONE,
         detail: "",
+        error_count: 0,
+        last_error: ERR_NONE,
     };
 
     const fn for_id(id: DriverId) -> Self {
@@ -380,6 +440,28 @@ pub fn probe_error(id: DriverId, start: u64, code: u16, detail: &'static str) {
     log_status(id, DriverPhase::Error, ms as u64, code, detail);
 }
 
+/// Çalışma zamanı sürücü hatasını sayar ve seri günlüğe yazar.
+///
+/// Probe durumu (`phase`) değişmez; `error_count` artar ve son hata
+/// kodu `last_error` alanına kaydedilir. Sürücüler I/O hatası, timeout
+/// veya reset gerektiğinde çağırır.
+pub fn note_error(id: DriverId, code: u16) {
+    let count = {
+        let mut reg = REGISTRY.lock();
+        let e = &mut reg[id as usize];
+        e.error_count = e.error_count.saturating_add(1);
+        e.last_error = code;
+        e.error_count
+    };
+    crate::kinfo!(
+        "driver",
+        "[DRIVER-ERROR] id={} code={} count={}\n",
+        id.key(),
+        code,
+        count
+    );
+}
+
 /// Kayıt girdisinin anlık kopyasını döndürür.
 pub fn entry(id: DriverId) -> DriverStatusEntry {
     let reg = REGISTRY.lock();
@@ -402,6 +484,25 @@ pub fn summary() -> (usize, usize, usize, usize) {
         }
     }
     (ready, unavailable, error, other)
+}
+
+/// Tüm sürücü girdilerini tek satırlık `[DRIVER-STATUS]` kayıtlarıyla
+/// seri günlüğe döker. `log_status_summary` ve Sistem Bilgisi ekranı
+/// tarafından kullanılır; her satır `key phase ms err errs` alanlarını
+/// içerir.
+pub fn log_all_entries() {
+    for id in DriverId::ALL {
+        let e = entry(id);
+        crate::kinfo!(
+            "driver",
+            "[DRIVER-STATUS] {} phase={} ms={} err={} errs={}\n",
+            e.id.key(),
+            e.phase.key(),
+            e.elapsed_ms,
+            e.error_code,
+            e.error_count
+        );
+    }
 }
 
 /// Disk ailesi sürücüleri (depolama grubu engelleme kararı için).

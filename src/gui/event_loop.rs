@@ -1009,6 +1009,61 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             state.force_render = true;
         }
 
+        // USB depolama (ATA köprülü bellek) sıcak takma taraması.
+        // IDENTIFY port I/O'su ağır olduğu için ~2 sn'de bir çalışır.
+        drivers::usb::poll_storage_hotplug(2_000);
+        while let Some(ev) = drivers::usb::pop_storage_hotplug_event() {
+            state.force_render = true;
+            // Disk envanteri değişti: dosya yöneticisi ve masaüstü
+            // simgeleri yeni `/media/usb0` durumuyla yenilenir.
+            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+            desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+
+            let is_en = settings_app.language.is_english();
+            let action_str = match (ev.action, is_en) {
+                (drivers::usb::StorageHotplugAction::Connected, false) => "takıldı",
+                (drivers::usb::StorageHotplugAction::Connected, true) => "connected",
+                (drivers::usb::StorageHotplugAction::Disconnected, false) => "çıkarıldı",
+                (drivers::usb::StorageHotplugAction::Disconnected, true) => "disconnected",
+            };
+            let dev_str = if is_en { "USB Disk" } else { "USB Bellek" };
+            let toast_title = if is_en {
+                "USB Storage Event"
+            } else {
+                "USB Depolama Olayı"
+            };
+            let mut toast_msg = [0u8; 96];
+            let mut msg_len = 0;
+            for b in dev_str.as_bytes() {
+                if msg_len < toast_msg.len() {
+                    toast_msg[msg_len] = *b;
+                    msg_len += 1;
+                }
+            }
+            if msg_len < toast_msg.len() {
+                toast_msg[msg_len] = b' ';
+                msg_len += 1;
+            }
+            for b in action_str.as_bytes() {
+                if msg_len < toast_msg.len() {
+                    toast_msg[msg_len] = *b;
+                    msg_len += 1;
+                }
+            }
+            let msg_text = core::str::from_utf8(&toast_msg[..msg_len]).unwrap_or("USB Disk");
+            compositor.push_toast(
+                if ev.action == drivers::usb::StorageHotplugAction::Connected {
+                    gui::ToastKind::Success
+                } else {
+                    gui::ToastKind::Info
+                },
+                toast_title,
+                msg_text,
+                monotonic_ms(),
+                3500,
+            );
+        }
+
         let clock_now_ms = monotonic_ms();
 
         if clock_now_ms.wrapping_sub(state.last_clock_update_ms) >= 1_000 {
@@ -3473,6 +3528,72 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     } else {
                                         gui::ui_text("Statik IP seçildi.", "Static IP selected.")
                                     };
+                                } else if settings_app.active_tab == 2
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::settings::SystemSettings::wifi_scan_btn_rect(wx, wy),
+                                    )
+                                {
+                                    settings_app.wifi_scanned = true;
+                                    settings_app.wifi_msg =
+                                        gui::ui_text("Ağlar taranıyor...", "Scanning networks...");
+                                    crate::drivers::wifi::scan_networks();
+                                    settings_app.wifi_msg = "";
+                                } else if settings_app.active_tab == 2
+                                    && (0..5).any(|row| {
+                                        gui::in_rect(
+                                            mx,
+                                            my,
+                                            apps::settings::SystemSettings::wifi_ap_row_rect(
+                                                wx, wy, row,
+                                            ),
+                                        )
+                                    })
+                                {
+                                    settings_app.wifi_pass_edit = false;
+                                    for row in 0..5 {
+                                        if gui::in_rect(
+                                            mx,
+                                            my,
+                                            apps::settings::SystemSettings::wifi_ap_row_rect(
+                                                wx, wy, row,
+                                            ),
+                                        ) {
+                                            settings_app.wifi_select_ap(row);
+                                            break;
+                                        }
+                                    }
+                                } else if settings_app.active_tab == 2
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::settings::SystemSettings::wifi_pass_rect(wx, wy),
+                                    )
+                                {
+                                    settings_app.wifi_pass_edit = true;
+                                } else if settings_app.active_tab == 2
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::settings::SystemSettings::wifi_connect_btn_rect(
+                                            wx, wy,
+                                        ),
+                                    )
+                                {
+                                    settings_app.wifi_pass_edit = false;
+                                    settings_app.wifi_connect();
+                                } else if settings_app.active_tab == 2
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::settings::SystemSettings::wifi_disconnect_btn_rect(
+                                            wx, wy,
+                                        ),
+                                    )
+                                {
+                                    settings_app.wifi_pass_edit = false;
+                                    settings_app.wifi_disconnect();
                                 } else if settings_app.active_tab == 2
                                     && gui::in_rect(
                                         mx,
@@ -6749,15 +6870,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
 
                 drivers::keyboard::KeyAction::SaveDocument => {
-                    if app_is_focused(&compositor, 2)
-                        && with_busy_progress(
+                    let saved = if app_is_focused(&compositor, 2) {
+                        with_busy_progress(
                             &mut fb,
                             mx,
                             my,
                             gui::ui_text("Dosya kaydediliyor...", "Saving file..."),
                             || notepad_app.save_file(&mut fs_mgr.vfs),
                         )
-                    {
+                    } else if app_is_focused(&compositor, 3) {
+                        with_busy_progress(
+                            &mut fb,
+                            mx,
+                            my,
+                            gui::ui_text("Sayfa kaydediliyor...", "Saving page..."),
+                            || browser_app.save_current_page(&mut fs_mgr.vfs),
+                        )
+                    } else {
+                        false
+                    };
+                    if saved {
                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                     }
                 }
@@ -6784,6 +6916,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         if let Some(data) = data {
                             notepad_app.open_file(&path, data);
                         }
+                    } else if app_is_focused(&compositor, 3) {
+                        // Ctrl+O: kaydedilmiş sayfaların klasörünü Dosya
+                        // Yöneticisi'nde aç; .html dosyaları tarayıcıda açılır.
+                        filemanager_app.set_path("/browser/pages");
+                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                        open_app(&mut compositor, 0);
                     }
                 }
 
@@ -8436,6 +8574,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 && ch.is_ascii_digit()
             {
                 settings_app.static_ip_input_char(ch);
+            } else if app_is_focused(&compositor, 1) && settings_app.wifi_pass_edit && ch == '\x1b'
+            {
+                settings_app.wifi_pass_cancel();
+            } else if app_is_focused(&compositor, 1) && settings_app.wifi_pass_edit && ch == '\x08'
+            {
+                settings_app.wifi_pass_backspace();
+            } else if app_is_focused(&compositor, 1)
+                && settings_app.wifi_pass_edit
+                && ch >= ' '
+                && ch != '\x7f'
+            {
+                settings_app.wifi_pass_char(ch);
             } else if ch == '\x1b'
                 && app_is_focused(&compositor, 0)
                 && filemanager_app.actions_menu_open

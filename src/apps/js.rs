@@ -2084,9 +2084,8 @@ impl JsRuntime {
             JsValue::Object(BTreeMap::new()),
         );
 
-        let (scheme, rest) = if url.contains("://") {
-            let i = url.find("://").unwrap();
-            (&url[..i], &url[i + 3..])
+        let (scheme, rest) = if let Some((scheme, rest)) = url.split_once("://") {
+            (scheme, rest)
         } else {
             ("", url)
         };
@@ -5195,17 +5194,14 @@ impl JsRuntime {
                         if let Some(target) = self.values.get(obj_name).cloned() {
                             // `x` değişkeni `__xhr_obj_N` gibi bir nesne
                             // referansı taşıyorsa gerçek hedefi çöz.
-                            let (resolved, store_key) = match &target {
-                                JsValue::String(r)
-                                    if self
-                                        .values
-                                        .get(r)
-                                        .is_some_and(|v| matches!(v, JsValue::Object(_))) =>
-                                {
-                                    (self.values.get(r).cloned().unwrap(), r.clone())
+                            let mut resolved = target.clone();
+                            let mut store_key = String::from(obj_name);
+                            if let JsValue::String(r) = &target {
+                                if let Some(value @ JsValue::Object(_)) = self.values.get(r) {
+                                    resolved = value.clone();
+                                    store_key = r.clone();
                                 }
-                                _ => (target, String::from(obj_name)),
-                            };
+                            }
                             if matches!(resolved, JsValue::Object(_)) {
                                 let mut t = resolved;
                                 self.set_member(&mut t, prop, val);

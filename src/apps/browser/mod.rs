@@ -277,6 +277,32 @@ fn chunked_body_complete(body: &[u8]) -> bool {
 
 /// Bir kaynak URL'sini (scheme, host, port, path) bileşenlerine ayırır.
 /// Mutlak `http://` / `https://` adresleri için geçerlidir.
+/// Sayfa URL'sinden `/browser/pages/` dosya adı üretir: şema atılır,
+/// güvenli karakter dışındakiler `_` yapılır, küçük harfe çevrilir ve
+/// en çok 40 karaktere kırpılır. Boş sonuç `"sayfa"` olur.
+fn page_file_slug(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host_path = rest.split(['?', '#']).next().unwrap_or(rest);
+    let mut slug = String::new();
+    for c in host_path.chars() {
+        if slug.len() >= 40 {
+            break;
+        }
+        let lc = c.to_ascii_lowercase();
+        if lc.is_ascii_alphanumeric() || lc == '-' || lc == '_' || lc == '.' {
+            slug.push(lc);
+        } else if !slug.is_empty() && !slug.ends_with('_') {
+            slug.push('_');
+        }
+    }
+    let slug = slug.trim_matches('_');
+    if slug.is_empty() {
+        String::from("sayfa")
+    } else {
+        String::from(slug)
+    }
+}
+
 fn split_resource_url(url: &str) -> Option<(bool, &str, u16, &str)> {
     let (is_https, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
@@ -1416,6 +1442,45 @@ impl BrowserApp {
         // Yükleme sonrası kayıt gerekmez; bayrağı sıfırla.
         HISTORY_DIRTY.store(false, Ordering::Release);
         true
+    }
+
+    /// Mevcut sayfanın orijinal HTML'ini `/browser/pages/` altına kaydeder
+    /// (Ctrl+S). Dosya adı sayfa URL'sinden türetilir; ad çakışırsa
+    /// `_2`, `_3` … soneki eklenir.
+    pub fn save_current_page(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
+        if self.original_html.is_empty() {
+            self.status = crate::gui::ui_text(
+                "Kaydedilecek sayfa içeriği yok.",
+                "No page content to save.",
+            );
+            return false;
+        }
+        let url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        let slug = page_file_slug(url);
+        let mut path = HeaplessString::<128>::new();
+        let mut saved = false;
+        for i in 0..100u32 {
+            let name = if i == 0 {
+                String::from(slug.as_str())
+            } else {
+                format!("{}_{}", slug, i + 1)
+            };
+            path.clear();
+            let _ = write!(path, "/browser/pages/{}.html", name);
+            if vfs.read_file(path.as_str()).is_none() {
+                saved = vfs.write_file(path.as_str(), &self.original_html);
+                break;
+            }
+        }
+        if saved {
+            self.status = crate::gui::ui_text(
+                "Sayfa /browser/pages klasörüne kaydedildi.",
+                "Page saved to /browser/pages.",
+            );
+        } else {
+            self.status = crate::gui::ui_text("Sayfa kaydedilemedi.", "Page could not be saved.");
+        }
+        saved
     }
 
     pub fn save_current_download(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
@@ -2596,7 +2661,9 @@ impl BrowserApp {
             let mut y = 12 + if self.js_alert.is_some() { 28 } else { 0 };
             for (line_idx, line) in self.page_lines.iter().enumerate() {
                 while marks.peek().is_some_and(|(_, mi)| *mi == line_idx) {
-                    let (name, _) = marks.next().unwrap();
+                    let Some((name, _)) = marks.next() else {
+                        break;
+                    };
                     self.anchor_positions.entry(name).or_insert(y);
                 }
                 let line_h = match line.tag {

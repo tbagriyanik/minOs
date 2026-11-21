@@ -12,25 +12,65 @@ use crate::gui::{Color, MinGuiCompositor};
 /// Tooltip'in görünmesi için gereken hover süresi (ms).
 pub const TOOLTIP_DELAY_MS: u64 = 700;
 
+/// Tooltip metni için üst sınır (bayt). Dinamik içerik (sayaç, ad)
+/// üreten çağıranlar metni bu sınıra kırparak gönderir.
+pub const TOOLTIP_TEXT_MAX: usize = 160;
+
+/// Tooltip metni: durum `Cell` içinde `Copy` kalması için satır içi
+/// sabit tamponda tutulur. `&'static str` ve çalışma anında üretilen
+/// metinlerin ikisini de taşıyabilir.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TooltipText {
+    buf: [u8; TOOLTIP_TEXT_MAX],
+    len: usize,
+}
+
+impl TooltipText {
+    /// Boş metin (compositor `const fn new` içinde kullanılır).
+    pub const fn empty() -> Self {
+        Self {
+            buf: [0; TOOLTIP_TEXT_MAX],
+            len: 0,
+        }
+    }
+
+    /// UTF-8 sınırında kırparak `&str`'den üretir.
+    pub fn from_text(text: &str) -> Self {
+        let mut out = Self::empty();
+        let mut end = text.len().min(TOOLTIP_TEXT_MAX);
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.buf[..end].copy_from_slice(&text.as_bytes()[..end]);
+        out.len = end;
+        out
+    }
+
+    /// `&str` görünümü.
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+}
+
 /// Tek bir hover adayı: bağlantı noktası (anchor) dikdörtgeni + metin.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TooltipCandidate {
     pub anchor: (usize, usize, usize, usize),
-    pub text: &'static str,
+    pub text: TooltipText,
 }
 
 /// Olay döngüsünün onayladığı hover adayı; `since_ms` gecikme saatidir.
 #[derive(Clone, Copy)]
 pub struct ConfirmedHover {
     pub anchor: (usize, usize, usize, usize),
-    pub text: &'static str,
+    pub text: TooltipText,
     pub since_ms: u64,
 }
 
 /// Ekranda çizilen tooltip kartı (ekran koordinatları).
 #[derive(Clone, Copy)]
 pub struct Tooltip {
-    pub text: &'static str,
+    pub text: TooltipText,
     pub anchor: (usize, usize, usize, usize),
     pub x: usize,
     pub y: usize,
@@ -119,8 +159,17 @@ impl MinGuiCompositor {
     /// çağırmalıdır; kare sonunda `tooltip_hover` sıfırlandığı için
     /// raporlanmayan öğeler adaylıktan düşer.
     pub fn tooltip_offer(&self, anchor: (usize, usize, usize, usize), text: &'static str) {
+        self.tooltip_offer_text(anchor, text);
+    }
+
+    /// `tooltip_offer`'ın çalışma anında üretilen metinleri de kabul eden
+    /// sürümü; metin `TooltipText` sınırına kırpılır.
+    pub fn tooltip_offer_text(&self, anchor: (usize, usize, usize, usize), text: &str) {
         let mut st = self.tooltip.get();
-        st.hover = Some(TooltipCandidate { anchor, text });
+        st.hover = Some(TooltipCandidate {
+            anchor,
+            text: TooltipText::from_text(text),
+        });
         self.tooltip.set(st);
     }
 
@@ -162,7 +211,7 @@ impl MinGuiCompositor {
             }
             if let Some(c) = st.candidate {
                 if now_ms.wrapping_sub(c.since_ms) >= TOOLTIP_DELAY_MS {
-                    let (x, y, w, h) = tooltip_rect(c.anchor, c.text, fb_w, fb_h);
+                    let (x, y, w, h) = tooltip_rect(c.anchor, c.text.as_str(), fb_w, fb_h);
                     st.visible = Some(Tooltip {
                         text: c.text,
                         anchor: c.anchor,
@@ -188,7 +237,7 @@ impl MinGuiCompositor {
         fb.draw_shadow(t.x, t.y, t.w, t.h, Color::SHADOW);
         fb.draw_rounded_rect(t.x, t.y, t.w, t.h, 4, Color::TITLE_BAR);
         fb.draw_rounded_rect_outline(t.x, t.y, t.w, t.h, 4, Color::BORDER);
-        let lines: alloc::vec::Vec<&str> = t.text.lines().collect();
+        let lines: alloc::vec::Vec<&str> = t.text.as_str().lines().collect();
         for (i, line) in lines.iter().enumerate() {
             let line_y = t.y + 5 + i * TOOLTIP_H;
             MinGuiCompositor::draw_string(fb, t.x + 8, line_y, line, Color::TEXT_MAIN);

@@ -849,10 +849,10 @@ impl Canvas2dContext {
         // Her alt-yolu kapat (fill açık alt-yolları örtük kapatır).
         for sub in subs.iter_mut() {
             if sub.len() > 1 {
-                let first = sub[0];
-                let last = *sub.last().unwrap();
-                if (first.x - last.x).abs() > 0.001 || (first.y - last.y).abs() > 0.001 {
-                    sub.push(first);
+                if let (Some(&first), Some(&last)) = (sub.first(), sub.last()) {
+                    if (first.x - last.x).abs() > 0.001 || (first.y - last.y).abs() > 0.001 {
+                        sub.push(first);
+                    }
                 }
             }
         }

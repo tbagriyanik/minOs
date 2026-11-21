@@ -47,27 +47,201 @@ static mut DEVICE_FOUND: bool = false;
 static mut NUM_CHANNELS: u8 = 2;
 static mut SAMPLE_RATE: u32 = 48000;
 static mut BITS_PER_SAMPLE: u8 = 16;
+static mut VID: u16 = 0;
+static mut PID: u16 = 0;
+static mut LAYOUT: AudioLayout = AudioLayout::empty();
+
+// ---------------------------------------------------------------------------
+// Endpoint / Arayüz Keşfi
+// ---------------------------------------------------------------------------
+
+/// Keşfedilen tek bir ses uç noktası.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AudioEndpoint {
+    /// Endpoint numarası (adres baytı: yön + numara).
+    pub address: u8,
+    /// true = cihazdan host'a (IN), false = host'tan cihaza (OUT).
+    pub dir_in: bool,
+    /// Maksimum paket boyutu.
+    pub max_packet: u16,
+    /// Servis aralığı (ms cinsinden frame).
+    pub interval: u8,
+    /// Bağlı olduğu arayüz numarası.
+    pub interface: u8,
+    /// Bu uç noktasının ait olduğu alt ayar (bAlternateSetting).
+    pub alt_setting: u8,
+}
+
+/// Yapılandırma tanımlayıcısından çıkarılan ses aygıtı düzeni.
+#[derive(Clone, Copy)]
+pub struct AudioLayout {
+    /// AudioControl arayüz sayısı.
+    pub control_interfaces: u8,
+    /// AudioStreaming arayüz sayısı.
+    pub streaming_interfaces: u8,
+    /// Keşfedilen iso-chronous uç noktaları.
+    pub endpoints: [AudioEndpoint; 8],
+    /// Geçerli uç nokta sayısı.
+    pub endpoint_count: u8,
+    /// UAC sürümü: 0 = bilinmiyor, 1 = UAC1, 2 = UAC2.
+    pub uac_version: u8,
+}
+
+impl AudioLayout {
+    const fn empty() -> Self {
+        Self {
+            control_interfaces: 0,
+            streaming_interfaces: 0,
+            endpoints: [AudioEndpoint {
+                address: 0,
+                dir_in: false,
+                max_packet: 0,
+                interval: 0,
+                interface: 0,
+                alt_setting: 0,
+            }; 8],
+            endpoint_count: 0,
+            uac_version: 0,
+        }
+    }
+
+    /// Playback (host→cihaz) için uygun OUT uç noktası var mı?
+    pub fn has_playback_endpoint(&self) -> bool {
+        self.endpoints[..self.endpoint_count as usize]
+            .iter()
+            .any(|e| !e.dir_in)
+    }
+
+    /// Recording (cihaz→host) için uygun IN uç noktası var mı?
+    pub fn has_record_endpoint(&self) -> bool {
+        self.endpoints[..self.endpoint_count as usize]
+            .iter()
+            .any(|e| e.dir_in)
+    }
+}
+
+/// USB yapılandırma tanımlayıcısını ayrıştırır ve ses arayüzlerini bulur.
+///
+/// `config` tam yapılandırma tanımlayıcısı olmalıdır (9 baytlık başlık dahil).
+/// Ses sınıfı (0x01) arayüzleri ve iso-chronous uç noktaları (descriptor
+/// type 0x05, attributes & 0x03 == 0x01) döndürülür. UAC2 protokolü (0x20)
+/// görülürse `uac_version = 2` olarak işaretlenir.
+pub fn parse_audio_config(config: &[u8]) -> AudioLayout {
+    let mut layout = AudioLayout::empty();
+    let mut i = 0usize;
+    // (interface, class, subclass, protocol, alt_setting)
+    let mut current: Option<(u8, u8, u8, u8, u8)> = None;
+
+    while i + 2 <= config.len() {
+        let len = config[i] as usize;
+        let dtype = config[i + 1];
+        if len < 2 || i + len > config.len() {
+            break;
+        }
+
+        if dtype == 0x04 && len >= 9 {
+            // Interface descriptor
+            let iface = config[i + 2];
+            let alt = config[i + 3];
+            let class = config[i + 5];
+            let subclass = config[i + 6];
+            let protocol = config[i + 7];
+            if class == USB_AUDIO_CLASS {
+                match subclass {
+                    USB_AUDIO_SUBCLASS_AUDIOCONTROL => {
+                        if alt == 0 {
+                            layout.control_interfaces += 1;
+                        }
+                        if protocol == USB_AUDIO_PROTOCOL_VERSION_2_00 {
+                            layout.uac_version = 2;
+                        } else if layout.uac_version == 0
+                            && protocol == USB_AUDIO_PROTOCOL_VERSION_1_00
+                        {
+                            layout.uac_version = 1;
+                        }
+                    }
+                    USB_AUDIO_SUBCLASS_AUDIOSTREAMING => {
+                        if alt == 0 {
+                            layout.streaming_interfaces += 1;
+                        }
+                        if protocol == USB_AUDIO_PROTOCOL_VERSION_2_00 {
+                            layout.uac_version = 2;
+                        } else if layout.uac_version == 0
+                            && protocol == USB_AUDIO_PROTOCOL_VERSION_1_00
+                        {
+                            layout.uac_version = 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            current = Some((iface, class, subclass, protocol, alt));
+        } else if dtype == 0x05 && len >= 7 {
+            // Endpoint descriptor — yalnızca iso-chronous uç noktalar
+            if let Some((iface, class, _subclass, _proto, alt)) = current {
+                if class == USB_AUDIO_CLASS {
+                    let attributes = config[i + 3];
+                    if attributes & 0x03 == 0x01 {
+                        // Transfer type = Isochronous
+                        let count = layout.endpoint_count as usize;
+                        if count < 8 {
+                            let max_packet =
+                                ((config[i + 4] as u16) | ((config[i + 5] as u16) << 8)) & 0x7FF;
+                            let address = config[i + 2];
+                            layout.endpoints[count] = AudioEndpoint {
+                                address,
+                                dir_in: address & 0x80 != 0,
+                                max_packet: max_packet.max(1),
+                                interval: config[i + 6],
+                                interface: iface,
+                                alt_setting: alt,
+                            };
+                            layout.endpoint_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        i += len;
+    }
+
+    layout
+}
+
+/// USB enumerasyonundan gelen yapılandırma tanımlayıcısını işler.
+///
+/// `usb_hid` xHCI enumerasyonu her aygıtın yapılandırma tanımlayıcısını
+/// okuduğunda çağrılır. Ses sınıfı arayüzü bulunursa aygıt "Detected"
+/// durumuna geçer; uç nokta ayrıntıları `audio_layout()` ile sorgulanır.
+pub fn note_config_descriptor(config: &[u8], vendor: u16, product: u16) {
+    unsafe {
+        let layout = parse_audio_config(config);
+        if layout.control_interfaces == 0 && layout.streaming_interfaces == 0 {
+            return;
+        }
+
+        if !DEVICE_FOUND {
+            crate::serial::print("[USB-AUDIO] USB ses aygıtı algılandı (class 0x01).\n");
+        }
+        DEVICE_FOUND = true;
+        VID = vendor;
+        PID = product;
+        LAYOUT = layout;
+        if STATE == AudioState::NotDetected || STATE == AudioState::Error {
+            STATE = AudioState::Detected;
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Cihaz Algılama
 // ---------------------------------------------------------------------------
 
 pub fn detect() -> bool {
-    unsafe {
-        if DEVICE_FOUND {
-            return true;
-        }
-
-        // USB cihazları arasında Audio cihaz ara
-        // Class = 0x01
-
-        // TODO: USB device enumeration ile gerçek Audio tespiti
-
-        STATE = AudioState::Detected;
-        DEVICE_FOUND = true;
-
-        DEVICE_FOUND
-    }
+    // Gerçek tespit USB enumerasyonu sırasında note_config_descriptor
+    // üzerinden gelir; burada yalnızca kayıtlı durumu döndürürüz.
+    unsafe { DEVICE_FOUND }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,16 +256,17 @@ pub fn init() -> bool {
 
         STATE = AudioState::Initializing;
 
-        // TODO: USB Audio interface'i bul
-        // Audio Control interface'i oku
-        // Audio Streaming interface'i oku
-        // Format ve sample rate ayarla
+        // Keşfedilen düzen varsa kanal/süre parametrelerini ona göre
+        // varsayılanlaştır; yoksa güvenli varsayılanlar kullanılır.
+        if LAYOUT.uac_version == 2 {
+            SAMPLE_RATE = 48000;
+        } else {
+            SAMPLE_RATE = 44100;
+        }
+        NUM_CHANNELS = 2;
+        BITS_PER_SAMPLE = 16;
 
-        // Varsayılan ayarlar
-        NUM_CHANNELS = 2; // Stereo
-        SAMPLE_RATE = 48000; // 48 kHz
-        BITS_PER_SAMPLE = 16; // 16-bit
-
+        // Uç nokta keşfi tamamlandı; streaming henüz bağlı değil.
         STATE = AudioState::Ready;
 
         true
@@ -130,6 +305,16 @@ pub fn bits_per_sample() -> u8 {
     unsafe { BITS_PER_SAMPLE }
 }
 
+/// VID:PID çifti (0:0 = henüz aygıt yok).
+pub fn vid_pid() -> (u16, u16) {
+    unsafe { (VID, PID) }
+}
+
+/// Keşfedilen ses arayüzü/uç nokta düzeni.
+pub fn audio_layout() -> AudioLayout {
+    unsafe { LAYOUT }
+}
+
 /// Sample rate ayarlama
 pub fn set_sample_rate(rate: u32) -> bool {
     unsafe {
@@ -151,13 +336,13 @@ pub fn start_playback() -> bool {
         if STATE != AudioState::Ready {
             return false;
         }
-
-        // TODO: USB Audio streaming başlat
-        // Isochronous endpoint aktif et
-
-        STATE = AudioState::Playing;
-
-        true
+        // Isochronous streaming henüz bağlı değil; sahte başarı
+        // döndürmek yerine açıkça desteklenmediğini bildir.
+        if !LAYOUT.has_playback_endpoint() {
+            STATE = AudioState::Error;
+            return false;
+        }
+        false
     }
 }
 
@@ -184,10 +369,13 @@ pub fn start_recording() -> bool {
         }
 
         // TODO: USB Audio recording başlat
+        if !LAYOUT.has_record_endpoint() {
+            STATE = AudioState::Error;
+            return false;
+        }
 
-        STATE = AudioState::Recording;
-
-        true
+        // Isochronous streaming bağlı değil; sahte başarı yok.
+        false
     }
 }
 
@@ -214,8 +402,9 @@ pub fn send_audio_data(data: &[u8]) -> bool {
         }
 
         // TODO: USB Isochronous OUT endpoint'e veri gönder
+        let _ = data;
 
-        true
+        false
     }
 }
 
@@ -227,8 +416,9 @@ pub fn receive_audio_data(buffer: &mut [u8]) -> Option<usize> {
         }
 
         // TODO: USB Isochronous IN endpoint'ten veri al
+        let _ = buffer;
 
-        Some(buffer.len())
+        None
     }
 }
 

@@ -1212,9 +1212,9 @@ impl<'a> SvgParser<'a> {
                             if sub.len() >= 2 {
                                 let closed = sub
                                     .first()
-                                    .map(|f| {
-                                        (f.x - sub.last().unwrap().x).abs() < 0.01
-                                            && (f.y - sub.last().unwrap().y).abs() < 0.01
+                                    .and_then(|f| sub.last().map(|l| (f, l)))
+                                    .map(|(f, l)| {
+                                        (f.x - l.x).abs() < 0.01 && (f.y - l.y).abs() < 0.01
                                     })
                                     .unwrap_or(false);
                                 self.push_shape(
@@ -1326,7 +1326,7 @@ mod tests {
     #[test]
     fn svg_rect_renders_pixels() {
         let src = b"<svg width='10' height='10'><rect x='2' y='2' width='4' height='4' fill='#ff0000'/></svg>";
-        let (w, h, px) = render_svg(src).unwrap();
+        let (w, h, px) = render_svg(src).expect("svg rect should render");
         assert_eq!((w, h), (10, 10));
         // (4,4) kırmızı olmalı
         let i = (4 * w + 4) * 3;
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn svg_circle_and_stroke() {
         let src = b"<svg width='20' height='20' viewBox='0 0 20 20'><circle cx='10' cy='10' r='8' fill='none' stroke='#00ff00' stroke-width='2'/></svg>";
-        let (w, h, px) = render_svg(src).unwrap();
+        let (w, h, px) = render_svg(src).expect("svg circle should render");
         assert_eq!((w, h), (20, 20));
         // Merkez dolu değil (fill none), kenar yeşil
         let ci = (10 * w + 10) * 3;
@@ -1350,7 +1350,7 @@ mod tests {
     #[test]
     fn svg_transform_translate() {
         let src = b"<svg width='10' height='10'><g transform='translate(5,0)'><rect x='0' y='0' width='2' height='2' fill='#0000ff'/></g></svg>";
-        let (w, _, px) = render_svg(src).unwrap();
+        let (w, _, px) = render_svg(src).expect("svg translate should render");
         let at5 = (1 * w + 6) * 3;
         assert_eq!(&px[at5..at5 + 3], &[0, 0, 255]);
         let at1 = (1 * w + 1) * 3;
@@ -1361,7 +1361,7 @@ mod tests {
     fn svg_path_polygon() {
         let src =
             b"<svg width='10' height='10'><path d='M1,1 L8,1 L8,8 L1,8 Z' fill='#123456'/></svg>";
-        let (w, _, px) = render_svg(src).unwrap();
+        let (w, _, px) = render_svg(src).expect("svg path should render");
         let i = (4 * w + 4) * 3;
         assert_eq!(&px[i..i + 3], &[0x12, 0x34, 0x56]);
     }
@@ -1369,7 +1369,7 @@ mod tests {
     #[test]
     fn svg_defs_skipped() {
         let src = b"<svg width='10' height='10'><defs><rect x='0' y='0' width='9' height='9' fill='#ff0000'/></defs><rect x='0' y='0' width='2' height='2' fill='#00ff00'/></svg>";
-        let (_, _, px) = render_svg(src).unwrap();
+        let (_, _, px) = render_svg(src).expect("svg defs should render");
         let i = (5 * 10 + 5) * 3;
         // defs'teki kırmızı render edilmemeli → beyaz
         assert_eq!(&px[i..i + 3], &[255, 255, 255]);

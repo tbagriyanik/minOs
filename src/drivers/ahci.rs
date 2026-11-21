@@ -110,9 +110,16 @@ const PORT_CMD_CR: u32 = 1 << 15; // Command List Running
 const PORT_CMD_FR: u32 = 1 << 14; // FIS Receive Running
 const PORT_CMD_ICC_MASK: u32 = 0xF << 28; // Interface Communication Control
 
-// PORT_TFD bitleri
+// PORT_TFD bitleri (ATA durum baytı: ERR=bit0, DF=bit5)
 const PORT_TFD_BSY: u8 = 1 << 7; // Busy
 const PORT_TFD_DRQ: u8 = 1 << 3; // Data Request
+const PORT_TFD_ERR: u8 = 1 << 0;
+const PORT_TFD_DF: u8 = 1 << 5;
+
+// ATA komutları (LBA48)
+const ATA_CMD_READ_DMA_EXT: u8 = 0x25;
+const ATA_CMD_WRITE_DMA_EXT: u8 = 0x35;
+const ATA_SECTOR_SIZE: usize = 512;
 
 // PORT_SSTS bitleri
 const PORT_SSTS_DET_MASK: u8 = 0x3; // Device Detection
@@ -170,14 +177,14 @@ struct FisRegH2D {
 // PRDT (Physical Region Descriptor Table)
 // ---------------------------------------------------------------------------
 
+/// PRDT girdisi 16 bayttır: 64-bit veri taban adresi, 32-bit rezerve ve
+/// 32-bit bayt sayacı (alt 22 bit = bayt-1, bit31 = tamamlanma kesmesi).
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct PrdtEntry {
-    dba: u32,  // Data Base Address
-    dbau: u32, // Data Base Address Upper
+    dba: u64,
     reserved: u32,
-    dbc: u32, // Byte Count (0-indexed)
-    i: u32,   // Interrupt on Completion
+    dbc: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +195,30 @@ static mut ABAR: u64 = 0; // HHDM sanal adresindeki AHCI Base Memory Register
 static mut DETECTED: bool = false;
 static mut PORT_COUNT: u32 = 0;
 static mut PORT_BASE: u64 = 0;
+static mut DMA_PHYS: u64 = 0; // Command List + Command Table + FIS alanı (fiziksel)
+static mut INITIALIZED: bool = false;
+
+/// DMA bölgesi yerleşimi (tek bitişik 8 KiB, 2 frame):
+///   +0x000 Command List (32 × 32B başlık; yalnızca slot 0 kullanılır)
+///   +0x400 Command Table (CFIS 64B + ACMD 16B + ayrılmış 48B + PRDT)
+///   +0x800 FIS Receive alanı (256B)
+const DMA_FRAMES: usize = 2;
+const CLB_OFF: u64 = 0x000;
+const CT_OFF: u64 = 0x400;
+const FIS_OFF: u64 = 0x800;
+const SLOT: u32 = 0;
+
+#[inline]
+fn dma_virt() -> u64 {
+    unsafe { crate::drivers::phys_to_virt(DMA_PHYS) }
+}
+
+/// HHDM sanal adresini fiziksel adrese çevirir (kernel belleği
+/// doğrudan eşlemeli olduğu için geçerlidir).
+#[inline]
+fn virt_to_phys(vaddr: u64) -> u64 {
+    vaddr.wrapping_sub(crate::drivers::phys_to_virt(0))
+}
 
 // ---------------------------------------------------------------------------
 // MMIO Yardımcı Fonksiyonları
@@ -267,6 +298,9 @@ pub fn detect() -> bool {
 
 pub fn init() -> bool {
     unsafe {
+        if INITIALIZED {
+            return true;
+        }
         if !DETECTED {
             return false;
         }
@@ -301,13 +335,172 @@ pub fn init() -> bool {
             }
         }
 
-        // FIS ve Command List belleğini ayarla
-        // TODO: Bellek tahsisi ve adres ayarlama
+        // FIS ve Command List belleğini ayır (PMM bitişik çerçeveler).
+        DMA_PHYS = crate::drivers::dma::alloc_dma_frames(DMA_FRAMES).unwrap_or(0);
+        if DMA_PHYS == 0 {
+            crate::drivers::status::note_error(
+                crate::drivers::status::DriverId::Ahci,
+                crate::drivers::status::ERR_NO_DMA,
+            );
+            return false;
+        }
+        // DMA bölgesini sıfırla (Command Header/Table/FIS artıkları kalmasın).
+        let dma_v = dma_virt() as *mut u8;
+        core::ptr::write_bytes(dma_v, 0, DMA_FRAMES * 4096);
+
+        // CLB / FIS taban adreslerini porta yaz.
+        let clb = DMA_PHYS + CLB_OFF;
+        let fis = DMA_PHYS + FIS_OFF;
+        port_write32(PORT_CLB, clb as u32);
+        port_write32(PORT_CLB_U, (clb >> 32) as u32);
+        port_write32(PORT_FB, fis as u32);
+        port_write32(PORT_FB_U, (fis >> 32) as u32);
+
+        // Hata ve kesme durumlarını temizle.
+        port_write32(PORT_SERR, 0xFFFF_FFFF);
+        port_write32(PORT_IS, 0xFFFF_FFFF);
 
         // Start command engine
         cmd = port_read32(PORT_CMD);
         cmd |= PORT_CMD_ST | PORT_CMD_FRE;
         port_write32(PORT_CMD, cmd);
+
+        INITIALIZED = true;
+        true
+    }
+}
+
+/// Port hazır ve komut motoru çalışıyor mu?
+pub fn ready() -> bool {
+    unsafe { DETECTED && INITIALIZED && DMA_PHYS != 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Komut Yürütme ve Sektör I/O
+// ---------------------------------------------------------------------------
+
+/// `buf`'u sayfa sınırlarına göre fiziksel olarak bitişik parçalara böler
+/// ve PRDT girdilerini `prdt`'ye yazar. En fazla `max` girdi.
+/// Dönen: kullanılan girdi sayısı.
+fn build_prdt(buf_ptr: *const u8, len: usize, prdt: *mut PrdtEntry, max: usize) -> usize {
+    let mut entries = 0usize;
+    let mut off = 0usize;
+    while off < len && entries < max {
+        let cur = unsafe { buf_ptr.add(off) };
+        let page_off = (cur as u64) & 0xFFF;
+        let chunk = (4096 - page_off as usize).min(len - off);
+        let phys = virt_to_phys(cur as u64);
+        unsafe {
+            let e = &mut *prdt.add(entries);
+            e.dba = phys;
+            e.reserved = 0;
+            // DBC: bayt-1 (alt 22 bit); son girdide tamamlanma kesmesi.
+            let last = off + chunk >= len || entries + 1 >= max;
+            e.dbc = ((chunk as u32 - 1) & 0x3F_FFFF) | if last { 1 << 31 } else { 0 };
+        }
+        entries += 1;
+        off += chunk;
+    }
+    entries
+}
+
+/// Tek bir ATA komutunu (LBA48, `sector_count` sektör) çalıştırır.
+/// `is_write=true` → H2D (cihaz veri yazar), false → D2H (okur).
+/// `device_reg`: FIS device baytı (sektör komutları 0x40, IDENTIFY 0xA0).
+fn issue_sector_command(
+    ata_cmd: u8,
+    lba: u64,
+    buf: *mut u8,
+    len: usize,
+    is_write: bool,
+    device_reg: u8,
+    sector_count: u16,
+) -> bool {
+    unsafe {
+        if DMA_PHYS == 0 || PORT_BASE == 0 {
+            return false;
+        }
+
+        let dma_v = dma_virt();
+        let clb = (dma_v + CLB_OFF) as *mut u8;
+        let ct = (dma_v + CT_OFF) as *mut u8;
+
+        // Command Table: CFIS (64B) + ACMD (16B) + ayrılmış (48B) + PRDT
+        core::ptr::write_bytes(ct, 0, 0x400);
+
+        // CFIS — Register H2D FIS (32 bayt anlamlı, 64B alan)
+        let cfis = ct;
+        *cfis = FIS_TYPE_REG_H2D;
+        *cfis.add(1) = 0; // PM port + control
+        *cfis.add(2) = ata_cmd;
+        *cfis.add(3) = 0; // feature
+        *cfis.add(4) = lba as u8;
+        *cfis.add(5) = (lba >> 8) as u8;
+        *cfis.add(6) = (lba >> 16) as u8;
+        *cfis.add(7) = device_reg;
+        *cfis.add(8) = (lba >> 24) as u8;
+        *cfis.add(9) = (lba >> 32) as u8;
+        *cfis.add(10) = (lba >> 40) as u8;
+        *cfis.add(11) = 0; // feature_low
+        *cfis.add(12) = sector_count as u8;
+        *cfis.add(13) = (sector_count >> 8) as u8;
+        *cfis.add(14) = 0; // icc
+        *cfis.add(15) = 0; // control
+
+        // PRDT: 0x80 ofsetinden itibaren
+        let prdt = ct.add(0x80) as *mut PrdtEntry;
+        let prdtl = build_prdt(buf as *const u8, len, prdt, 56);
+        if prdtl == 0 {
+            return false;
+        }
+
+        // Command Header (slot 0): DW0 flags + prdtl + prdbc + ctba.
+        // DW0 bayt0: CFL[4:0]=5, W[6] (H2D yazma), P[7] (prefetch).
+        // Yazma: 0xC5, okuma: 0x85. Bayt1 (Reset alanı) 0 kalır.
+        let hdr = clb;
+        core::ptr::write_bytes(hdr, 0, 32);
+        *hdr = if is_write { 0xC5 } else { 0x85 };
+        (hdr.add(2) as *mut u16).write_unaligned(prdtl as u16);
+        // DW1 prdbc = 0 (yazılırken güncellenir)
+        let ct_phys = DMA_PHYS + CT_OFF;
+        (hdr.add(8) as *mut u32).write_unaligned(ct_phys as u32);
+        (hdr.add(12) as *mut u32).write_unaligned((ct_phys >> 32) as u32);
+
+        // Port durumunu sıfırla ve komutu kuyruğa al.
+        port_write32(PORT_IS, 0xFFFF_FFFF);
+        port_write32(PORT_CI, 1 << SLOT);
+
+        // Tamamlanmayı bekle: CI biti düşer veya IS.DHRS (bit0) set olur.
+        let mut done = false;
+        for _ in 0..1_000_000 {
+            if port_read32(PORT_IS) & (1 << SLOT) != 0 {
+                done = true;
+                break;
+            }
+            if port_read32(PORT_CI) & (1 << SLOT) == 0 {
+                done = true;
+                break;
+            }
+        }
+        if !done {
+            port_write32(PORT_CI, 0);
+            crate::drivers::status::note_error(
+                crate::drivers::status::DriverId::Ahci,
+                crate::drivers::status::ERR_TIMEOUT,
+            );
+            return false;
+        }
+
+        // Hata denetimi: TFD ERR/DF bitleri ve SERR.
+        let tfd = port_read32(PORT_TFD) as u8;
+        let serr = port_read32(PORT_SERR);
+        if (tfd & (PORT_TFD_ERR | PORT_TFD_DF)) != 0 || serr != 0 {
+            crate::drivers::status::note_error(
+                crate::drivers::status::DriverId::Ahci,
+                crate::drivers::status::ERR_INIT_FAILED,
+            );
+            return false;
+        }
 
         true
     }
@@ -333,31 +526,69 @@ pub fn port_count() -> u32 {
     unsafe { PORT_COUNT }
 }
 
-/// Sektör okuma
+/// Sektör okuma (512 bayt, LBA48 + DMA PRDT)
 pub fn read_sector(lba: u64, buffer: &mut [u8]) -> bool {
     unsafe {
-        if !DETECTED {
+        if !DETECTED || buffer.len() < ATA_SECTOR_SIZE {
             return false;
         }
-
-        // Command Header/FIS/PRDT DMA belleği ve komut kuyruğu
-        // henüz uygulanmadı; sahte başarı yerine false döner.
-        let _ = (lba, buffer);
-
-        false
+        issue_sector_command(
+            ATA_CMD_READ_DMA_EXT,
+            lba,
+            buffer.as_mut_ptr(),
+            ATA_SECTOR_SIZE,
+            false,
+            0x40,
+            1,
+        )
     }
 }
 
-/// Sektör yazma
+/// ATA IDENTIFY DEVICE (0xEC) ile 512 baytlık tanımlama bloğunu okur.
+pub fn identify_device(buf: &mut [u8; ATA_SECTOR_SIZE]) -> bool {
+    if !ready() {
+        return false;
+    }
+    issue_sector_command(0xEC, 0, buf.as_mut_ptr(), ATA_SECTOR_SIZE, false, 0xA0, 0)
+}
+
+/// LBA48 sektör kapasitesini IDENTIFY DEVICE'tan çözer.
+/// WORD 100-103: 28-bit max; WORD 120-125: 48-bit max LBA.
+pub fn capacity_sectors() -> u64 {
+    let mut id = [0u8; ATA_SECTOR_SIZE];
+    if !identify_device(&mut id) {
+        return 0;
+    }
+    let word = |w: usize| -> u64 {
+        let lo = id[w * 2] as u64;
+        let hi = id[w * 2 + 1] as u64;
+        lo | (hi << 8)
+    };
+    let lba28 = ((word(60) << 16) | word(61)) & 0x0FFF_FFFF;
+    // LBA48: word 100 = düşük 16 bit, 101-103 = sonraki 48 bit
+    let lba48_low = word(100);
+    let lba48 = lba48_low | (word(101) << 16) | (word(102) << 32) | (word(103) << 48);
+    if lba48 > 0 && lba48 != u64::MAX {
+        lba48
+    } else {
+        lba28
+    }
+}
+
+/// Sektör yazma (512 bayt, LBA48 + DMA PRDT)
 pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
     unsafe {
-        if !DETECTED {
+        if !DETECTED || buffer.len() < ATA_SECTOR_SIZE {
             return false;
         }
-
-        // AHCI yazma yolu da LBA okuma ile aynı DMA altyapısını gerektirir.
-        let _ = (lba, buffer);
-
-        false
+        issue_sector_command(
+            ATA_CMD_WRITE_DMA_EXT,
+            lba,
+            buffer.as_ptr() as *mut u8,
+            ATA_SECTOR_SIZE,
+            true,
+            0x40,
+            1,
+        )
     }
 }

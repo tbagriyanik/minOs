@@ -1,4 +1,4 @@
-# File: test_host.ps1
+﻿# File: test_host.ps1
 # minOs host birim testleri (test_host.ps1)
 #
 # Neden ayri bir betik?
@@ -17,6 +17,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue" # native araclarin stderr ciktisi betigi durdurmasin
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot

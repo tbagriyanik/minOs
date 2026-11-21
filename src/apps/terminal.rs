@@ -1997,6 +1997,96 @@ impl TerminalApp {
                     );
                 }
             }
+            "net" | "ifconfig" => {
+                let mut sp = arg.split_whitespace();
+                let sub = sp.next().unwrap_or("status");
+                match sub {
+                    "diag" => {
+                        // net diag [atheros|marvell|all]
+                        let target = sp.next().unwrap_or("all");
+                        self.push_line(
+                            crate::gui::ui_text("--- NIC TESHIS ---", "--- NIC DIAGNOSTICS ---"),
+                            Color::ACCENT_PINK,
+                        );
+                        if target == "atheros" || target == "all" {
+                            let (det, b, d, f, mmio, link, tok) = crate::drivers::atheros::diag();
+                            self.push_line(
+                                crate::gui::ui_text("Atheros:", "Atheros:"),
+                                Color::ACCENT_BLUE,
+                            );
+                            let mut tb = TextBuf::new();
+                            tb.push_str("  tespit=");
+                            tb.push_str(if det { "evet" } else { "hayir" });
+                            tb.push_str(" BDF=");
+                            tb.push_usize(b as usize);
+                            tb.push_str(":");
+                            tb.push_usize(d as usize);
+                            tb.push_str(".");
+                            tb.push_usize(f as usize);
+                            tb.push_str(" MMIO=0x");
+                            tb.push_hex64(mmio);
+                            tb.push_str(" link=");
+                            tb.push_str(if link { "up" } else { "down" });
+                            tb.push_str(" test=");
+                            tb.push_str(match tok {
+                                1 => "OK",
+                                0 => "FAIL",
+                                _ => "atlandi",
+                            });
+                            self.push_line(tb.as_str(), Color::TEXT_MAIN);
+                            if tok < 0 {
+                                let _ = crate::drivers::atheros::self_test();
+                            }
+                        }
+                        if target == "marvell" || target == "all" {
+                            let (det, b, d, f, mmio, link, tok) = crate::drivers::marvell::diag();
+                            self.push_line(
+                                crate::gui::ui_text("Marvell:", "Marvell:"),
+                                Color::ACCENT_BLUE,
+                            );
+                            let mut tb = TextBuf::new();
+                            tb.push_str("  tespit=");
+                            tb.push_str(if det { "evet" } else { "hayir" });
+                            tb.push_str(" BDF=");
+                            tb.push_usize(b as usize);
+                            tb.push_str(":");
+                            tb.push_usize(d as usize);
+                            tb.push_str(".");
+                            tb.push_usize(f as usize);
+                            tb.push_str(" MMIO=0x");
+                            tb.push_hex64(mmio);
+                            tb.push_str(" link=");
+                            tb.push_str(if link { "up" } else { "down" });
+                            tb.push_str(" test=");
+                            tb.push_str(match tok {
+                                1 => "OK",
+                                0 => "FAIL",
+                                _ => "atlandi",
+                            });
+                            self.push_line(tb.as_str(), Color::TEXT_MAIN);
+                            if tok < 0 {
+                                let _ = crate::drivers::marvell::self_test();
+                            }
+                        }
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Not: Kayit testi yalniz fiziksel kartta anlamlidir (QEMU bu NIC'leri emule etmez).",
+                                "Note: Register test only meaningful on physical card (QEMU does not emulate these NICs).",
+                            ),
+                            Color::TEXT_MUTED,
+                        );
+                    }
+                    _ => {
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Kullanim: net diag [atheros|marvell|all]",
+                                "Usage: net diag [atheros|marvell|all]",
+                            ),
+                            Color::ACCENT_YELLOW,
+                        );
+                    }
+                }
+            }
             "wifi" | "wlan" => {
                 let mut sp = arg.split_whitespace();
                 let sub = sp.next().unwrap_or("status");

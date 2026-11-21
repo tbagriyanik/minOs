@@ -1,5 +1,7 @@
 pub struct AudioDevice {
     pub is_hda: bool,
+    /// USB Audio aygıtı hazır ve öncelikli çıkış olarak kullanılabilir.
+    pub is_usb: bool,
     pub volume_left: u8,
     pub volume_right: u8,
     pub is_muted: bool,
@@ -10,6 +12,9 @@ impl AudioDevice {
     pub fn new() -> Self {
         Self {
             is_hda: crate::drivers::hda::is_ready(),
+            is_usb: crate::drivers::usb_audio::is_detected()
+                && crate::drivers::usb_audio::state()
+                    == crate::drivers::usb_audio::AudioState::Ready,
             volume_left: 80,
             volume_right: 80,
             is_muted: false,
@@ -22,11 +27,17 @@ impl AudioDevice {
         self.volume_left = clamped;
         self.volume_right = clamped;
         crate::drivers::hda::set_volume(clamped);
+        if self.is_usb {
+            let _ = crate::drivers::usb_audio::set_volume(0, clamped as u16);
+        }
     }
 
     pub fn set_muted(&mut self, muted: bool) {
         self.is_muted = muted;
         crate::drivers::hda::set_muted(muted);
+        if self.is_usb {
+            let _ = crate::drivers::usb_audio::set_mute(0, muted);
+        }
         if muted {
             self.set_pc_speaker_tone(0);
         }
@@ -39,10 +50,18 @@ impl AudioDevice {
         self.is_hda && !crate::drivers::hda::is_dma_stalled()
     }
 
+    /// Birincil çıkış aygıtı: USB Audio hazırsa o, değilse HDA.
+    fn primary_is_usb(&self) -> bool {
+        self.is_usb
+            && crate::drivers::usb_audio::state() == crate::drivers::usb_audio::AudioState::Ready
+    }
+
     /// HDA ve PC Speaker durum özeti (GUI ve Ayarlar için).
     pub fn status_text(&self) -> &'static str {
         if self.is_muted || self.volume_left == 0 {
             crate::gui::ui_text("Ses kapalı (Sessiz)", "Audio muted")
+        } else if self.primary_is_usb() {
+            crate::gui::ui_text("USB Ses (Isochronous)", "USB Audio (Isochronous)")
         } else if self.is_hda && crate::drivers::hda::is_dma_progressing() {
             crate::gui::ui_text(
                 "Intel HDA (DMA Aktif, 48kHz Stereo)",
@@ -117,6 +136,34 @@ impl AudioDevice {
     pub fn play_chime(&mut self) {
         if self.is_muted || self.volume_left == 0 {
             return;
+        }
+        if self.primary_is_usb() {
+            // USB Audio: PCM baytlarını iso OUT akışına gönder.
+            const SINE_48: [i16; 48] = [
+                0, 2088, 4141, 6122, 7999, 9740, 11313, 12693, 13856, 14782, 15454, 15863, 16000,
+                15863, 15454, 14782, 13856, 12693, 11313, 9740, 7999, 6122, 4141, 2088, 0, -2088,
+                -4141, -6122, -7999, -9740, -11313, -12693, -13856, -14782, -15454, -15863, -16000,
+                -15863, -15454, -14782, -13856, -12693, -11313, -9740, -8000, -6122, -4141, -2088,
+            ];
+            let mut pcm = [0i16; 384];
+            for (idx, sample) in pcm.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                let s = SINE_48[idx % 48];
+                sample[0] = s;
+                sample[1] = s;
+            }
+            let bytes = unsafe {
+                core::slice::from_raw_parts(pcm.as_ptr() as *const u8, core::mem::size_of_val(&pcm))
+            };
+            if crate::drivers::usb_audio::start_playback() {
+                let _ = crate::drivers::usb_audio::send_audio_data(bytes);
+                let start = crate::monotonic_ms();
+                while crate::monotonic_ms().saturating_sub(start) < 80 {
+                    core::hint::spin_loop();
+                }
+                let _ = crate::drivers::usb_audio::stop_playback();
+                return;
+            }
+            // USB akışı açılamadıysa HDA/PC Speaker'a düş.
         }
         if self.is_hda && crate::drivers::hda::is_ready() {
             const SINE_48: [i16; 48] = [

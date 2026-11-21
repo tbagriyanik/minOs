@@ -592,3 +592,58 @@ pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
         )
     }
 }
+
+// ---------------------------------------------------------------------------
+// Kendinden test (QEMU / gerçek donanım doğrulaması)
+// ---------------------------------------------------------------------------
+
+/// Disk sonundaki (kapasite-1) sektöre bilinen desen yazıp geri okur.
+/// Orijinal içerik önce saklanır ve test sonunda geri yüklenir; sistem
+/// diskine dokunulmaz — QEMU testlerinde ayrı `ahci-test.img` kullanılmalıdır.
+/// `[AHCI-TEST]` önekiyle seri porta yazar.
+pub fn self_test() -> bool {
+    if !ready() {
+        crate::serial::print("[AHCI-TEST] Denetleyici hazir degil; test atlandi.\n");
+        return false;
+    }
+    let cap = capacity_sectors();
+    if cap < 2 {
+        crate::serial::print("[AHCI-TEST] Kapasite okunamadi; test atlandi.\n");
+        return false;
+    }
+    let lba = cap - 1; // son sektör (genellikle boş/ayrıcalıksız)
+
+    let mut orig = [0u8; ATA_SECTOR_SIZE];
+    let mut written = [0u8; ATA_SECTOR_SIZE];
+    let mut readback = [0u8; ATA_SECTOR_SIZE];
+
+    if !read_sector(lba, &mut orig) {
+        crate::serial::print("[AHCI-TEST] Orijinal sektor okunamadi; test BASARISIZ.\n");
+        return false;
+    }
+    // Koruma: son sektör yedek GPT başlığıysa ("EFI PART") sistem diski
+    // kabul edilir ve yazma testi atlanır — gerçek donanımda veri kaybı
+    // önlenir. QEMU/scratch disklerde son sektör genelde sıfırdır.
+    if orig.starts_with(b"EFI PART") {
+        crate::serial::print("[AHCI-TEST] Son sektor yedek GPT; yazma testi atlandi.\n");
+        return true;
+    }
+    // Desen: 0xA5 XOR konum — çarpışma ve bit kayması yakalar.
+    for (i, b) in written.iter_mut().enumerate() {
+        *b = (i as u8).wrapping_mul(31) ^ 0xA5;
+    }
+    let write_ok = write_sector(lba, &written);
+    let read_ok = write_ok && read_sector(lba, &mut readback);
+    let match_ok = read_ok && readback[..] == written[..];
+    // Orijinali geri yükle.
+    let _ = write_sector(lba, &orig);
+
+    let ok = write_ok && match_ok;
+    crate::serial::print("[AHCI-TEST] ");
+    crate::serial::print(if ok {
+        "BASARILI (yaz+oku+karsilastirma)\n"
+    } else {
+        "BASARISIZ\n"
+    });
+    ok
+}

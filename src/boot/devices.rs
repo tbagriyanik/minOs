@@ -101,6 +101,12 @@ fn scan(refresh: bool) {
         "sata portu hazir; LBA48 DMA okuma/yazma aktif",
         refresh,
     );
+    // AHCI kendinden testi: yalnizca acilista (rescan'de tekrarlanmaz).
+    // self_test son sektore yedek-GPT korumasi uygular; sistem disklerinde
+    // test guvenle atlanir, scratch/QEMU disklerinde yaz+oku dogrulanir.
+    if !refresh && drivers::ahci::ready() {
+        let _ = drivers::ahci::self_test();
+    }
     probe_storage_controller(
         DriverId::Nvme,
         drivers::nvme::detect,

@@ -430,7 +430,9 @@ impl FpsGameApp {
             let dx = e.x - self.pos_x;
             let dy = e.y - self.pos_y;
             let dist = fast_sqrt(dx * dx + dy * dy);
-            // Düşmanı görmek için görüş açısı içinde olmalı (basit kontrol).
+            if dist <= 0.0 || !self.has_line_of_sight(e.x, e.y, dist) {
+                continue;
+            }
             let angle = fast_atan2(dy, dx);
             let mut rel = angle - fast_atan2(self.dir_y, self.dir_x);
             while rel < -PI {
@@ -439,7 +441,8 @@ impl FpsGameApp {
             while rel > PI {
                 rel -= TAU;
             }
-            if rel.abs() < FOV / 2.0 + 0.3 && dist < best_dist {
+            let aim_tolerance = 0.03 + 0.32 / dist;
+            if rel.abs() < aim_tolerance && dist < best_dist {
                 best_dist = dist;
                 best_idx = Some(i);
             }
@@ -454,6 +457,60 @@ impl FpsGameApp {
         } else {
             false
         }
+    }
+
+    fn has_line_of_sight(&self, target_x: f32, target_y: f32, dist: f32) -> bool {
+        let ray_x = (target_x - self.pos_x) / dist;
+        let ray_y = (target_y - self.pos_y) / dist;
+        let mut map_x = self.pos_x as usize;
+        let mut map_y = self.pos_y as usize;
+        let delta_x = if ray_x.abs() > 0.0001 {
+            1.0 / ray_x.abs()
+        } else {
+            f32::MAX
+        };
+        let delta_y = if ray_y.abs() > 0.0001 {
+            1.0 / ray_y.abs()
+        } else {
+            f32::MAX
+        };
+        let step_x = if ray_x < 0.0 { -1isize } else { 1 };
+        let step_y = if ray_y < 0.0 { -1isize } else { 1 };
+        let mut side_x = if ray_x < 0.0 {
+            (self.pos_x - map_x as f32) * delta_x
+        } else {
+            (map_x as f32 + 1.0 - self.pos_x) * delta_x
+        };
+        let mut side_y = if ray_y < 0.0 {
+            (self.pos_y - map_y as f32) * delta_y
+        } else {
+            (map_y as f32 + 1.0 - self.pos_y) * delta_y
+        };
+
+        for _ in 0..(MAP_W + MAP_H) {
+            let hit_dist = if side_x < side_y {
+                let d = side_x;
+                side_x += delta_x;
+                map_x = (map_x as isize + step_x) as usize;
+                d
+            } else {
+                let d = side_y;
+                side_y += delta_y;
+                map_y = (map_y as isize + step_y) as usize;
+                d
+            };
+            if hit_dist >= dist {
+                return true;
+            }
+            if map_x >= MAP_W || map_y >= MAP_H {
+                return false;
+            }
+            let tile = MAP[map_y][map_x];
+            if tile == TILE_WALL || (tile == TILE_DOOR && !self.door_is_open(map_x, map_y)) {
+                return false;
+            }
+        }
+        false
     }
 
     /// Oyuncunun baktığı yönde, erişim mesafesindeki kapı karesi.
@@ -759,19 +816,55 @@ impl FpsGameApp {
             );
         }
         if !cancelled {
-            // Zemin: sıcak kahverengi ve açık turuncu gradyan: gri görünümü önler
+            // Perspektif ızgaralı zemin: her örnek dünya hücrelerine yansıtılır.
             for y in horizon..render_h {
                 if budget.is_expired() {
                     cancelled = true;
                     break;
                 }
                 let t = (y - horizon) as f32 / horizon.max(1) as f32;
-                // Sıcak kahverengi: altta yuvarlan, üstte daha açık
                 let r = (180.0 - 80.0 * t) as u32; // 180..100
                 let g = (100.0 - 20.0 * t) as u32; // 100..80
                 let b = (50.0 - 10.0 * t) as u32; // 50..40
-                let color = (r << 16) | (g << 8) | b;
-                fb.draw_rect(render_x, render_y + y, render_w, 1, color);
+                let base_color = (r << 16) | (g << 8) | b;
+                let row_depth = (horizon + 1) as f32 / (y - horizon + 1) as f32 * 0.5;
+                for x in (0..render_w).step_by(8) {
+                    if x & 63 == 0 && budget.is_expired() {
+                        cancelled = true;
+                        break;
+                    }
+                    let camera_x = 2.0 * (x as f32 + 4.0) / render_w as f32 - 1.0;
+                    let ray_x = self.dir_x + self.plane_x * camera_x;
+                    let ray_y = self.dir_y + self.plane_y * camera_x;
+                    let world_x = self.pos_x + ray_x * row_depth;
+                    let world_y = self.pos_y + ray_y * row_depth;
+                    let cell_x = world_x as i32;
+                    let cell_y = world_y as i32;
+                    let mut frac_x = world_x - cell_x as f32;
+                    let mut frac_y = world_y - cell_y as f32;
+                    if frac_x < 0.0 {
+                        frac_x += 1.0;
+                    }
+                    if frac_y < 0.0 {
+                        frac_y += 1.0;
+                    }
+                    let on_grid =
+                        frac_x < 0.035 || frac_x > 0.965 || frac_y < 0.035 || frac_y > 0.965;
+                    let tile_tint = if (cell_x + cell_y) & 1 == 0 {
+                        1.0
+                    } else {
+                        0.96
+                    };
+                    let color = if on_grid {
+                        0x553F30
+                    } else {
+                        MinGuiCompositor::shade(base_color, (tile_tint * 100.0) as i32)
+                    };
+                    fb.draw_rect(render_x + x, render_y + y, 8.min(render_w - x), 1, color);
+                }
+                if cancelled {
+                    break;
+                }
             }
         }
         if !cancelled {
@@ -1583,9 +1676,11 @@ impl FpsGameApp {
             // Merkez işaretçi (crosshair).
             let cx = win_x + win_w / 2;
             let cy = view_y + view_h / 2;
-            fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(6), 3, 13, 0xFFFF00);
-            fb.draw_rect(cx.saturating_sub(6), cy.saturating_sub(1), 13, 3, 0xFFFF00);
-            fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(1), 3, 3, 0xFFFFFF);
+            fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(7), 2, 5, 0xD8F4FF);
+            fb.draw_rect(cx.saturating_sub(1), cy + 2, 2, 5, 0xD8F4FF);
+            fb.draw_rect(cx.saturating_sub(7), cy.saturating_sub(1), 5, 2, 0xD8F4FF);
+            fb.draw_rect(cx + 2, cy.saturating_sub(1), 5, 2, 0xD8F4FF);
+            fb.draw_rect(cx, cy, 1, 1, 0xFFFFFF);
 
             // Silah silüeti.
             let gun_w = 92;
@@ -1804,11 +1899,9 @@ impl FpsGameApp {
                     .iter()
                     .take(self.door_count)
                     .all(|d| d.state == 0);
-                if self.toggle_door() && was_closed {
+                let toggled = self.toggle_door();
+                if toggled && was_closed {
                     self.play_sound(audio_dev, SoundKind::Door);
-                } else if self.toggle_door() {
-                    // Kapı zaten açıksa veya yarım animasyondaysa,
-                    // sesi çalmama (tek basımda bir ses yeterli).
                 }
                 true
             }

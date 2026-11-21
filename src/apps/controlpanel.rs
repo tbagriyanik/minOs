@@ -421,6 +421,22 @@ pub fn active_tab() -> usize {
     ACTIVE_TAB.load(Ordering::Relaxed).min(TAB_COUNT - 1)
 }
 
+pub fn content_extent() -> (usize, usize) {
+    let rows = match active_tab() {
+        0 => 16,
+        1 => 18,
+        2 => 12,
+        3 => 22,
+        4 => 45,
+        _ => crate::drivers::status::DriverId::COUNT + 30,
+    };
+    let step = 24 + zoom_extra();
+    let width = sp(1200);
+    let full_height = 62 + zoom_extra() + 12 + sp(72) + rows * step + sp(48);
+    let height = full_height.saturating_sub(crate::gui::scaled_titlebar_h());
+    (width, height)
+}
+
 /// Sekmeyi seçer.
 pub fn select_tab(tab: usize) {
     if tab < TAB_COUNT {

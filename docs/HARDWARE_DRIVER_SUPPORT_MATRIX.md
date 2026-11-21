@@ -88,8 +88,8 @@ ağ ve ses aygıtları yalnızca `minimal` dışındaki profillerde eklenir.
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 | — | MAC hash, RX/TX |
 | VirtIO-net | `virtio_net.rs` | ✅ | QEMU `default` 2026-11-17 | Sanal ağ |
 | VMware VMXNET3 | `e1000.rs` | 🟢 | — | PCI 0x15AD |
-| Atheros / Marvell Ethernet | `atheros.rs`, `marvell.rs` | 🟡 | — | RX/TX yolu yok; BDF düzeltmesi + filtre/checksum iskeleti eklendi, donanım doğrulaması bekliyor |
-| Wi-Fi 802.11 | `wifi.rs` | 🔴 | — | WPA2 el sıkışması + Ayarlar'da simüle ağ listesi UI'ı var; gerçek PHY/RX-TX yok |
+| Atheros / Marvell Ethernet | `atheros.rs`, `marvell.rs` | 🟡 | — | RX/TX yolu yok; filtre/checksum iskeleti + `net diag` readback self-test eklendi, gerçek kart doğrulaması bekliyor |
+| Wi-Fi 802.11 | `wifi.rs`, `rtl8xxx.rs` | 🟡 | — | WPA2 el sıkışması + Ayarlar ağ listesi UI'ı; RTL8188/8192 USB algılama + bulk/firmware iskeleti (`rtl8xxx.rs`); gerçek tarama/RX-TX doğrulaması bekliyor, liste simüle kalabilir |
 | Bluetooth HCI | `bluetooth.rs` | 🔴 | — | HCI paketleri; gerçek denetleyici yok |
 
 ### Ses
@@ -98,15 +98,15 @@ ağ ve ses aygıtları yalnızca `minimal` dışındaki profillerde eklenir.
 | :--- | :--- | :---: | :--- | :--- |
 | Intel HDA | `hda.rs`, `audio.rs` | ✅ | QEMU `default` 2026-11-17 | 48 kHz stereo DMA, WAV/MP3 |
 | PC Speaker (PWM) | `audio.rs` | 🟢 | — | Zamanlayıcı bip ve ton |
-| USB Audio | `usb_audio.rs` | 🟡 | — | UAC1/UAC2 arayüz + iso-chronous endpoint keşfi (xHCI enumerasyonundan beslenir); streaming yok |
+| USB Audio | `usb_audio.rs` | 🟡 | — | Genel USB aygıt katmanı + UAC1/UAC2 format/Feature Unit ayrıştırma + isokronik playback/kayıt streaming + volume/mute; gerçek donanım doğrulaması bekliyor |
 
 ### Depolama
 
 | Bileşen | Sürücü | Durum | Son Doğrulama | Not |
 | :--- | :--- | :---: | :--- | :--- |
 | ATA / IDE / ATAPI | `ata.rs` | 🟢 | — | LBA28/48, CD/DVD-ROM |
-| AHCI / SATA | `ahci.rs` | 🟡 | — | DMA komut listesi/FIS/PRDT tahsisi ve gerçek sektör okuma-yazma uygulandı; QEMU AHCI ve gerçek donanım doğrulaması bekliyor |
-| NVMe | `nvme.rs` | 🟢 | — | Komut kuyrukları |
+| AHCI / SATA | `ahci.rs` | 🟡 | — | DMA komut listesi/FIS/PRDT + gerçek LBA48 sektör I/O; boot'ta `[AHCI-TEST]` self-testi (yedek-GPT korumalı), QEMU scratch disk profili; gerçek donanım doğrulaması bekliyor |
+| NVMe | `nvme.rs` | 🔴 | — | Yalnızca PCI/MMIO tespiti; admin/I/O kuyruk ve sektör veri yolu yok (okuma/yazma false döner) |
 | VirtIO-blk | `virtio_blk.rs` | ✅ | QEMU `default` 2026-11-17 | Sanal blok |
 | USB Mass Storage | `usb_mass_storage.rs` | 🟡 | — | Gerçek enumerasyon olmadan "bulundu" raporlamaz; yazma desteklenmiyor olarak işaretli |
 | SD / MMC | `sdmmc.rs` | 🟡 | — | SDHCI PIO okuma + CSD kapasite ayrıştırma; yazma bilinçli olarak reddedilir (desteklenmiyor) |
@@ -182,10 +182,10 @@ sonuç elde edildiğinde ilgili hücreyi `✅` / `❌` ve tarihle güncelleyin.
 ## ⚠️ Bilinen Sınırlamalar
 
 - **SMP:** Çoğu gerçek dizüstünde APIC/AP başlatma reset ürettiği için BSP'de (tek çekirdek) açılır.
-- **Wi-Fi / Bluetooth:** WPA2 el sıkışması ve Ayarlar'da ağ listesi UI'ı var; gerçek PHY/RX-TX yok (ağ listesi simüle edilir).
-- **USB Audio / Printer / Kamera:** USB Audio'da arayüz/endpoint keşfi var; streaming, yazıcı ve kamera iskelet.
+- **Wi-Fi / Bluetooth:** WPA2 el sıkışması ve Ayarlar'da ağ listesi UI'ı var; `rtl8xxx.rs` RTL8188/8192 USB algılama/firmware iskeleti eklendi ancak gerçek PHY/RX-TX ve tarama doğrulanmadı (ağ listesi hâlâ simüle edilebilir).
+- **USB Audio / Printer / Kamera:** USB Audio'da genel transfer katmanı + isokronik streaming ve volume/mute uygulandı; gerçek donanım doğrulaması bekliyor. Yazıcı ve kamera iskelet.
 - **SD/MMC yazma:** Bilinçli olarak desteklenmiyor; yazma istekleri açık hata döndürür.
-- **AHCI:** DMA blok I/O kodu mevcut; henüz QEMU/gerçek donanımda doğrulanmadı.
+- **AHCI:** DMA blok I/O + boot self-testi (`[AHCI-TEST]`, yedek-GPT korumalı) mevcut; QEMU scratch disk profili eklendi, gerçek donanım doğrulaması bekliyor.
 - **GPU 3D:** AMD/NVIDIA yalnızca 2D mode-set iskeleti.
 - **Fan/EC profilleri:** Örnek ofsetler; anakart özel doğrulama gerekir.
 

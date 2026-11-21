@@ -2905,6 +2905,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             &filemanager_app,
                             &notepad_app,
                             &browser_app,
+                            settings_app.active_tab,
                         );
 
                         let lay =
@@ -3095,6 +3096,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 &filemanager_app,
                                 &notepad_app,
                                 &browser_app,
+                                settings_app.active_tab,
                             );
                             (
                                 wx.saturating_sub(win.scroll.x),
@@ -5679,14 +5681,37 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 false,
                             );
                         } else if !compositor.start_menu_focus_submenu {
-                            if compositor.active_start_group > 0 {
-                                compositor.active_start_group -= 1;
+                            let group_count = gui::MENU_GROUPS.len();
+                            if group_count > 0 {
+                                compositor.active_start_group =
+                                    if compositor.active_start_group == 0 {
+                                        group_count - 1
+                                    } else {
+                                        compositor.active_start_group - 1
+                                    };
                                 compositor.selected_start_item = 0;
                                 compositor.confirm_shutdown = false;
                                 compositor.confirm_restart = false;
                             }
-                        } else if compositor.selected_start_item > 0 {
-                            compositor.selected_start_item -= 1;
+                        } else {
+                            let active_g = compositor.active_start_group;
+                            let count = if active_g == 3 {
+                                1 + compositor.installed_apps_count
+                            } else if active_g == 4 {
+                                2
+                            } else {
+                                gui::MENU_GROUPS[active_g].2
+                            };
+                            if count > 0 {
+                                compositor.selected_start_item = if compositor.selected_start_item
+                                    == 0
+                                    || compositor.selected_start_item >= count
+                                {
+                                    count - 1
+                                } else {
+                                    compositor.selected_start_item - 1
+                                };
+                            }
                         }
                     } else if compositor.is_context_menu_open {
                         // Sag tik / Baglam menusu gezintisi
@@ -5814,8 +5839,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 true,
                             );
                         } else if !compositor.start_menu_focus_submenu {
-                            if compositor.active_start_group + 1 < 5 {
-                                compositor.active_start_group += 1;
+                            let group_count = gui::MENU_GROUPS.len();
+                            if group_count > 0 {
+                                compositor.active_start_group =
+                                    if compositor.active_start_group + 1 >= group_count {
+                                        0
+                                    } else {
+                                        compositor.active_start_group + 1
+                                    };
                                 compositor.selected_start_item = 0;
                                 compositor.confirm_shutdown = false;
                                 compositor.confirm_restart = false;
@@ -5831,8 +5862,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 gui::MENU_GROUPS[active_g].2
                             };
 
-                            if compositor.selected_start_item + 1 < count {
-                                compositor.selected_start_item += 1;
+                            if count > 0 {
+                                compositor.selected_start_item =
+                                    if compositor.selected_start_item >= count - 1 {
+                                        0
+                                    } else {
+                                        compositor.selected_start_item + 1
+                                    };
                             }
                         }
                     } else if compositor.is_context_menu_open {
@@ -7513,6 +7549,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     &filemanager_app,
                     &notepad_app,
                     &browser_app,
+                    settings_app.active_tab,
                 );
 
                 let wheel_lay = gui::scrollbar::layout((cx, cy, cw, ch), c_w, c_h, w.scroll);
@@ -8115,6 +8152,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         &filemanager_app,
                         &notepad_app,
                         &browser_app,
+                        settings_app.active_tab,
                     );
                     let (_, _, vcw, vch) = w.content_rect();
                     w.scroll_anim.cancel();
@@ -9136,6 +9174,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     &filemanager_app,
                     &notepad_app,
                     &browser_app,
+                    settings_app.active_tab,
                 );
                 let sb = gui::scrollbar::SCROLLBAR_THICKNESS;
                 let want_v = c_h > ch && ch > 0;

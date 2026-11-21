@@ -225,6 +225,106 @@ pub fn set_checksum_offload(rx_ipv4: bool, rx_tcp_udp: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Kayıt geri-okuma öz testi (gerçek donanım doğrulaması)
+// ---------------------------------------------------------------------------
+//
+// Yazma→oku→karşılaştır döngüsüyle MMIO kayıt erişimini doğrular.
+// QEMU bu çipleri emüle etmediği için test yalnızca fiziksel kartta
+// anlamlıdır; MMIO_BASE=0 durumunda "atlandı" döner.
+
+static mut SELF_TEST_OK: i32 = -1; // -1 = çalıştırılmadı, 0 = başarısız, 1 = başarılı
+
+unsafe fn reg_roundtrip(off: u64, mask: u32, set: bool) -> bool {
+    if MMIO_BASE == 0 {
+        return false;
+    }
+    let orig = mmio_read32(off);
+    let mut v = orig;
+    if set {
+        v |= mask;
+    } else {
+        v &= !mask;
+    }
+    mmio_write32(off, v);
+    let read = mmio_read32(off);
+    let ok = (read & mask) == if set { mask } else { 0 };
+    mmio_write32(off, orig);
+    ok
+}
+
+/// Marvell MMIO kayıt yolunu doğrular: promiscuous, multicast hash ve
+/// checksum offload bitleri yazılıp geri okunur. `[MRV-TEST]` önekiyle
+/// seri porta yazılır.
+pub fn self_test() -> bool {
+    unsafe {
+        if !DETECTED || MMIO_BASE == 0 {
+            crate::serial::print("[MRV-TEST] Aygıt yok veya MMIO hazır değil; test atlandı.\n");
+            SELF_TEST_OK = -1;
+            return false;
+        }
+        let mut pass = 0u32;
+        let mut total = 0u32;
+        total += 1;
+        if reg_roundtrip(MRV_RXQ_CTRL, 1 << 3, true) && reg_roundtrip(MRV_RXQ_CTRL, 1 << 3, false) {
+            pass += 1;
+            crate::serial::print("[MRV-TEST] promiscuous: BAŞARILI\n");
+        } else {
+            crate::serial::print("[MRV-TEST] promiscuous: BAŞARISIZ\n");
+        }
+        total += 1;
+        if reg_roundtrip(MRV_RX_HASH, 1, true) && reg_roundtrip(MRV_RX_HASH, 1, false) {
+            pass += 1;
+            crate::serial::print("[MRV-TEST] multicast hash: BAŞARILI\n");
+        } else {
+            crate::serial::print("[MRV-TEST] multicast hash: BAŞARISIZ\n");
+        }
+        total += 1;
+        if reg_roundtrip(MRV_RXQ_CTRL, 1 << 8, true) && reg_roundtrip(MRV_RXQ_CTRL, 1 << 8, false) {
+            pass += 1;
+            crate::serial::print("[MRV-TEST] ipv4 checksum offload: BAŞARILI\n");
+        } else {
+            crate::serial::print("[MRV-TEST] ipv4 checksum offload: BAŞARISIZ\n");
+        }
+        total += 1;
+        if reg_roundtrip(MRV_RXQ_CTRL, 1 << 9, true) && reg_roundtrip(MRV_RXQ_CTRL, 1 << 9, false) {
+            pass += 1;
+            crate::serial::print("[MRV-TEST] tcp/udp checksum offload: BAŞARILI\n");
+        } else {
+            crate::serial::print("[MRV-TEST] tcp/udp checksum offload: BAŞARISIZ\n");
+        }
+        let ok = pass == total;
+        SELF_TEST_OK = if ok { 1 } else { 0 };
+        crate::serial::print("[MRV-TEST] Özet: ");
+        crate::serial::print_dec(pass as u64);
+        crate::serial::print("/");
+        crate::serial::print_dec(total as u64);
+        crate::serial::print(if ok { " BAŞARILI\n" } else { " BAŞARISIZ\n" });
+        if !ok {
+            crate::drivers::status::note_error(
+                crate::drivers::status::DriverId::Net,
+                crate::drivers::status::ERR_BAD_STATE,
+            );
+        }
+        ok
+    }
+}
+
+/// Teşhis özeti: algılama, BDF, MAC, MMIO tabanı, link durumu.
+pub fn diag() -> (bool, u8, u8, u8, u64, bool, i32) {
+    unsafe {
+        (
+            DETECTED,
+            DEV_BUS,
+            DEV_DEV,
+            DEV_FUNC,
+            MMIO_BASE,
+            link_up_check(),
+            SELF_TEST_OK,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // API Fonksiyonları
 // ---------------------------------------------------------------------------
 

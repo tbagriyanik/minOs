@@ -2087,6 +2087,25 @@ unsafe fn mark_port_disconnected(controller: usize, port: u8, pmm: &mut Physical
         }
     }
 
+    // Genel USB aygıt kayıtları (ses, Wi-Fi, ...) aynı slotu paylaşır.
+    for (di, device) in USB_DEVICES.iter_mut().enumerate() {
+        if device.active && device.controller == controller as u8 && device.slot == slot {
+            device.active = false;
+            let vid = device.vendor_id;
+            let pid = device.product_id;
+            let kind = device.kind;
+            free_usb_device_resources(device, pmm);
+            notify_device_removed(kind, di as u8);
+            crate::serial::print("[USB] Aygıt çıkarıldı: ");
+            crate::serial::print_hex(vid as u64);
+            crate::serial::print(":");
+            crate::serial::print_hex(pid as u64);
+            crate::serial::print(" (slot ");
+            crate::serial::print_dec(slot as u64);
+            crate::serial::print(").\n");
+        }
+    }
+
     if base != 0 {
         free_frames(pmm, base, 4);
     }
@@ -2313,9 +2332,13 @@ unsafe fn enumerate_device(
     // yapılandırmayı ayrıştırıp "cihaz görüldü" durumunu günceller.
     crate::drivers::usb_audio::note_config_descriptor(config_slice, vendor, product);
 
+    // HID olmayan desteklenen aygıtlar (USB ses, RTL8188/8192 Wi-Fi)
+    // genel USB aygıt katmanına kaydedilir; aksi halde slot kapatılır.
+    let generic_kind = generic_device_kind(config_slice, vendor, product);
+
     let mut candidates = [HidCandidate::empty(); MAX_HID_INTERFACES];
     let found = parse_hid_interfaces(config_slice, &mut candidates);
-    if found == 0 {
+    if found == 0 && generic_kind.is_none() {
         crate::serial::print("[USB-HID] HID arayüzü bulunamadı; aygıt atlandı.\n");
         abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
@@ -2333,7 +2356,7 @@ unsafe fn enumerate_device(
             crate::serial::print(" HID klavye/fare değil; atlandı.\n");
         }
     }
-    if usable_count == 0 {
+    if usable_count == 0 && generic_kind.is_none() {
         crate::serial::print("[USB-HID] Kullanılabilir HID klavye/fare arayüzü yok.\n");
         abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
@@ -2362,6 +2385,35 @@ unsafe fn enumerate_device(
     {
         crate::serial::print("[USB-HID] SET_CONFIGURATION başarısız.\n");
         abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
+        return;
+    }
+
+    // Kullanılabilir HID arayüzü yoksa genel aygıt kaydına geç.
+    // (HID + ses gibi birleşik aygıtlarda HID önceliklidir.)
+    if usable_count == 0 {
+        if !register_generic_device(
+            c,
+            pmm,
+            controller,
+            root_port,
+            slot,
+            base,
+            buffer_phys,
+            ep0_ring,
+            speed,
+            route_string,
+            tt_hub_slot,
+            tt_port,
+            vendor,
+            product,
+            device_class,
+            config_value,
+            generic_kind.unwrap(),
+            config_slice,
+            is_root,
+        ) {
+            abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
+        }
         return;
     }
 
@@ -2916,6 +2968,10 @@ unsafe fn handle_transfer_event(
         break;
     }
 
+    // HID eşleşmesi yoksa genel USB aygıt uç noktalarını dene
+    // (ses akışı, Wi-Fi toplu kuyruğu gibi).
+    dispatch_generic_transfer(controller, slot, dci, event);
+
     updated
 }
 
@@ -2998,6 +3054,1205 @@ unsafe fn dispatch_event(
             handle_transfer_event(controller, event, mouse, keyboard, screen_w, screen_h)
         }
         _ => InputUpdate::default(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Genel amaçlı USB aygıt katmanı (ses, kablosuz ağ, ...)
+// ---------------------------------------------------------------------------
+//
+// HID dışı aygıtlar numaralandırmada kapatılmak yerine burada kaydedilir.
+// Her kayıt EP0 kontrol aktarımı, arayüz/alt-ay seçimi, eşzamanlı toplu
+// (bulk) aktarım ve akış (isochronous) kuyruklarını sınıf sürücülerine sunar.
+
+/// Genel aygıt kayıt türleri.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UsbDeviceKind {
+    Audio,
+    Wifi,
+    Other,
+}
+
+impl UsbDeviceKind {
+    fn label(self) -> &'static str {
+        match self {
+            UsbDeviceKind::Audio => "USB ses",
+            UsbDeviceKind::Wifi => "USB kablosuz ağ",
+            UsbDeviceKind::Other => "USB aygıt",
+        }
+    }
+}
+
+/// Uç nokta aktarım türleri (xHCI EPCTX EPType kodlamasıyla aynı).
+pub const USB_EP_ISO_OUT: u8 = 1;
+pub const USB_EP_BULK_OUT: u8 = 2;
+pub const USB_EP_INTR_OUT: u8 = 3;
+pub const USB_EP_ISO_IN: u8 = 5;
+pub const USB_EP_BULK_IN: u8 = 6;
+pub const USB_EP_INTR_IN: u8 = 7;
+
+/// Akış kuyruğu derinliği: her akış uç noktası için önceden kuyrukta
+/// tutulan TRB sayısı (ses için ~4 ms'lik önden yükleme sağlar).
+const USB_STREAM_DEPTH: u16 = 32;
+const MAX_USB_DEVICES: usize = 6;
+const MAX_USB_EPS: usize = 16;
+const MAX_USB_IFACES: usize = 8;
+/// Isochronous TRB türü (xHCI TRB Type = 5).
+const TRB_ISOCH: u32 = 5;
+/// Eşzamanlı aktarımda tek seferde kopyalanabilecek en büyük boyut
+/// (kontrol/veri sayfası penceresi).
+const USB_SYNC_MAX: usize = PAGE as usize;
+
+/// Yapılandırma tanımlayıcısından çıkarılan uç nokta adayı + çalışma zamanı
+/// alanları (halka, tampon, geri çağrılar).
+#[derive(Clone, Copy)]
+struct UsbEndpoint {
+    present: bool,
+    /// Sınıf sürücüsü tarafından açıldı (halka + tampon tahsis edildi).
+    active: bool,
+    /// Endpoint context şu an HC'de yapılandırılmış.
+    configured: bool,
+    /// Akış TRB'leri kuyruğa alındı.
+    queued: bool,
+    stream: bool,
+    iface: u8,
+    alt: u8,
+    address: u8,
+    ep_type: u8,
+    max_packet: u16,
+    interval: u8,
+    mult: u8,
+    dci: u8,
+    ring_phys: u64,
+    ring: TrbRing,
+    buf_phys: u64,
+    buf_pages: u16,
+    slot_size: u32,
+    rx_cb: Option<unsafe fn(u8, u8, u64, usize)>,
+    tx_cb: Option<unsafe fn(u8, u8, u16)>,
+}
+
+impl UsbEndpoint {
+    const fn empty() -> Self {
+        Self {
+            present: false,
+            active: false,
+            configured: false,
+            queued: false,
+            stream: false,
+            iface: 0,
+            alt: 0,
+            address: 0,
+            ep_type: 0,
+            max_packet: 0,
+            interval: 0,
+            mult: 0,
+            dci: 0,
+            ring_phys: 0,
+            ring: TrbRing::empty(),
+            buf_phys: 0,
+            buf_pages: 0,
+            slot_size: 0,
+            rx_cb: None,
+            tx_cb: None,
+        }
+    }
+}
+
+/// Genel USB aygıt kaydı: EP0 halkası, kontrol tamponu sayfası ve
+/// yapılandırma tanımlayıcısından ayrıştırılmış arayüz/uç nokta tablosu.
+#[derive(Clone, Copy)]
+struct UsbDevice {
+    active: bool,
+    kind: UsbDeviceKind,
+    controller: u8,
+    slot: u8,
+    port: u8,
+    vendor_id: u16,
+    product_id: u16,
+    device_class: u8,
+    config_value: u8,
+    speed: u8,
+    route_string: u32,
+    tt_hub_slot: u8,
+    tt_port: u8,
+    interface_count: u8,
+    interfaces: [u8; MAX_USB_IFACES],
+    iface_alt: [u8; MAX_USB_IFACES],
+    ep_count: u8,
+    endpoints: [UsbEndpoint; MAX_USB_EPS],
+    ep0_ring: TrbRing,
+    ctrl_phys: u64,
+    base_dma: u64,
+}
+
+impl UsbDevice {
+    const fn empty() -> Self {
+        Self {
+            active: false,
+            kind: UsbDeviceKind::Other,
+            controller: 0,
+            slot: 0,
+            port: 0,
+            vendor_id: 0,
+            product_id: 0,
+            device_class: 0,
+            config_value: 0,
+            speed: 0,
+            route_string: 0,
+            tt_hub_slot: 0,
+            tt_port: 0,
+            interface_count: 0,
+            interfaces: [0; MAX_USB_IFACES],
+            iface_alt: [0; MAX_USB_IFACES],
+            ep_count: 0,
+            endpoints: [UsbEndpoint::empty(); MAX_USB_EPS],
+            ep0_ring: TrbRing::empty(),
+            ctrl_phys: 0,
+            base_dma: 0,
+        }
+    }
+}
+
+static mut USB_DEVICES: [UsbDevice; MAX_USB_DEVICES] = [UsbDevice::empty(); MAX_USB_DEVICES];
+
+/// Akış (stream) girişleri için geri çağrı: tamamlanan slotun fiziksel
+/// adresi ve bayt sayısı verilir; sürücü `phys_to_virt` ile okur.
+pub type UsbStreamRx = unsafe fn(dev: u8, ep: u8, buf_phys: u64, len: usize);
+/// Akış çıkışları için geri çağrı: gönderimi biten slot indeksi verilir;
+/// sürücü aynı slotu yeniden doldurur.
+pub type UsbStreamTx = unsafe fn(dev: u8, ep: u8, slot: u16);
+
+/// Uç nokta adresinden DCI (Endpoint Context Index) üretir.
+fn usb_endpoint_dci(address: u8) -> u8 {
+    (address & 0x0F) * 2 + if address & 0x80 != 0 { 1 } else { 0 }
+}
+
+/// Uç nokta yönü: tek numaralı DCI'lar IN yönüdür.
+fn usb_ep_dir_in(ep_type: u8) -> bool {
+    ep_type & 1 == 1
+}
+
+/// Aktarım türüne göre TRB tipi: isochronous için 5, diğerleri Normal (1).
+fn usb_ep_trb_type(ep_type: u8) -> u32 {
+    if ep_type == USB_EP_ISO_IN || ep_type == USB_EP_ISO_OUT {
+        TRB_ISOCH
+    } else {
+        TRB_NORMAL
+    }
+}
+
+/// bInterval değerini xHCI Endpoint Context "Interval" alanına çevirir.
+/// HS/FS için bInterval milisaniye cinsinden (mikroçerçeve = bInterval*8),
+/// SS için 125 µs biriminde üs olarak verilir.
+fn xhci_ep_interval(speed: u8, binterval: u8) -> u32 {
+    if binterval <= 1 {
+        return 0;
+    }
+    if speed == SPEED_SUPER {
+        return (binterval - 1).min(15) as u32;
+    }
+    // 2^n mikroçerçeve = bInterval milisaniye → n = log2(bInterval * 8)
+    let mut n = 0u32;
+    let mut v = (binterval as u32) * 8;
+    while v > 1 && n < 15 {
+        v >>= 1;
+        n += 1;
+    }
+    n
+}
+
+/// Yapılandırma tanımlayıcısını gezip arayüz ve uç nokta tablosunu doldurur.
+/// Dönen: (arayüz sayısı, uç nokta sayısı).
+unsafe fn parse_usb_layout(config: &[u8], device: &mut UsbDevice) -> (usize, usize) {
+    let mut i = 0usize;
+    let mut iface_count = 0usize;
+    let mut ep_count = 0usize;
+    let mut cur_iface = 0u8;
+    let mut cur_alt = 0u8;
+    let mut in_iface = false;
+
+    while i + 2 <= config.len() {
+        let len = config[i] as usize;
+        let dtype = config[i + 1];
+        if len < 2 || i + len > config.len() {
+            break;
+        }
+        match dtype {
+            // Interface
+            0x04 if len >= 9 => {
+                cur_iface = config[i + 2];
+                cur_alt = config[i + 3];
+                in_iface = true;
+                if cur_alt == 0 && iface_count < MAX_USB_IFACES {
+                    device.interfaces[iface_count] = cur_iface;
+                    device.iface_alt[iface_count] = 0;
+                    iface_count += 1;
+                }
+            }
+            // Endpoint
+            0x05 if len >= 7 => {
+                if !in_iface || ep_count >= MAX_USB_EPS {
+                    i += len;
+                    continue;
+                }
+                let address = config[i + 2];
+                let attributes = config[i + 3];
+                let dir_in = address & 0x80 != 0;
+                let xfer = attributes & 0x03;
+                let ep_type = match (xfer, dir_in) {
+                    (0, true) => USB_EP_ISO_IN,
+                    (0, false) => USB_EP_ISO_OUT,
+                    (1, true) => USB_EP_INTR_IN,
+                    (1, false) => USB_EP_INTR_OUT,
+                    (2, true) => USB_EP_BULK_IN,
+                    (2, false) => USB_EP_BULK_OUT,
+                    _ => 0,
+                };
+                if ep_type != 0 && address & 0x0F != 0 {
+                    let mps_raw = u16::from_le_bytes([config[i + 4], config[i + 5]]);
+                    device.endpoints[ep_count] = UsbEndpoint {
+                        present: true,
+                        iface: cur_iface,
+                        alt: cur_alt,
+                        address,
+                        ep_type,
+                        max_packet: (mps_raw & 0x7FF).max(1),
+                        interval: config[i + 6],
+                        mult: ((mps_raw >> 11) & 0x03) as u8,
+                        dci: usb_endpoint_dci(address),
+                        ..UsbEndpoint::empty()
+                    };
+                    ep_count += 1;
+                }
+            }
+            // Interface Association / başka tanımlayıcılar: yoksay.
+            _ => {}
+        }
+        i += len;
+    }
+    device.interface_count = iface_count as u8;
+    device.ep_count = ep_count as u8;
+    (iface_count, ep_count)
+}
+
+/// Aygıtın şu an seçili alt ayarlarına göre etkin olması gereken uç
+/// noktalarını döndürür (async yerine doğrudan context'e yazılır).
+unsafe fn usb_endpoint_selected(device: &UsbDevice, ep: &UsbEndpoint) -> bool {
+    if !ep.present {
+        return false;
+    }
+    for i in 0..device.interface_count as usize {
+        if device.interfaces[i] == ep.iface {
+            return device.iface_alt[i] == ep.alt;
+        }
+    }
+    false
+}
+
+/// Etkin uç noktaların tamamı için Input/Slot/Endpoint bağlamını kurar ve
+/// Configure Endpoint komutunu gönderir. Seçili alt ayara uymayan daha
+/// önce yapılandırılmış uç noktalar Drop flag ile kaldırılır.
+unsafe fn apply_usb_endpoints(c: &mut XhciController, device: &mut UsbDevice) -> bool {
+    let input_phys = device.base_dma;
+    if input_phys == 0 {
+        return false;
+    }
+    zero_page(input_phys);
+
+    // Hangi uç noktaların yeni bağlamda yer alacağı.
+    let mut want = [false; MAX_USB_EPS];
+    let mut add_flags = 1u32; // bit0: slot context her zaman eklenir
+    let mut drop_flags = 0u32;
+    let mut max_dci = 0u8;
+    for (i, ep) in device
+        .endpoints
+        .iter()
+        .enumerate()
+        .take(device.ep_count as usize)
+    {
+        // ep.active = sınıf sürücüsü açtı; seçili alt ayarla eşleşmeli.
+        let mut selected = ep.active;
+        if selected {
+            selected = false;
+            for j in 0..device.interface_count as usize {
+                if device.interfaces[j] == ep.iface {
+                    selected = device.iface_alt[j] == ep.alt;
+                    break;
+                }
+            }
+        }
+        want[i] = selected;
+        if selected {
+            add_flags |= 1 << ep.dci;
+            if ep.dci > max_dci {
+                max_dci = ep.dci;
+            }
+        } else if ep.configured {
+            drop_flags |= 1 << ep.dci;
+        }
+    }
+
+    // Yeni kuyruklanacak akış uç noktalarının halkalarını sıfırla:
+    // yeniden yapılandırmada eski TRB'ler dequeue işaretçisini bozar.
+    for (i, ep) in device
+        .endpoints
+        .iter_mut()
+        .enumerate()
+        .take(device.ep_count as usize)
+    {
+        if want[i] && ep.stream && !ep.queued && ep.ring_phys != 0 {
+            ep.ring = TrbRing::new(ep.ring_phys);
+        }
+    }
+
+    // Input Control Context: dw0 = Drop flags, dw1 = Add flags.
+    c.ctx_write(input_phys, 0, 0, drop_flags);
+    c.ctx_write(input_phys, 0, 1, add_flags);
+    c.ctx_write(
+        input_phys,
+        1,
+        0,
+        (device.route_string & 0xFFFFF)
+            | ((device.speed as u32) << 20)
+            | (((max_dci as u32) & 0x1F) << 27),
+    );
+    // Port numarası device context dw1'e yazılır (Address Device ile aynı).
+    c.ctx_write(input_phys, 1, 1, (device.port as u32) << 16);
+    if device.tt_hub_slot != 0 {
+        c.ctx_write(
+            input_phys,
+            1,
+            2,
+            (device.tt_hub_slot as u32) | ((device.tt_port as u32) << 8),
+        );
+    }
+
+    for (i, ep) in device
+        .endpoints
+        .iter()
+        .enumerate()
+        .take(device.ep_count as usize)
+    {
+        if !want[i] {
+            continue;
+        }
+        let ep_index = ep.dci as usize + 1;
+        let interval = xhci_ep_interval(device.speed, ep.interval);
+        let iso = ep.ep_type == USB_EP_ISO_IN || ep.ep_type == USB_EP_ISO_OUT;
+        // dw0: Interval[23:16], Mult[13:8], MaxESITPayloadHi[31:24]
+        let mut dw0 = (interval << 16) | ((ep.mult as u32) << 8);
+        // dw4: Average TRB Length[31:16] | MaxESITPayloadLo[15:0]
+        let mut dw4 = 0u32;
+        if iso {
+            // MaxESITPayload ≈ max_packet * (mult+1); 14 bit alan.
+            let esit = (ep.max_packet as u32) * (ep.mult as u32 + 1);
+            let esit = esit.min(0x3FFF);
+            dw0 |= ((esit >> 8) & 0x3F) << 24;
+            dw4 = (ep.slot_size.max(ep.max_packet as u32) << 16) | (esit & 0xFF);
+        }
+        c.ctx_write(input_phys, ep_index, 0, dw0);
+        c.ctx_write(
+            input_phys,
+            ep_index,
+            1,
+            (3 << 1) | ((ep.ep_type as u32) << 3) | ((ep.max_packet as u32) << 16),
+        );
+        // TR Dequeue Pointer: halkanın bir sonraki TRB konumu + DCS.
+        let (dq, dcs) = ep.ring.dequeue();
+        c.ctx_write(input_phys, ep_index, 2, (dq as u32) | dcs);
+        c.ctx_write(input_phys, ep_index, 3, (dq >> 32) as u32);
+        c.ctx_write(input_phys, ep_index, 4, dw4);
+    }
+
+    if !c.configure_endpoint(device.slot, input_phys) {
+        return false;
+    }
+
+    // Başarılı: yapılandırma durumlarını güncelle ve yeni etkinleşen
+    // akış uç noktalarının TRB'lerini kuyruğa al.
+    let mut to_queue = [usize::MAX; MAX_USB_EPS];
+    let mut queue_count = 0usize;
+    for (i, ep) in device
+        .endpoints
+        .iter_mut()
+        .enumerate()
+        .take(device.ep_count as usize)
+    {
+        let now = want[i];
+        if ep.configured && !now {
+            ep.queued = false;
+        }
+        ep.configured = now;
+        if now && ep.stream && !ep.queued && queue_count < MAX_USB_EPS {
+            to_queue[queue_count] = i;
+            queue_count += 1;
+        }
+    }
+    for &i in to_queue.iter().take(queue_count) {
+        if i != usize::MAX {
+            device.endpoints[i].queued = true;
+            queue_stream_trbs(device, i);
+        }
+    }
+    true
+}
+
+/// Genel aygıt kayıt işlevi: yapılandırma tanımlayıcısını ayrıştırır,
+/// EP0 halkasını saklar ve sınıf sürücüsüne haber verir.
+/// `base` 4 sayfalık bloktur (input/device/EP0/ctrl); `port_base_dma`
+/// bilerek 0 bırakılır — blok `free_usb_device_resources` tarafından
+/// serbest bırakılır (çift free önlenir).
+unsafe fn register_generic_device(
+    c: &mut XhciController,
+    _pmm: &mut PhysicalMemoryManager,
+    controller: usize,
+    root_port: u8,
+    slot: u8,
+    base: u64,
+    ctrl_phys: u64,
+    ep0_ring: TrbRing,
+    speed: u8,
+    route_string: u32,
+    tt_hub_slot: u8,
+    tt_port: u8,
+    vendor: u16,
+    product: u16,
+    device_class: u8,
+    config_value: u8,
+    kind: UsbDeviceKind,
+    config: &[u8],
+    is_root: bool,
+) -> bool {
+    let Some(index) = USB_DEVICES.iter().position(|d| !d.active) else {
+        crate::serial::print("[USB] Genel aygıt yuvası dolu; aygıt atlandı.\n");
+        return false;
+    };
+
+    let mut device = UsbDevice {
+        active: true,
+        kind,
+        controller: controller as u8,
+        slot,
+        port: root_port,
+        vendor_id: vendor,
+        product_id: product,
+        device_class,
+        config_value,
+        speed,
+        route_string,
+        tt_hub_slot,
+        tt_port,
+        ep0_ring,
+        ctrl_phys,
+        base_dma: base,
+        ..UsbDevice::empty()
+    };
+    parse_usb_layout(config, &mut device);
+
+    // Kök port izleme: port_slot/connected hotplug için; base_dma
+    // USB_DEVICES üzerinden serbest bırakıldığı için port_base_dma=0.
+    if is_root {
+        let idx = (root_port - 1) as usize;
+        if idx < MAX_PORTS {
+            c.port_slot[idx] = slot;
+            c.port_connected[idx] = true;
+            c.port_base_dma[idx] = 0;
+        }
+    }
+
+    USB_DEVICES[index] = device;
+
+    crate::serial::print("[USB] ");
+    crate::serial::print(kind.label());
+    crate::serial::print(" aygıtı kaydedildi: VID:PID=");
+    crate::serial::print_hex(vendor as u64);
+    crate::serial::print(":");
+    crate::serial::print_hex(product as u64);
+    crate::serial::print(" arayüz=");
+    crate::serial::print_dec(device.interface_count as u64);
+    crate::serial::print(" uçnokta=");
+    crate::serial::print_dec(device.ep_count as u64);
+    crate::serial::print(" (slot ");
+    crate::serial::print_dec(slot as u64);
+    crate::serial::print(").\n");
+
+    notify_device_attached(kind, index as u8);
+    true
+}
+
+/// Kayıtlı genel aygıtın kaynaklarını (uç nokta halkaları, veri
+/// tamponları, 4 sayfalık taban bloğu) serbest bırakır.
+unsafe fn free_usb_device_resources(device: &mut UsbDevice, pmm: &mut PhysicalMemoryManager) {
+    for ep in device.endpoints.iter_mut().take(device.ep_count as usize) {
+        if ep.ring_phys != 0 {
+            crate::drivers::dma::free_dma_frames(ep.ring_phys, 1);
+            ep.ring_phys = 0;
+            ep.ring = TrbRing::empty();
+        }
+        if ep.buf_phys != 0 {
+            // buf_pages yalnızca tahsis sırasında bilinir; slot_count'tan
+            // tahmin etmek yerine ayrılan sayıyı saklıyoruz: buf_pages
+            // alanına yazılır (aşağıda usb_open_endpoint doldurur).
+            if ep.buf_pages != 0 {
+                crate::drivers::dma::free_dma_frames(ep.buf_phys, ep.buf_pages as usize);
+            }
+            ep.buf_phys = 0;
+            ep.buf_pages = 0;
+        }
+        ep.active = false;
+        ep.configured = false;
+        ep.queued = false;
+        ep.stream = false;
+        ep.rx_cb = None;
+        ep.tx_cb = None;
+    }
+    if device.base_dma != 0 {
+        free_frames(pmm, device.base_dma, 4);
+        device.base_dma = 0;
+    }
+    device.ep0_ring = TrbRing::empty();
+    device.ctrl_phys = 0;
+}
+
+/// Sınıf sürücüsüne aygıt takıldığını bildirir.
+fn notify_device_attached(kind: UsbDeviceKind, index: u8) {
+    unsafe {
+        match kind {
+            UsbDeviceKind::Audio => crate::drivers::usb_audio::usb_device_attached(index),
+            UsbDeviceKind::Wifi => crate::drivers::rtl8xxx::usb_device_attached(index),
+            UsbDeviceKind::Other => {}
+        }
+    }
+}
+
+/// Sınıf sürücüsüne aygıt çıkarıldığını bildirir.
+fn notify_device_removed(kind: UsbDeviceKind, index: u8) {
+    unsafe {
+        match kind {
+            UsbDeviceKind::Audio => crate::drivers::usb_audio::usb_device_removed(index),
+            UsbDeviceKind::Wifi => crate::drivers::rtl8xxx::usb_device_removed(index),
+            UsbDeviceKind::Other => {}
+        }
+    }
+}
+
+/// Yapılandırma tanımlayıcısından genel aygıt sınıfını belirler.
+/// HID adayları da olabilir; bu durumda `None` döner ve HID yolu işler.
+fn generic_device_kind(config: &[u8], vendor: u16, product: u16) -> Option<UsbDeviceKind> {
+    // USB Audio: arayüz sınıfı 0x01 içeren yapılandırma.
+    let mut i = 0usize;
+    let mut has_audio = false;
+    while i + 2 <= config.len() {
+        let len = config[i] as usize;
+        let dtype = config[i + 1];
+        if len < 2 || i + len > config.len() {
+            break;
+        }
+        if dtype == 0x04 && len >= 9 && config[i + 5] == 0x01 {
+            has_audio = true;
+            break;
+        }
+        i += len;
+    }
+    if has_audio {
+        return Some(UsbDeviceKind::Audio);
+    }
+    if crate::drivers::rtl8xxx::is_supported_device(vendor, product) {
+        return Some(UsbDeviceKind::Wifi);
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Genel aygıt genel API'si (sınıf sürücüleri kullanır)
+// ---------------------------------------------------------------------------
+
+/// Kayıtlı genel aygıt sayısı.
+pub fn usb_device_count() -> usize {
+    unsafe { USB_DEVICES.iter().filter(|d| d.active).count() }
+}
+
+/// İlk eşleşen genel aygıtın indeksini döndürür.
+pub fn usb_find_device(kind: UsbDeviceKind) -> Option<u8> {
+    unsafe {
+        USB_DEVICES
+            .iter()
+            .position(|d| d.active && d.kind == kind)
+            .map(|i| i as u8)
+    }
+}
+
+/// Aygıt bilgisi: (vid, pid, sınıf, denetleyici, slot).
+pub fn usb_device_info(index: u8) -> Option<(u16, u16, u8, u8, u8)> {
+    unsafe {
+        let d = USB_DEVICES.get(index as usize)?;
+        if !d.active {
+            return None;
+        }
+        Some((
+            d.vendor_id,
+            d.product_id,
+            d.device_class,
+            d.controller,
+            d.slot,
+        ))
+    }
+}
+
+/// Aktif aygıtın değişken referansını döndürür.
+unsafe fn usb_device_mut(index: u8) -> Option<&'static mut UsbDevice> {
+    let i = index as usize;
+    if i < MAX_USB_DEVICES && USB_DEVICES[i].active {
+        Some(&mut USB_DEVICES[i])
+    } else {
+        None
+    }
+}
+
+/// EP0 kontrol aktarımı: `data` OUT yönündeyse gönderilecek baytlar,
+/// IN yönündeyse okunacak tampon. 4 KB sayfa penceresiyle parça parça
+/// çalışır; toplam bayt sayısını döndürür.
+pub fn usb_control_transfer(
+    index: u8,
+    request_type: u8,
+    request: u8,
+    value: u16,
+    index_w: u16,
+    out_data: Option<&[u8]>,
+    in_buf: Option<&mut [u8]>,
+) -> Option<usize> {
+    unsafe {
+        let device = usb_device_mut(index)?;
+        let ci = device.controller as usize;
+        if ci >= CONTROLLER_COUNT {
+            return None;
+        }
+        let c = &mut CONTROLLERS[ci];
+        let slot = device.slot;
+        let ctrl_phys = device.ctrl_phys;
+        let ctrl_virt = crate::drivers::phys_to_virt(ctrl_phys) as *mut u8;
+        let direction_in = request_type & 0x80 != 0;
+        let mut done = 0usize;
+
+        match (out_data, in_buf) {
+            (Some(data), None) if !direction_in => {
+                for chunk in data.chunks(USB_SYNC_MAX) {
+                    core::ptr::copy_nonoverlapping(chunk.as_ptr(), ctrl_virt, chunk.len());
+                    let mut ring = device.ep0_ring;
+                    let r = c.control_out(
+                        &mut ring,
+                        slot,
+                        request_type,
+                        request,
+                        value,
+                        index_w,
+                        ctrl_phys,
+                        chunk.len(),
+                    );
+                    device.ep0_ring = ring;
+                    r?;
+                    done += chunk.len();
+                }
+                Some(done)
+            }
+            (None, Some(buf)) if direction_in => {
+                while done < buf.len() {
+                    let want = (buf.len() - done).min(USB_SYNC_MAX);
+                    let mut ring = device.ep0_ring;
+                    let got = c.control_in(
+                        &mut ring,
+                        slot,
+                        request_type,
+                        request,
+                        value,
+                        index_w,
+                        ctrl_phys,
+                        want,
+                    );
+                    device.ep0_ring = ring;
+                    let n = got?;
+                    if n == 0 {
+                        break;
+                    }
+                    core::ptr::copy_nonoverlapping(
+                        ctrl_virt,
+                        buf.as_mut_ptr().add(done),
+                        n.min(want),
+                    );
+                    done += n;
+                    if n < want {
+                        break;
+                    }
+                }
+                Some(done)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Kısayol: EP0 IN kontrol okuması.
+pub fn usb_control_in(
+    index: u8,
+    request_type: u8,
+    request: u8,
+    value: u16,
+    index_w: u16,
+    buf: &mut [u8],
+) -> Option<usize> {
+    usb_control_transfer(
+        index,
+        request_type,
+        request,
+        value,
+        index_w,
+        None,
+        Some(buf),
+    )
+}
+
+/// Kısayol: EP0 OUT kontrol yazması.
+pub fn usb_control_out(
+    index: u8,
+    request_type: u8,
+    request: u8,
+    value: u16,
+    index_w: u16,
+    data: &[u8],
+) -> Option<usize> {
+    usb_control_transfer(
+        index,
+        request_type,
+        request,
+        value,
+        index_w,
+        Some(data),
+        None,
+    )
+}
+
+/// Arayüz numarası için seçili alternatif ayarı döndürür.
+pub fn usb_interface_alt(index: u8, iface: u8) -> Option<u8> {
+    unsafe {
+        let d = USB_DEVICES.get(index as usize)?;
+        if !d.active {
+            return None;
+        }
+        (0..d.interface_count as usize)
+            .find(|&i| d.interfaces[i] == iface)
+            .map(|i| d.iface_alt[i])
+    }
+}
+
+/// SET_INTERFACE denetim isteği gönderir ve etkin uç nokta kümesini
+/// yeni alt ayara göre yeniden yapılandırır.
+pub fn usb_set_interface(index: u8, iface: u8, alt: u8) -> bool {
+    unsafe {
+        let Some(device) = usb_device_mut(index) else {
+            return false;
+        };
+        let pos = (0..device.interface_count as usize).find(|&i| device.interfaces[i] == iface);
+        let Some(pos) = pos else {
+            return false;
+        };
+        if device.iface_alt[pos] == alt {
+            return true;
+        }
+        device.iface_alt[pos] = alt;
+
+        let ci = device.controller as usize;
+        let c = &mut CONTROLLERS[ci];
+        let slot = device.slot;
+        let mut ring = device.ep0_ring;
+        let ok = c
+            .control_out(&mut ring, slot, 0x01, 0x0B, alt as u16, iface as u16, 0, 0)
+            .is_some();
+        device.ep0_ring = ring;
+        if !ok {
+            return false;
+        }
+        apply_usb_endpoints(c, device)
+    }
+}
+
+/// Yapılandırmadaki bir uç noktayı etkinleştirir.
+/// `slot_size`: akış (stream) slot boyutu bayt; `stream=false` ise
+/// eşzamanlı aktarım için tek sayfalık sıçrama tamponu ayrılır.
+pub fn usb_open_endpoint(index: u8, ep_addr: u8, slot_size: u32, stream: bool) -> bool {
+    unsafe {
+        let Some(device) = usb_device_mut(index) else {
+            return false;
+        };
+        let Some(ei) = (0..device.ep_count as usize).find(|&i| {
+            let ep = &device.endpoints[i];
+            ep.present && ep.address == ep_addr && !ep.active && usb_endpoint_selected(device, ep)
+        }) else {
+            return false;
+        };
+
+        // Halka: her zaman 1 sayfa (256 TRB).
+        let Some(ring_phys) = crate::drivers::dma::alloc_dma_frames(1) else {
+            return false;
+        };
+        device.endpoints[ei].ring_phys = ring_phys;
+        device.endpoints[ei].ring = TrbRing::new(ring_phys);
+
+        // Veri tamponu.
+        if stream {
+            let depth = USB_STREAM_DEPTH as usize;
+            let per = (slot_size.max(64) as usize).min(8192);
+            let total = per.saturating_mul(depth);
+            let pages = crate::drivers::dma::frames_for(total).min(64);
+            if pages == 0 {
+                crate::drivers::dma::free_dma_frames(ring_phys, 1);
+                return false;
+            }
+            let Some(buf_phys) = crate::drivers::dma::alloc_dma_frames(pages) else {
+                crate::drivers::dma::free_dma_frames(ring_phys, 1);
+                return false;
+            };
+            // Sayfa hizalı güvenli slot boyutu: depth slot sığsın.
+            let usable = (pages * 4096) / depth;
+            device.endpoints[ei].slot_size = (usable as u32).min(per as u32).max(64);
+            device.endpoints[ei].buf_phys = buf_phys;
+            device.endpoints[ei].buf_pages = pages as u16;
+        } else {
+            let Some(buf_phys) = crate::drivers::dma::alloc_dma_frames(1) else {
+                crate::drivers::dma::free_dma_frames(ring_phys, 1);
+                return false;
+            };
+            device.endpoints[ei].buf_phys = buf_phys;
+            device.endpoints[ei].buf_pages = 1;
+            device.endpoints[ei].slot_size = USB_SYNC_MAX as u32;
+        }
+
+        device.endpoints[ei].active = true;
+        device.endpoints[ei].stream = stream;
+
+        let ci = device.controller as usize;
+        let c = &mut CONTROLLERS[ci];
+        if !apply_usb_endpoints(c, device) {
+            // Geri al: bağlam kurulamadı, kaynakları serbest bırak.
+            let ep = &mut device.endpoints[ei];
+            ep.active = false;
+            ep.stream = false;
+            if ep.buf_phys != 0 {
+                crate::drivers::dma::free_dma_frames(ep.buf_phys, ep.buf_pages as usize);
+                ep.buf_phys = 0;
+                ep.buf_pages = 0;
+            }
+            if ep.ring_phys != 0 {
+                crate::drivers::dma::free_dma_frames(ep.ring_phys, 1);
+                ep.ring_phys = 0;
+                ep.ring = TrbRing::empty();
+            }
+            return false;
+        }
+        true
+    }
+}
+
+/// Akış kuyruğuna tüm slotlar için TRB ekler ve kapıyı çalar.
+/// Yalnızca `apply_usb_endpoints` başarısından sonra çağrılır; halka
+/// çağıran tarafından sıfırlanmış olur.
+unsafe fn queue_stream_trbs(device: &mut UsbDevice, ei: usize) {
+    let slot = device.slot;
+    let ci = device.controller as usize;
+    let depth = USB_STREAM_DEPTH as u64;
+    let ep = &mut device.endpoints[ei];
+    let trb_type = usb_ep_trb_type(ep.ep_type);
+    let slot_bits = (slot as u32) << 24;
+    let dir = if usb_ep_dir_in(ep.ep_type) {
+        TRB_DIR
+    } else {
+        0
+    };
+    let control = (trb_type << TRB_TYPE_SHIFT) | TRB_IOC | TRB_ISP | dir | slot_bits;
+    let slot_size = ep.slot_size;
+    let buf_base = ep.buf_phys;
+    let ring = &mut ep.ring;
+    for i in 0..depth {
+        let buf = buf_base + i * slot_size as u64;
+        ring.push(Trb {
+            param: buf,
+            status: slot_size & 0x1FFFF,
+            control,
+        });
+    }
+    let dci = ep.dci;
+    CONTROLLERS[ci].doorbell(slot, dci);
+}
+
+/// Akış (stream) giriş/çıkış geri çağrılarını ayarlar.
+pub fn usb_stream_callbacks(
+    index: u8,
+    ep_addr: u8,
+    rx: Option<UsbStreamRx>,
+    tx: Option<UsbStreamTx>,
+) -> bool {
+    unsafe {
+        let Some(device) = usb_device_mut(index) else {
+            return false;
+        };
+        let Some(ep) = device
+            .endpoints
+            .iter_mut()
+            .find(|e| e.present && e.address == ep_addr)
+        else {
+            return false;
+        };
+        ep.rx_cb = rx;
+        ep.tx_cb = tx;
+        true
+    }
+}
+
+/// Akış slotunun fiziksel adresini döndürür (sürücü PCM verisini
+/// `phys_to_virt` ile bu adrese yazar).
+pub fn usb_stream_slot(index: u8, ep_addr: u8, slot_idx: u16) -> Option<u64> {
+    unsafe {
+        let device = USB_DEVICES.get(index as usize)?;
+        if !device.active {
+            return None;
+        }
+        let ep = device
+            .endpoints
+            .iter()
+            .find(|e| e.present && e.address == ep_addr && e.stream)?;
+        if slot_idx as u64 >= USB_STREAM_DEPTH as u64 {
+            return None;
+        }
+        Some(ep.buf_phys + (slot_idx as u64) * ep.slot_size as u64)
+    }
+}
+
+/// Akış slot boyutu (bayt).
+pub fn usb_stream_slot_size(index: u8, ep_addr: u8) -> Option<u32> {
+    unsafe {
+        let device = USB_DEVICES.get(index as usize)?;
+        if !device.active {
+            return None;
+        }
+        device
+            .endpoints
+            .iter()
+            .find(|e| e.present && e.address == ep_addr && e.stream)
+            .map(|e| e.slot_size)
+    }
+}
+
+/// Akış kuyruğu derinliği.
+pub fn usb_stream_depth(index: u8, ep_addr: u8) -> Option<u16> {
+    unsafe {
+        let device = USB_DEVICES.get(index as usize)?;
+        if !device.active {
+            return None;
+        }
+        device
+            .endpoints
+            .iter()
+            .find(|e| e.present && e.address == ep_addr && e.stream)
+            .map(|_| USB_STREAM_DEPTH)
+    }
+}
+
+/// Eşzamanlı toplu/kesme aktarımının ortak gövdesi.
+/// `src`: OUT yönünde gönderilecek baytlar; `dst`: IN yönünde doldurulacak
+/// tampon. Tek seferde en fazla USB_SYNC_MAX bayt aktarılır.
+unsafe fn usb_sync_transfer(
+    index: u8,
+    ep_addr: u8,
+    dir_in: bool,
+    src: Option<&[u8]>,
+    mut dst: Option<&mut [u8]>,
+) -> Option<usize> {
+    let device = usb_device_mut(index)?;
+    let ei = device.endpoints.iter().position(|e| {
+        e.present
+            && e.configured
+            && !e.stream
+            && e.address == ep_addr
+            && usb_ep_dir_in(e.ep_type) == dir_in
+            && matches!(
+                e.ep_type,
+                USB_EP_BULK_IN | USB_EP_BULK_OUT | USB_EP_INTR_IN | USB_EP_INTR_OUT
+            )
+    })?;
+    let ep = &device.endpoints[ei];
+    let dci = ep.dci;
+    let slot = device.slot;
+    let buf_phys = ep.buf_phys;
+    let buf_virt = crate::drivers::phys_to_virt(buf_phys) as *mut u8;
+    let ci = device.controller as usize;
+    let c = &mut CONTROLLERS[ci];
+
+    let (want, trb_status) = if dir_in {
+        let buf = dst.as_deref_mut()?;
+        let want = buf.len().min(USB_SYNC_MAX);
+        (want, want as u32)
+    } else {
+        let data = src?;
+        if data.is_empty() || data.len() > USB_SYNC_MAX {
+            return None;
+        }
+        core::ptr::copy_nonoverlapping(data.as_ptr(), buf_virt, data.len());
+        (data.len(), data.len() as u32)
+    };
+    if want == 0 && dir_in {
+        return Some(0);
+    }
+
+    let trb_type = usb_ep_trb_type(ep.ep_type);
+    let dir_bit = if dir_in { TRB_DIR } else { 0 };
+    let mut ring = ep.ring;
+    ring.push(Trb {
+        param: buf_phys,
+        status: trb_status & 0x1FFFF,
+        control: (trb_type << TRB_TYPE_SHIFT) | TRB_IOC | dir_bit | ((slot as u32) << 24),
+    });
+    c.doorbell(slot, dci);
+    let event = c.wait_transfer(slot, dci)?;
+    let code = trb_completion(event.status);
+    if code != COMP_SUCCESS && code != COMP_SHORT_PACKET {
+        return None;
+    }
+    device.endpoints[ei].ring = ring;
+
+    if dir_in {
+        let residual = trb_residual(event.status);
+        let actual = want.saturating_sub(residual).min(want);
+        if let Some(buf) = dst {
+            core::ptr::copy_nonoverlapping(buf_virt, buf.as_mut_ptr(), actual);
+        }
+        Some(actual)
+    } else {
+        Some(want)
+    }
+}
+
+/// Kısayol: toplu OUT aktarımı.
+pub fn usb_bulk_out(index: u8, ep_addr: u8, data: &[u8]) -> Option<usize> {
+    unsafe { usb_sync_transfer(index, ep_addr, false, Some(data), None) }
+}
+
+/// Kısayol: toplu IN aktarımı.
+pub fn usb_bulk_in(index: u8, ep_addr: u8, buf: &mut [u8]) -> Option<usize> {
+    unsafe { usb_sync_transfer(index, ep_addr, true, None, Some(buf)) }
+}
+
+/// Kısayol: kesme IN aktarımı (tek seferlik yoklama).
+pub fn usb_interrupt_in(index: u8, ep_addr: u8, buf: &mut [u8]) -> Option<usize> {
+    unsafe { usb_sync_transfer(index, ep_addr, true, None, Some(buf)) }
+}
+
+/// Uç noktayı kapatır: endpoint context'ten düşürülür (Drop flag),
+/// halka ve tampon kaynakları serbest bırakılır. Akış uç noktaları için
+/// önce `stream=false` olan senkron kullanıma geçmek yerine tamamen
+/// kapatmak istenen durumlarda kullanılır.
+pub fn usb_close_endpoint(index: u8, ep_addr: u8) -> bool {
+    unsafe {
+        let Some(device) = usb_device_mut(index) else {
+            return false;
+        };
+        let Some(ei) = device
+            .endpoints
+            .iter()
+            .position(|e| e.present && e.address == ep_addr && (e.active || e.configured))
+        else {
+            return false;
+        };
+        let ci = device.controller as usize;
+        let c = &mut CONTROLLERS[ci];
+        device.endpoints[ei].active = false;
+        device.endpoints[ei].stream = false;
+        device.endpoints[ei].queued = false;
+        device.endpoints[ei].rx_cb = None;
+        device.endpoints[ei].tx_cb = None;
+        let ok = apply_usb_endpoints(c, device);
+        // configured bayrağı apply içinde güncellenir; kaynakları serbest bırak.
+        let ep = &mut device.endpoints[ei];
+        if ep.buf_phys != 0 {
+            crate::drivers::dma::free_dma_frames(ep.buf_phys, ep.buf_pages as usize);
+            ep.buf_phys = 0;
+            ep.buf_pages = 0;
+        }
+        if ep.ring_phys != 0 {
+            crate::drivers::dma::free_dma_frames(ep.ring_phys, 1);
+            ep.ring_phys = 0;
+            ep.ring = TrbRing::empty();
+        }
+        ep.active = false;
+        ep.configured = false;
+        ok
+    }
+}
+
+/// Uç nokta yapılandırılmış mı?
+pub fn usb_endpoint_active(index: u8, ep_addr: u8) -> bool {
+    unsafe {
+        USB_DEVICES.get(index as usize).is_some_and(|d| {
+            d.active
+                && d.endpoints
+                    .iter()
+                    .any(|e| e.present && e.configured && e.address == ep_addr)
+        })
+    }
+}
+
+/// Genel aygıt olay dağıtımı: akış (stream) uç noktalarının tamamlanan
+/// TRB'lerini sınıf sürücüsü geri çağrılarına iletir ve slotu yeniden
+/// kuyruğa alır. `handle_transfer_event` sonundan çağrılır.
+unsafe fn dispatch_generic_transfer(controller: usize, slot: u8, dci: u8, event: Trb) {
+    let code = trb_completion(event.status);
+    if code != COMP_SUCCESS && code != COMP_SHORT_PACKET {
+        return;
+    }
+    let residual = trb_residual(event.status);
+
+    for (di, device) in USB_DEVICES.iter_mut().enumerate() {
+        if !device.active || device.controller != controller as u8 || device.slot != slot {
+            continue;
+        }
+        for ei in 0..device.ep_count as usize {
+            let ep = &mut device.endpoints[ei];
+            if !ep.configured || !ep.stream || ep.dci != dci {
+                continue;
+            }
+            // Tamamlanan TRB'nin fiziksel adresini olay parametresinden
+            // oku; TRB içindeki param alanı veri tamponunu gösterir.
+            let trb_v = crate::drivers::phys_to_virt(event.param) as *const Trb;
+            let done = core::ptr::read_volatile(trb_v);
+            let buf = done.param;
+            let requested = (done.status & 0x1FFFF) as usize;
+            let actual = requested
+                .saturating_sub(residual)
+                .min(ep.slot_size as usize);
+            let ep_addr = ep.address;
+            let dir_in = usb_ep_dir_in(ep.ep_type);
+            let rx_cb = ep.rx_cb;
+            let tx_cb = ep.tx_cb;
+            let buf_phys_base = ep.buf_phys;
+            let slot_size = ep.slot_size;
+
+            if dir_in {
+                if let Some(cb) = rx_cb {
+                    cb(di as u8, ep_addr, buf, actual);
+                }
+            } else if let Some(cb) = tx_cb {
+                let sidx = if slot_size > 0 {
+                    ((buf.wrapping_sub(buf_phys_base)) / slot_size as u64) as u16
+                } else {
+                    0
+                };
+                cb(di as u8, ep_addr, sidx);
+            }
+
+            // Aynı tampon slotu için yeni TRB kuyrukla.
+            device.endpoints[ei].ring.push(done);
+            CONTROLLERS[controller].doorbell(slot, dci);
+            return;
+        }
     }
 }
 
@@ -3148,6 +4403,11 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
             crate::serial::print_dec(touchscreens as u64);
             crate::serial::print(" dokunmatik ekran.\n");
         }
+
+        // Genel aygıt sınıf sürücülerini başlat (USB ses, RTL Wi-Fi).
+        // Kayıtlar enumerate sırasında usb_device_attached ile bildirilmiştir.
+        crate::drivers::usb_audio::init();
+        crate::drivers::rtl8xxx::init();
     }
 }
 

@@ -1998,6 +1998,20 @@ impl SystemSettings {
         self.focused_control = self.active_tab;
     }
 
+    pub fn content_extent_for_tab(active_tab: usize) -> (usize, usize) {
+        let rows = match active_tab {
+            0 => 12,
+            1 => 14,
+            2 => 18,
+            3 => 32,
+            _ => 22,
+        };
+        let width = CONTENT_X + sp(1000) + sp(16);
+        let full_height = sp(UI_TOP_Y + rows * UI_ROW_STEP + 80);
+        let height = full_height.saturating_sub(crate::gui::scaled_titlebar_h());
+        (width, height)
+    }
+
     // -----------------------------------------------------------------
     // Çizim
     // -----------------------------------------------------------------

@@ -562,9 +562,9 @@ pub fn init_subsystems(
         status::probe_unavailable(DriverId::Input, t_input, "klavye/fare aygiti bulunamadi");
     }
     if drivers::ps2::present() {
-        kdebug!("boot", "[BOOT] PS/2 ready.\n");
+        kinfo!("boot", "[BOOT] PS/2 ready.\n");
     } else {
-        kdebug!(
+        kinfo!(
             "boot",
             "[BOOT] PS/2 denetleyicisi yok; girdi yalnızca USB HID üzerinden.\n"
         );
@@ -575,7 +575,7 @@ pub fn init_subsystems(
     if usb_hid_count == 0 {
         kwarn!("boot", "[INPUT] USB HID bulunamadı, PS/2 yedeği kullanılıyor (BIOS Legacy USB/CSM kapalıysa klavye/fare algılanamayabilir).\n");
     } else {
-        kdebug!(
+        kinfo!(
             "boot",
             "[INPUT] USB HID etkin: bağlı aygıtlar kullanıma hazır.\n"
         );
@@ -584,7 +584,7 @@ pub fn init_subsystems(
     // 5a. Girdi kuyruğu öz-testi: klavye/fare olaylarının FIFO sırası, uzunluk
     //     bilgisi ve kuyruk dolu davranışı doğrulanır (gerçek donanımdan bağımsız).
     if drivers::input_queue::self_test() {
-        kdebug!("boot", "[INPUT-TEST] klavye/fare kuyrugu: BASARILI\n");
+        kinfo!("boot", "[INPUT-TEST] klavye/fare kuyrugu: BASARILI\n");
     } else {
         kerror!("boot", "[INPUT-TEST] klavye/fare kuyrugu: BAŞARISIZ\n");
     }

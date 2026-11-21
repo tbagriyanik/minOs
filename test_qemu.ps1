@@ -203,6 +203,20 @@ if (-not $Minimal) {
         "-netdev", "user,id=n0",
         "-device", "e1000,netdev=n0"
     )
+
+    # AHCI depolama kendinden testi: sifir-dolgu raw imaj uzerine baglanan
+    # ayri bir SATA diski. Kernel acilista [AHCI-TEST] yaz+oku dogrulamasi
+    # yapar; sistem diski (IDE/CD) etkilenmez.
+    $ahciImgPath = Join-Path $targetDir "qemu_ahci_test.img"
+    if (-not (Test-Path $ahciImgPath)) {
+        $ahciFs = [System.IO.File]::Open($ahciImgPath, [System.IO.FileMode]::CreateNew)
+        try { $ahciFs.SetLength(16MB) } finally { $ahciFs.Close() }
+    }
+    $qemuArgs += @(
+        "-drive", "file=$ahciImgPath,format=raw,if=none,id=ahcitest",
+        "-device", "ahci,id=ahci0",
+        "-device", "ide-hd,drive=ahcitest,bus=ahci0.0"
+    )
 }
 
 if ($Vga -eq "std") {
@@ -749,6 +763,11 @@ $checks = @(
         Name = "Cekirdek Surucu Profili";
         Pattern = "\[DRIVERS\] All drivers ready";
         Description = "Tum donanim suruculerinin eksiksiz baslatimi"
+    },
+    @{
+        Name = "AHCI Depolama Kendinden Testi (SATA yaz+oku)";
+        Pattern = "\[AHCI-TEST\] BASARILI";
+        Description = "LBA48 DMA ile son sektore desen yazimi, geri okuma ve karsilastirma (yedek-GPT korumali)"
     },
     @{
         Name = "Ring3 Surec Zamanlayici (CR3 + Context Switch)";

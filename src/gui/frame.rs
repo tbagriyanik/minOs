@@ -297,6 +297,7 @@ pub fn render_full_frame(
                 fm,
                 np,
                 br,
+                st.active_tab,
             );
 
             // Kendi kaydırmasını yapan uygulamalar ofseti içeride uygular.

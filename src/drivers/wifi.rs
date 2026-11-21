@@ -687,7 +687,20 @@ unsafe fn populate_default_access_points() {
 pub fn scan_networks() -> &'static [Option<AccessPoint>] {
     unsafe {
         WIFI_STATUS.state = WifiState::Scanning;
-        populate_default_access_points();
+        if crate::drivers::rtl8xxx::is_detected() {
+            // Gerçek RTL8188/8192 aygıtı bağlıyken sahte ağ listesi
+            // döndürülmez; tarama sürücüsü (Faz 2) tamamlanana kadar
+            // liste boş kalır.
+            SCAN_COUNT = 0;
+            for slot in SCAN_RESULTS.iter_mut() {
+                *slot = None;
+            }
+            crate::serial::print(
+                "[WIFI] RTL8xxx aygiti algilandi; gercek tarama surucusu henuz etkin degil.\n",
+            );
+        } else {
+            populate_default_access_points();
+        }
         &SCAN_RESULTS[..SCAN_COUNT]
     }
 }
@@ -712,6 +725,13 @@ pub fn status() -> WifiStatus {
 
 pub fn connect(ssid: &str, password: &str) -> bool {
     unsafe {
+        if crate::drivers::rtl8xxx::is_detected() {
+            crate::serial::print(
+                "[WIFI] RTL8xxx baglanti surucusu henuz etkin degil; baglanti kurulamadi.\n",
+            );
+            WIFI_STATUS.state = WifiState::Failed;
+            return false;
+        }
         for ap in SCAN_RESULTS[..SCAN_COUNT].iter().flatten() {
             {
                 if ap.ssid_str() == ssid {

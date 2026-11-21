@@ -420,12 +420,21 @@ impl MinGuiCompositor {
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
         let mut results = [0; 32];
         let count = self.start_search_matches(english, &mut results);
-        if down {
-            if count > 0 {
-                self.selected_start_item = (self.selected_start_item + 1).min(count - 1);
-            }
+        if count == 0 {
+            self.selected_start_item = 0;
+        } else if down {
+            self.selected_start_item = if self.selected_start_item >= count - 1 {
+                0
+            } else {
+                self.selected_start_item + 1
+            };
         } else {
-            self.selected_start_item = self.selected_start_item.saturating_sub(1);
+            self.selected_start_item =
+                if self.selected_start_item == 0 || self.selected_start_item >= count {
+                    count - 1
+                } else {
+                    self.selected_start_item - 1
+                };
         }
     }
 

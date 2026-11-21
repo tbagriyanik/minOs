@@ -38,9 +38,9 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | VirtIO-net | `virtio_net.rs` | 🟢 Tam | Sanallaştırılmış ağ adaptörü |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Tam | PCI vendor 0x15AD, MAC ve link |
 | Ağ otobüsü seçimi (PCI / ISA) | `net.rs` | 🟢 Tam | `BusKind`, ISA PnP izolasyonu, NE2000 DMA veri portu |
-| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + doğru BDF/MAC okuma; RX/TX yok; multicast hash/promiscuous/checksum-offload MMIO iskeleti eklendi (donanım doğrulaması bekliyor) |
-| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + doğru BDF/MAC okuma; RX/TX yok; multicast hash/promiscuous/checksum-offload MMIO iskeleti eklendi (donanım doğrulaması bekliyor) |
-| Wi-Fi 802.11 | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
+| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + BDF/MAC okuma; RX/TX yok; multicast hash/promiscuous/checksum-offload MMIO iskeleti + readback self-test (`net diag`) eklendi; gerçek kart doğrulaması bekliyor |
+| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + BDF/MAC okuma; RX/TX yok; multicast hash/promiscuous/checksum-offload MMIO iskeleti + readback self-test (`net diag`) eklendi; gerçek kart doğrulaması bekliyor |
+| Wi-Fi 802.11 | `wifi.rs` + `rtl8xxx.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PMK/PTK, 4-way el sıkışması, PCI/USB tespit; `rtl8xxx.rs` RTL8188/8192 USB algılama + firmware/bulk-transfer iskeleti eklendi; gerçek PHY/RX-TX ve tarama doğrulaması bekliyor |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | HCI paketleme/ayrıştırma, synthetic yanıtlar, gerçek USB/PCI yok; A2DP/BLE GATT yok |
 
 ### Giriş Aygıtları
@@ -56,8 +56,8 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Sürücü | Dosya | Durum | Açıklama |
 | :--- | :--- | :---: | :--- |
 | ATA / IDE / ATAPI | `ata.rs` | 🟢 Tam | LBA28/48, sabit disk ve CD/DVD-ROM |
-| AHCI / SATA | `ahci.rs` | 🟡 Kısmi | PMM contiguous DMA (CLB/FIS/CTBA) + gerçek sektör okuma/yazma (Register H2D FIS, PRDT); QEMU/gerçek donanım doğrulaması bekliyor |
-| NVMe SSD | `nvme.rs` | 🟢 Tam | NVMe komut kuyrukları ve blok okuma/yazma |
+| AHCI / SATA | `ahci.rs` | 🟡 Kısmi | PMM contiguous DMA (CLB/FIS/CTBA) + gerçek LBA48 sektör okuma/yazma (Register H2D FIS, PRDT); boot'ta `[AHCI-TEST]` yaz+oku self-testi (yedek-GPT korumalı), QEMU scratch disk profili eklendi; gerçek donanım doğrulaması bekliyor |
+| NVMe SSD | `nvme.rs` | 🔴 İskelet | PCI tespit + register/MMIO erişimi var; admin/I/O komut kuyruğu, identify ve sektör okuma-yazma veri yolu henüz uygulanmadı (read/write_sector false döner) |
 | VirtIO-blk | `virtio_blk.rs` | 🟢 Tam | Sanal blok aygıtı |
 | USB Mass Storage | `usb_mass_storage.rs` | 🟡 Kısmi | SCSI BOT transfer protokolü; gerçek enumerasyon olmadan aygıt raporlamaz, yazma desteklenmiyor olarak işaretli |
 | SD / MMC | `sdmmc.rs` | 🟡 Kısmi | SDHCI PIO sektör okuma + CSD v1/v2 kapasite ayrıştırma; yazma bilinçli olarak desteklenmiyor (açık hata döner) |
@@ -68,7 +68,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | :--- | :--- | :---: | :--- |
 | Intel HDA | `hda.rs`, `audio.rs` | 🟢 Tam | DMA akış halkaları, mikser, WAV/MP3 |
 | PC Speaker (PWM) | `audio.rs` | 🟢 Tam | Donanımsal zamanlayıcı bip ve PWM tonları |
-| USB Audio | `usb_audio.rs` | 🟡 Kısmi | UAC1/UAC2 yapılandırma ayrıştırma, AudioControl/AudioStreaming arayüz ve iso-chronous endpoint keşfi (xHCI enumerasyonundan beslenir); streaming/DMA yok |
+| USB Audio | `usb_audio.rs` | 🟡 Kısmi | Genel USB aygıt katmanı (kontrol/bulk/iso transfer, SET_INTERFACE) + UAC1/UAC2 format (kanal/bit/oran) ve Feature Unit ayrıştırma; isokronik playback/kayıt streaming ve volume/mute kontrol istekleri uygulandı; gerçek donanım doğrulaması bekliyor |
 | USB Yazıcı | `usb_printer.rs` | 🔴 İskelet | Printer Class sabitleri, state machine, gerçek USB yok |
 | USB Kamera (UVC) | `camera.rs` | 🔴 İskelet | UVC sabitleri, YUY2→RGB32 dönüşüm, gerçek cihaz yok |
 
@@ -103,9 +103,9 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 
 | Maturite | Sayı | Yüzde |
 | :--- | :---: | :---: |
-| 🟢 Tam | 25 | ~64% |
+| 🟢 Tam | 24 | ~62% |
 | 🟡 Kısmi | 13 | ~33% | (AHCI DMA, USB Audio endpoint keşfi, USB Mass Storage dürüst tespit, SD/MMC güvenli yazma reddi, Atheros/Marvell BDF+filtre iskeleti) |
-| 🔴 İskelet / WIP | 1 | ~3% | |
+| 🔴 İskelet / WIP | 2 | ~5% | |
 | **Toplam** | **39** | **100%** |
 
 ---
@@ -116,7 +116,7 @@ Aşağıdaki sürücüler **işkelet (skeleton)** durumundadır; gerçek donanı
 
 1. **`wifi.rs`** — Gerçek 802.11 PHY/RX-TX entegrasyonu, beacon/probe yanıtı, kesme işleme ve donanımdan MAC adresi okuma (WPA 4-way el sıkışması ve PCI/USB tespiti eklendi)
 4. **`bluetooth.rs`** — Gerçek USB/PCI Bluetooth denetleyicisi tespiti, HCI komut gönderimi
-5. **`usb_audio.rs`** — ✅ Arayüz/endpoint keşfi tamamlandı; kalan iş: isokronik streaming, DMA akışı ve ses formatı (AS_GENERAL) ayrıştırma
+5. **`usb_audio.rs`** — ✅ Genel USB transfer katmanı + isokronik streaming ve Feature Unit kontrolleri uygulandı; kalan iş: gerçek UAC1/UAC2 donanımında doğrulama ve AS_GENERAL format detayı
 6. **`usb_printer.rs`** — USB Bulk IN/OUT endpoint tespiti, IEEE 1284 Device ID, yazdırma akışı
 7. **`usb_touchscreen.rs`** — ✅ Gerçek HID Digitizer tespiti, Interrupt IN ve çoklu dokunma tamamlandı; kalan iş: dört noktalı kalibrasyon ve aygıta özel Feature raporları
 8. **`camera.rs`** — Gerçek UVC cihaz tespiti, video akışı başlatma, kare yakalama

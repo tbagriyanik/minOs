@@ -172,6 +172,7 @@ pub fn render_frame(
                 filemanager_app,
                 notepad_app,
                 browser_app,
+                settings_app.active_tab,
             );
             let (_, _, cw, ch) = wm.content_rect();
             let sb = gui::scrollbar::SCROLLBAR_THICKNESS;

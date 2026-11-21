@@ -497,6 +497,7 @@ pub fn window_content_size(
     fm: &apps::filemanager::FileManagerApp,
     np: &apps::notepad::NotepadApp,
     br: &apps::browser::BrowserApp,
+    settings_tab: usize,
 ) -> (usize, usize) {
     let view_w = win_w.saturating_sub(2);
     let view_h = win_h.saturating_sub(gui::scaled_titlebar_h() + 1);
@@ -520,6 +521,16 @@ pub fn window_content_size(
         }
         // Web Tarayıcısı: yalnızca HTML/lik geçmiş içeriği kaydırılabilir.
         3 => (view_w, br.content_height()),
+        // Ayarlar ve Kontrol Paneli: etkin sekmenin tam içeriği için kaydırma.
+        1 => {
+            let (content_w, content_h) =
+                apps::settings::SystemSettings::content_extent_for_tab(settings_tab);
+            (natural_w.max(content_w), natural_h.max(content_h))
+        }
+        14 => {
+            let (content_w, content_h) = apps::controlpanel::content_extent();
+            (natural_w.max(content_w), natural_h.max(content_h))
+        }
         // Görev Yöneticisi: başlık + süreç satırları + bellek grafiği + durum.
         7 => (view_w, 275),
         // Diğer uygulamalar: doğal (ilk açılış) boyut alt sınırı.
@@ -549,6 +560,7 @@ pub fn window_content_h(
         fm,
         np,
         br,
+        0,
     );
     need_h
 }

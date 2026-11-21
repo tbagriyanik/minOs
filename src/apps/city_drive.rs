@@ -89,6 +89,7 @@ const ROAD_COLOR: u32 = 0x3B4046;
 const SIDEWALK_COLOR: u32 = 0x8C9199;
 const PARK_COLOR: u32 = 0x2F6B36;
 const LANE_COLOR: u32 = 0xE8C55A;
+const EDGE_LINE_COLOR: u32 = 0xC6D0D8;
 const WINDOW_COLOR: u32 = 0x8FC4DC;
 const WINDOW_LIT_COLOR: u32 = 0xF0DFA0;
 
@@ -1092,6 +1093,9 @@ impl CityDriveApp {
             let dy = car.y - self.car_y;
             let r = CAR_RADIUS + car.width * 0.5;
             if dx * dx + dy * dy < r * r {
+                if self.crash_flash == 0 && absf(self.speed) > 2.0 {
+                    self.crashes += 1;
+                }
                 self.speed *= 0.25;
                 self.crash_flash = 10;
                 // Çarpan araç biraz geri itilir.
@@ -1711,13 +1715,26 @@ impl CityDriveApp {
         // Yol orta çizgisi: iki yönü ayıran kesikli sarı çizgi.
         let ly = modf(fy, ROAD_PERIOD as f32);
         let lx = modf(fx, ROAD_PERIOD as f32);
+        if kind == T_ROAD
+            && (absf(ly) < 0.11
+                || absf(ly - ROAD_HALF as f32) < 0.11
+                || absf(lx) < 0.11
+                || absf(lx - ROAD_HALF as f32) < 0.11)
+        {
+            return shade(EDGE_LINE_COLOR, shade_f);
+        }
         if absf(ly - ROAD_AXIS_OFF) < 0.15 && modf(fx, 3.2) < 1.9 {
             return shade(LANE_COLOR, shade_f);
         }
         if absf(lx - ROAD_AXIS_OFF) < 0.15 && modf(fy, 3.2) < 1.9 {
             return shade(LANE_COLOR, shade_f);
         }
-        let mut color = shade(base, shade_f);
+        let roughness = if kind == T_ROAD {
+            0.94 + (hash4(cx as usize, cy as usize, 53, 17) % 7) as f32 * 0.015
+        } else {
+            1.0
+        };
+        let mut color = shade(base, shade_f * roughness);
         // Kaldırım taş dokusu (1 m plaka); asfalt düz kalır.
         if kind == T_SIDEWALK && (cx + cy) & 1 == 0 {
             color = shade(color, 0.90);
@@ -1832,6 +1849,16 @@ impl CityDriveApp {
 
         // Gövde (ön yüz).
         draw_clipped(fb, &runs, run_count, lx, y0, lw, h, body);
+        draw_clipped(
+            fb,
+            &runs,
+            run_count,
+            lx + (lw * 12 / 100),
+            y0 + (h * 8 / 100),
+            (lw * 76 / 100).max(1),
+            1,
+            shade(0xFFFFFF, factor * 0.42),
+        );
 
         // 3D hacim: üst yüz (kabin) ve sağ yan yüz.
         let top_h = (h * 6 / 100).max(1);

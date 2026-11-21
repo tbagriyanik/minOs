@@ -46,6 +46,7 @@ pub mod quic;
 pub mod quic_conn;
 pub mod retry;
 pub mod rtc;
+pub mod rtl8xxx;
 pub mod sdmmc;
 pub mod socket;
 pub mod status;

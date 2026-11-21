@@ -220,6 +220,25 @@ if ($UsbDisks -or $UsbDiskReadWrite) {
     }
 }
 
+# AHCI depolama kendinden testi: kernel acilista [AHCI-TEST] yaz+oku
+# dogrulamasi yapar. Bos bir raw imaj eklenir; sistem diski etkilenmez.
+# Minimal profilde donanim suruculeri kapali oldugundan eklenmez.
+if (-not $Minimal) {
+    $ahciImgPath = "target\qemu_ahci_test.img"
+    $ahciImgDir = "target"
+    if (-not (Test-Path $ahciImgDir)) { New-Item -ItemType Directory -Force -Path $ahciImgDir | Out-Null }
+    if (-not (Test-Path $ahciImgPath)) {
+        $ahciFs = [System.IO.File]::Open($ahciImgPath, [System.IO.FileMode]::CreateNew)
+        try { $ahciFs.SetLength(16MB) } finally { $ahciFs.Close() }
+    }
+    $qemuArgs += @(
+        "-drive", "file=$ahciImgPath,format=raw,if=none,id=ahcitest",
+        "-device", "ahci,id=ahci0",
+        "-device", "ide-hd,drive=ahcitest,bus=ahci0.0"
+    )
+    Write-Host "AHCI test diski eklendi: $ahciImgPath" -ForegroundColor DarkGray
+}
+
 if ($NoPs2) {
     # PS/2 girdisini tamamen kapat: QEMU'da 8042 denetleyicisi oluşturulmaz.
     # Böylece klavye/fare olayları yalnızca USB HID yoluyla gelebilir; test

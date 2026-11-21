@@ -106,14 +106,85 @@ impl AtanApprox for f32 {
 }
 
 // ---------------------------------------------------------------------------
+// Duvar tekstürleri: 8x8 procedural dokular. Hücre türüne göre palet,
+// duvar vuruş offset'ine (tx) göre yatay örnekleme yapılır.
+// ---------------------------------------------------------------------------
+
+/// Tek pikseli tema-tonuna göre koyulaştırır (mesafe sis etkisi için).
+#[allow(dead_code)]
+#[inline(always)]
+fn shade_color(color: u32, delta: i32) -> u32 {
+    let r = (((color >> 16) & 0xFF) as i32 + delta).clamp(0, 255) as u32;
+    let g = (((color >> 8) & 0xFF) as i32 + delta).clamp(0, 255) as u32;
+    let b = ((color & 0xFF) as i32 + delta).clamp(0, 255) as u32;
+    (r << 16) | (g << 8) | b
+}
+
+/// Hücre türüne göre 8x8 duvar tekstürü pikselini döner. `tx` duvara yapılan
+/// vuruşın yatay konumudur (0.0..1.0), `ty` dikey konumudur.
+#[inline(always)]
+fn wall_texel(cell: u8, tx: f32, ty: f32) -> u32 {
+    let mut px = (tx * TEX_W as f32) as usize;
+    let mut py = (ty * TEX_H as f32) as usize;
+    px = px.min(TEX_W - 1);
+    py = py.min(TEX_H - 1);
+    let base = match cell {
+        TILE_WALL => TEX_BRICK,
+        TILE_DOOR => TEX_METAL,
+        _ => TEX_STONE,
+    };
+    // Hücreye göre farklı tekstür paleti.
+    match base {
+        TEX_BRICK => brick_texel(px, py),
+        TEX_STONE => stone_texel(px, py),
+        _ => metal_texel(px, py),
+    }
+}
+
+#[inline(always)]
+fn brick_texel(x: usize, y: usize) -> u32 {
+    let brick = if (y % 4) < 2 { 0xA97142 } else { 0x8B5A3A };
+    if x % 4 == 0 || y % 4 == 0 {
+        0x4A3A2E
+    } else {
+        brick
+    }
+}
+
+#[inline(always)]
+fn stone_texel(x: usize, y: usize) -> u32 {
+    let shade = if (x + y) % 3 == 0 { 0x6B7280 } else { 0x4B5563 };
+    if (x == 3 && y % 2 == 0) || (y == 3 && x % 2 == 0) {
+        0x2E3440
+    } else {
+        shade
+    }
+}
+
+#[inline(always)]
+fn metal_texel(x: usize, y: usize) -> u32 {
+    let panel = if (x / 4 + y / 4) % 2 == 0 {
+        0x6E7A8C
+    } else {
+        0x52606D
+    };
+    if x % 4 == 0 && y % 4 == 0 {
+        0xB8B8B8
+    } else {
+        panel
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sabitler ve yardımcı matematik
 // ---------------------------------------------------------------------------
 
 const MAP_W: usize = 16;
 const MAP_H: usize = 16;
-const FOV: f32 = PI / 3.0; // 60 derece
-const MAX_DEPTH: f32 = 16.0;
-const MOVE_SPEED: f32 = 0.14;
+const FOV: f32 = PI * 0.4444; // ~80 derece (daha geniş görüş alanı)
+const MAX_DEPTH: f32 = 20.0;
+const WALK_SPEED: f32 = 0.12;
+const SPRINT_SPEED: f32 = 0.20;
 const ROT_SPEED: f32 = 0.10;
 // Ana döngü fare delta'sını yarım ölçekle gönderiyor; bu değer 1:1'e yakın,
 // Tüm düşmanları her karede çizmek, sprite'ların kareler arasında kaybolmasını
@@ -122,6 +193,35 @@ const ENEMIES_PER_FRAME: usize = MAX_ENEMIES;
 // daha kontrollü bir FPS dönüşü için ayarlandı.
 const MOUSE_SENS: f32 = 0.0045;
 const PLAYER_RADIUS: f32 = 0.25;
+
+// --- Silah türleri ---
+const WEAPON_PISTOL: u8 = 0;
+const WEAPON_SHOTGUN: u8 = 1;
+const WEAPON_COUNT: usize = 2;
+
+// Silah istatistikleri: (mermi başına hasar, ateş arası bekleme (tick), mermilik, yayılma)
+const PISTOL_FIRE_DELAY: usize = 8;
+const PISTOL_AMMO_MAX: u32 = 60;
+const SHOTGUN_PELLETS: u32 = 7;
+const SHOTGUN_FIRE_DELAY: usize = 24;
+const SHOTGUN_AMMO_MAX: u32 = 24;
+const RELOAD_TICKS: usize = 30;
+
+// --- Oynanış sabitleri ---
+const MAX_ARMOR: u32 = 100;
+const ENEMY_CHASE_SPEED: f32 = 0.025;
+const ENEMY_ATTACK_DIST: f32 = 0.9;
+const ENEMY_ATTACK_DAMAGE: u32 = 12;
+const ENEMY_ATTACK_DELAY: usize = 30;
+const DAMAGE_FLASH_TICKS: usize = 12;
+const MUZZLE_FLASH_TICKS: usize = 4;
+
+// --- Duvar tekstür sabitleri ---
+const TEX_W: usize = 8;
+const TEX_H: usize = 8;
+const TEX_BRICK: u8 = 0;
+const TEX_STONE: u8 = 1;
+const TEX_METAL: u8 = 2;
 
 // Tuş durumu maske bayrakları (handle_key / handle_arrow ile ayarlanır,
 // update() içinde tek seferde uygulanır — çok tuşlu hareket destekler).
@@ -133,6 +233,7 @@ const KEY_LEFT: u16 = 1 << 4;
 const KEY_RIGHT: u16 = 1 << 5;
 const KEY_UP: u16 = 1 << 6;
 const KEY_DOWN: u16 = 1 << 7;
+const KEY_SHIFT: u16 = 1 << 8; // koşu
 
 /// Harita kare türleri: 0 = boş, 1 = duvar, 2 = kapı, 3 = canlı/pickup.
 const TILE_WALL: u8 = 1;
@@ -159,18 +260,19 @@ static MAP: [[u8; MAP_W]; MAP_H] = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
-/// Düşman: (x, y, can, aktif)
+/// Düşman: (x, y, can, aktif, saldırı zamanlayıcısı)
 #[derive(Clone, Copy)]
 struct Enemy {
     x: f32,
     y: f32,
     alive: bool,
     hit_timer: usize,
+    attack_timer: usize,
 }
 
 const MAX_ENEMIES: usize = 8;
 
-/// Pickup: (x, y, tür, aktif) — 1 = can, 2 = puan.
+/// Pickup: (x, y, tür, aktif) — 1 = can, 2 = puan, 3 = zırh.
 #[derive(Clone, Copy)]
 struct Pickup {
     x: f32,
@@ -215,12 +317,29 @@ pub struct FpsGameApp {
     pub plane_y: f32,
     pub health: u32,
     pub score: u32,
-    pub ammo: u32,
+    pub ammo: u32,  // aktif silahın mermi sayısı
+    pub armor: u32, // zırh (hasarı azaltır)
     pub shots_fired: u32,
     pub hits: u32,
     pub shooting: bool,
     pub shoot_timer: usize,
     result: GameResult,
+
+    // Silah / mermi durumu
+    pub weapon: u8,                           // WEAPON_PISTOL / WEAPON_SHOTGUN
+    pub ammo_per_weapon: [u32; WEAPON_COUNT], // silah başına mermi
+    pub is_reloading: bool,
+    pub reload_timer: usize,
+    pub last_fire_tick: usize,
+
+    // Görsel efektler
+    pub weapon_bob: f32, // silah sallanma fazı
+    pub muzzle_flash_timer: usize,
+    pub damage_flash_timer: usize,
+
+    // Dalga / olgunlaşma
+    pub wave: usize,
+    pub wave_timer: usize,
 
     // Görünüm modu
     pub render_mode: RenderMode,
@@ -269,6 +388,7 @@ impl FpsGameApp {
             y: 0.0,
             alive: false,
             hit_timer: 0,
+            attack_timer: 0,
         }; MAX_ENEMIES];
 
         // Başlangıç düşmanlarını harita üzerindeki boş hücrelere yerleştir.
@@ -281,6 +401,7 @@ impl FpsGameApp {
                         y: ty as f32 + 0.5,
                         alive: true,
                         hit_timer: 0,
+                        attack_timer: 0,
                     };
                     n += 1;
                 }
@@ -298,10 +419,15 @@ impl FpsGameApp {
         for (ty, row) in MAP.iter().enumerate().skip(2).take(MAP_H.saturating_sub(3)) {
             for (tx, &cell) in row.iter().enumerate().skip(2).take(MAP_W.saturating_sub(3)) {
                 if cell == 0 && pcount < MAX_PICKUPS && (tx * 2 + ty) % 5 == 0 {
+                    let kind = match (tx + ty) % 3 {
+                        0 => 1, // can
+                        1 => 2, // puan
+                        _ => 3, // zırh
+                    };
                     pickups[pcount] = Pickup {
                         x: tx as f32 + 0.5,
                         y: ty as f32 + 0.5,
-                        kind: if (tx + ty) % 2 == 0 { 1 } else { 2 },
+                        kind,
                         active: true,
                     };
                     pcount += 1;
@@ -337,6 +463,7 @@ impl FpsGameApp {
             plane_x: 0.0,
             plane_y: 0.66,
             health: 100,
+            armor: 0,
             score: 0,
             ammo: 50,
             shots_fired: 0,
@@ -368,6 +495,19 @@ impl FpsGameApp {
             moving: false,
             key_mask: 0,
             sound_pending: None,
+            // Silah / mermi durumu
+            weapon: WEAPON_PISTOL,
+            ammo_per_weapon: [PISTOL_AMMO_MAX, SHOTGUN_AMMO_MAX],
+            is_reloading: false,
+            reload_timer: 0,
+            last_fire_tick: 0,
+            // Görsel efektler
+            weapon_bob: 0.0,
+            muzzle_flash_timer: 0,
+            damage_flash_timer: 0,
+            // Dalga
+            wave: 1,
+            wave_timer: 0,
         }
     }
 
@@ -413,50 +553,127 @@ impl FpsGameApp {
         false
     }
 
-    /// Düşmana ateş et, mermi varsa en yakın canlı düşmanı vursa true döner.
+    /// Açı farkını -PI..=PI aralığınanormalize eder.
+    #[inline(always)]
+    fn angle_diff(a: f32, b: f32) -> f32 {
+        let mut rel = a - b;
+        while rel < -PI {
+            rel += TAU;
+        }
+        while rel > PI {
+            rel -= TAU;
+        }
+        rel
+    }
+
+    /// Silahla ateş eder. Pistol tek mermi, flinti yayılmalı birden çok pellet.
+    /// Vurduysa true döner. Mermi bitişikte otomatik yeniden doldurma başlar.
     fn shoot(&mut self) -> bool {
-        if self.ammo == 0 {
+        let wp = self.weapon as usize;
+        let ammo = &mut self.ammo_per_weapon[wp];
+        if *ammo == 0 {
+            if !self.is_reloading {
+                self.start_reload();
+            }
             return false;
         }
-        self.ammo = self.ammo.saturating_sub(1);
-        self.shots_fired += 1;
-        let mut best_dist = f32::MAX;
-        let mut best_idx: Option<usize> = None;
+        self.shots_fired = self.shots_fired.saturating_add(1);
+        *ammo = ammo.saturating_sub(1);
+        self.ammo = *ammo; // HUD eşitlemesi (aktif silah mermi)
 
-        for (i, e) in self.enemies.iter().enumerate().take(self.enemy_count) {
-            if !e.alive {
-                continue;
-            }
-            let dx = e.x - self.pos_x;
-            let dy = e.y - self.pos_y;
-            let dist = fast_sqrt(dx * dx + dy * dy);
-            if dist <= 0.0 || !self.has_line_of_sight(e.x, e.y, dist) {
-                continue;
-            }
-            let angle = fast_atan2(dy, dx);
-            let mut rel = angle - fast_atan2(self.dir_y, self.dir_x);
-            while rel < -PI {
-                rel += TAU;
-            }
-            while rel > PI {
-                rel -= TAU;
-            }
-            let aim_tolerance = 0.03 + 0.32 / dist;
-            if rel.abs() < aim_tolerance && dist < best_dist {
-                best_dist = dist;
-                best_idx = Some(i);
-            }
-        }
-
-        if let Some(idx) = best_idx {
-            self.enemies[idx].alive = false;
-            self.enemies[idx].hit_timer = 10;
-            self.hits += 1;
-            self.score += 100;
-            true
+        let pellet_count = if wp == WEAPON_SHOTGUN as usize {
+            SHOTGUN_PELLETS
         } else {
-            false
+            1
+        };
+        let spread = if wp == WEAPON_SHOTGUN as usize {
+            0.13
+        } else {
+            0.0
+        };
+        let base_angle = fast_atan2(self.dir_y, self.dir_x);
+        let mut any_hit = false;
+
+        for pellet in 0..pellet_count {
+            let mut aim = base_angle;
+            if pellet_count > 1 {
+                let center = (pellet_count - 1) as f32 / 2.0;
+                aim += (pellet as f32 - center) * spread;
+            }
+            let mut best_dist = f32::MAX;
+            let mut best_idx: Option<usize> = None;
+            for (i, e) in self.enemies.iter().enumerate().take(self.enemy_count) {
+                if !e.alive {
+                    continue;
+                }
+                let dx = e.x - self.pos_x;
+                let dy = e.y - self.pos_y;
+                let dist = fast_sqrt(dx * dx + dy * dy);
+                if dist <= 0.0 || !self.has_line_of_sight(e.x, e.y, dist) {
+                    continue;
+                }
+                let angle = fast_atan2(dy, dx);
+                let rel = Self::angle_diff(angle, aim);
+                let tolerance = 0.05 + 0.28 / dist;
+                if rel.abs() < tolerance && dist < best_dist {
+                    best_dist = dist;
+                    best_idx = Some(i);
+                }
+            }
+            if let Some(idx) = best_idx {
+                let enemy_angle = fast_atan2(
+                    self.enemies[idx].y - self.pos_y,
+                    self.enemies[idx].x - self.pos_x,
+                );
+                let headshot = Self::angle_diff(enemy_angle, base_angle).abs() < 0.025;
+                self.enemies[idx].alive = false;
+                self.enemies[idx].hit_timer = 12;
+                self.hits = self.hits.saturating_add(1);
+                if headshot {
+                    self.score = self.score.saturating_add(150); // baş vuruş bonusu
+                } else {
+                    self.score = self.score.saturating_add(if wp == WEAPON_SHOTGUN as usize {
+                        40
+                    } else {
+                        100
+                    });
+                }
+                any_hit = true;
+            }
         }
+        any_hit
+    }
+
+    /// Yeniden doldurmayı başlatır (mermi dolusu veya boş olduğunda).
+    fn start_reload(&mut self) {
+        if self.is_reloading {
+            return;
+        }
+        let wp = self.weapon as usize;
+        let max_ammo = if wp == WEAPON_SHOTGUN as usize {
+            SHOTGUN_AMMO_MAX
+        } else {
+            PISTOL_AMMO_MAX
+        };
+        if self.ammo_per_weapon[wp] >= max_ammo {
+            return;
+        }
+        self.is_reloading = true;
+        self.reload_timer = RELOAD_TICKS;
+    }
+
+    /// Yeniden doldurmayı tamamlar.
+    fn finish_reload(&mut self) {
+        let wp = self.weapon as usize;
+        let max_ammo = if wp == WEAPON_SHOTGUN as usize {
+            SHOTGUN_AMMO_MAX
+        } else {
+            PISTOL_AMMO_MAX
+        };
+        self.ammo_per_weapon[wp] = max_ammo;
+        self.ammo = max_ammo;
+        self.is_reloading = false;
+        self.reload_timer = 0;
     }
 
     fn has_line_of_sight(&self, target_x: f32, target_y: f32, dist: f32) -> bool {
@@ -579,8 +796,9 @@ impl FpsGameApp {
                         self.score += 25;
                     }
                     3 => {
-                        // Extra life or score pickup
-                        self.score += 100;
+                        // Zırh: hasarı azaltır (maks %100).
+                        self.armor = (self.armor + 25).min(MAX_ARMOR);
+                        self.score += 50;
                     }
                     _ => {}
                 }
@@ -664,6 +882,18 @@ impl FpsGameApp {
             SoundKind::Hit => {
                 audio_dev.set_pc_speaker_tone(800);
                 self.sound_pending = Some((800, 50));
+            }
+            SoundKind::Click => {
+                audio_dev.set_pc_speaker_tone(180);
+                self.sound_pending = Some((180, 20));
+            }
+            SoundKind::Reload => {
+                audio_dev.set_pc_speaker_tone(440);
+                self.sound_pending = Some((440, 60));
+            }
+            SoundKind::EnemyDamage => {
+                audio_dev.set_pc_speaker_tone(600);
+                self.sound_pending = Some((600, 40));
             }
             SoundKind::Step => {
                 audio_dev.set_pc_speaker_tone(200);
@@ -1018,55 +1248,21 @@ impl FpsGameApp {
                         cancelled = true;
                         break;
                     }
-                    // Tekstür y koordinatı.
-                    let tex_scale_y = if tile == TILE_DOOR { 0.5 } else { 64.0 };
-                    let ty =
-                        ((yy - ds) as f32 / (de - ds).max(1) as f32 * tex_scale_y) as usize % 8;
+                    // Tekstür y koordinatı (0.0..1.0) — duvarda dikey örnekleme.
+                    let ty_f = (yy - ds) as f32 / (de - ds).max(1) as f32;
+                    // Duvar metni: hücre türüne göre procedural doku, vuruş
+                    // konumundan (tex_x, ty_f) örnekleme yapılır.
+                    let base_color = wall_texel(tile, tex_x, ty_f);
                     let wall_color = match tile {
-                        TILE_WALL => {
-                            // Tuğla duvar: iki sıra, kaydırılmış dikey derzler
-                            // ve üst kenarda ışık vurgusu ile net okunur.
-                            let row = ty / 4;
-                            let brick = match ty % 4 {
-                                0 => 0xD04030, // vivid red brick
-                                1 => 0xE06050, // light red brick
-                                2 => 0xF08060, // bright orange-red
-                                _ => 0xFFB080, // very light red/orange
-                            };
-                            let joint_x = if row == 0 { 0 } else { 4 };
-                            let color = if ty % 4 == 0 || tx == joint_x {
-                                0x3D1714 // harç
+                        TILE_DOOR if self.door_is_open(map_x, map_y) => {
+                            // Açık kapı: parlak yeşil geçiş + koyu çerçeve.
+                            if tx == 0 || tx == 7 || ty_f < 0.06 || ty_f > 0.94 {
+                                apply_shade(0x307040)
                             } else {
-                                brick
-                            };
-                            apply_shade(color)
-                        }
-                        TILE_DOOR => {
-                            if self.door_is_open(map_x, map_y) {
-                                // Açık kapı: koyu geçit + parlak yeşil kasa.
-                                if tx == 0 || tx == 7 || ty == 0 || ty == 7 {
-                                    apply_shade(0x60D870) // açık yeşil kahve
-                                } else {
-                                    apply_shade(0x20C050) // parlak yeşil
-                                }
-                            } else {
-                                // Kapalı kapı: metalik gray + belirgin tehlike şeritleri
-                                let color = if tx == 0 || tx == 7 || ty == 0 || ty == 7 {
-                                    0x404040 // metalik gri
-                                } else if tx == 4 && (ty == 3 || ty == 4) {
-                                    0xFFD24A // sarı kol
-                                } else if (ty == 2 || ty == 4) && (tx == 2 || tx == 5) {
-                                    0xFFFF00 // açık tehlike şeridi
-                                } else if tx % 2 == 0 {
-                                    0x8B7C2E
-                                } else {
-                                    0x5B6C2F
-                                };
-                                apply_shade(color)
+                                apply_shade(0x40C060)
                             }
                         }
-                        TILE_PICKUP => apply_shade(0x60FF40), // can yeşili
-                        _ => apply_shade(0xC06040),           // kamboa kirmizii
+                        _ => apply_shade(base_color),
                     };
                     // Yan yüzeyi kanal bazlı karart; packed RGB değerini bölmek
                     // renk kanallarını bozuyordu ve duvarı görünmez yapıyordu.
@@ -1354,12 +1550,12 @@ impl FpsGameApp {
             let py = offset_y + (p.y as usize).min(MAP_H - 1) * cell + cell / 3;
             let size = (cell / 3).max(2);
             let color = if p.kind == 1 {
-                0x40FF40
+                0x40FF40 // can (yeşil)
             } else if p.kind == 2 {
-                0xFFFF40
+                0xFFFF40 // mermi (sarı)
             } else {
-                0xFFD700
-            }; /* kind 1: health(green), kind 2: ammo(yellow), kind 3: score(gold) */
+                0x40A0FF // zırh (mavi)
+            }; /* kind 1: health(green), kind 2: ammo(yellow), kind 3: armor(blue) */
             fb.draw_rect(px, py, size, size, color);
         }
 
@@ -1484,13 +1680,42 @@ impl FpsGameApp {
             Color::ACCENT_GREEN,
         );
 
+        // Zırh.
+        let mut ar_text = crate::gui::TextBuf::new();
+        ar_text.push_str(crate::gui::ui_text("Zırh: ", "Armor: "));
+        ar_text.push_u2(self.armor);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 96,
+            hud_y + 4,
+            ar_text.as_str(),
+            Color::ACCENT_BLUE,
+        );
+
+        // Silah.
+        let wp_name = if self.weapon == WEAPON_SHOTGUN {
+            crate::gui::ui_text("Flinti", "Shotgun")
+        } else {
+            crate::gui::ui_text("Pistol", "Pistol")
+        };
+        let mut wp_text = crate::gui::TextBuf::new();
+        wp_text.push_str(crate::gui::ui_text("Silah: ", "Weapon: "));
+        wp_text.push_str(wp_name);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 150,
+            hud_y + 4,
+            wp_text.as_str(),
+            Color::ACCENT_PINK,
+        );
+
         // Puan.
         let mut score_text = crate::gui::TextBuf::new();
         score_text.push_str(crate::gui::ui_text("Puan: ", "Score: "));
         score_text.push_u2(self.score);
         MinGuiCompositor::draw_string(
             fb,
-            win_x + 120,
+            win_x + 300,
             hud_y + 4,
             score_text.as_str(),
             Color::TEXT_MAIN,
@@ -1502,7 +1727,7 @@ impl FpsGameApp {
         ammo_text.push_u2(self.ammo);
         MinGuiCompositor::draw_string(
             fb,
-            win_x + 160,
+            win_x + 230,
             hud_y + 4,
             ammo_text.as_str(),
             Color::ACCENT_YELLOW,
@@ -1524,7 +1749,7 @@ impl FpsGameApp {
         fps_text.push_str("MB");
         MinGuiCompositor::draw_string(
             fb,
-            win_x + 220,
+            win_x + 380,
             hud_y + 4,
             fps_text.as_str(),
             Color::ACCENT_YELLOW,
@@ -1542,7 +1767,7 @@ impl FpsGameApp {
         acc_text.push_str("%");
         MinGuiCompositor::draw_string(
             fb,
-            win_x + 300,
+            win_x + 470,
             hud_y + 4,
             acc_text.as_str(),
             Color::TEXT_MUTED,
@@ -1560,10 +1785,22 @@ impl FpsGameApp {
         en_text.push_u2(alive as u32);
         MinGuiCompositor::draw_string(
             fb,
-            win_x + 380,
+            win_x + 570,
             hud_y + 4,
             en_text.as_str(),
             Color::TEXT_MUTED,
+        );
+
+        // Dalga.
+        let mut wave_text = crate::gui::TextBuf::new();
+        wave_text.push_str(crate::gui::ui_text("Dalga: ", "Wave: "));
+        wave_text.push_u2(self.wave as u32);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 650,
+            hud_y + 4,
+            wave_text.as_str(),
+            Color::ACCENT_PINK,
         );
     }
 
@@ -1682,25 +1919,69 @@ impl FpsGameApp {
             fb.draw_rect(cx + 2, cy.saturating_sub(1), 5, 2, 0xD8F4FF);
             fb.draw_rect(cx, cy, 1, 1, 0xFFFFFF);
 
-            // Silah silüeti.
-            let gun_w = 92;
-            let gun_h = 58;
-            let gun_x = win_x + win_w / 2 - gun_w / 2;
-            let gun_y = win_y + win_h.saturating_sub(gun_h + 10);
+            // Silah silüeti: sallanma (bobbing), geri tepme ve muzzle flaş.
+            let bob_offset = (fast_sin(self.weapon_bob) * 3.0) as isize;
+            let bob_offset = bob_offset.clamp(-4, 4);
+            let gun_w = if self.weapon == WEAPON_SHOTGUN {
+                110
+            } else {
+                92
+            };
+            let gun_h = if self.weapon == WEAPON_SHOTGUN {
+                66
+            } else {
+                58
+            };
+            let gun_x = win_x + win_w / 2 - gun_w / 2 + bob_offset as usize;
+            let gun_y = win_y + win_h.saturating_sub(gun_h + 10 - bob_offset.unsigned_abs());
             let recoil = if self.shooting && self.shoot_timer > 0 {
                 (10 - self.shoot_timer) * 2
             } else {
                 0
             };
             let gy = gun_y.saturating_add(recoil);
-            fb.draw_rect(gun_x + 20, gy + 8, gun_w - 38, 25, 0x252A33);
-            fb.draw_rect(gun_x + 25, gy + 5, gun_w - 48, 6, 0x77808B);
+            let gun_body = if self.weapon == WEAPON_SHOTGUN {
+                0x2E3A46
+            } else {
+                0x252A33
+            };
+            let gun_trim = if self.weapon == WEAPON_SHOTGUN {
+                0x9FB0BC
+            } else {
+                0x77808B
+            };
+            fb.draw_rect(gun_x + 20, gy + 8, gun_w - 38, 25, gun_body);
+            fb.draw_rect(gun_x + 25, gy + 5, gun_w - 48, 6, gun_trim);
             fb.draw_rect(gun_x + gun_w / 2 - 5, gy, 10, 10, 0xAEB8C2);
             fb.draw_rect(gun_x + 30, gy + 28, 28, 25, 0x4B3030);
             fb.draw_rect(gun_x + 34, gy + 32, 20, 21, 0x6A3B36);
             fb.draw_rect(gun_x + 18, gy + 30, 12, 7, 0x171A20);
-            if self.ammo > 0 {
+            // Mermi yok işareti.
+            if self.ammo_per_weapon[self.weapon as usize] == 0 && !self.is_reloading {
+                fb.draw_rect(gun_x + gun_w - 16, gy + 6, 12, 12, Color::ACCENT_RED);
+            } else if self.ammo > 0 {
                 fb.draw_rect(gun_x + gun_w - 15, gy + 5, 10, 10, 0xFFD700);
+            }
+            // Muzzle flaş (ateş etme anında kısa parlaklık).
+            if self.muzzle_flash_timer > 0 {
+                let mf = self.muzzle_flash_timer as f32 / MUZZLE_FLASH_TICKS as f32;
+                let size = (14.0 * mf) as usize;
+                let cx2 = gun_x + gun_w / 2;
+                let cy2 = gy.saturating_sub(4);
+                fb.draw_rect(
+                    cx2.saturating_sub(size / 2),
+                    cy2.saturating_sub(size / 2),
+                    size,
+                    size,
+                    0xFFF4A3,
+                );
+                fb.draw_rect(
+                    cx2.saturating_sub(size / 4),
+                    cy2.saturating_sub(size / 4),
+                    size / 2,
+                    size / 2,
+                    0xFFFFFF,
+                );
             }
             if self.shooting && self.shoot_timer > 5 {
                 fb.draw_rect(
@@ -1728,6 +2009,37 @@ impl FpsGameApp {
                     win_y + win_h.saturating_sub(74),
                     crate::gui::ui_text("VURDU!", "HIT!"),
                     Color::ACCENT_RED,
+                );
+            }
+
+            // Hasar vigneti: düşman vurduğunda kenarlarda kırık kırmızı flaş.
+            if self.damage_flash_timer > 0 {
+                let t = self.damage_flash_timer as f32 / DAMAGE_FLASH_TICKS as f32;
+                let alpha = (t * 0.5) as usize;
+                let flash = Color::ACCENT_RED;
+                let top = win_y + view_y.saturating_sub(2);
+                let bottom = win_y + win_h.saturating_sub(2);
+                fb.draw_rect(win_x + 2, top, win_w - 4, 4.max(alpha), flash);
+                fb.draw_rect(
+                    win_x + 2,
+                    bottom.saturating_sub(4.max(alpha)),
+                    win_w - 4,
+                    4.max(alpha),
+                    flash,
+                );
+                fb.draw_rect(
+                    win_x + 2,
+                    top,
+                    4.max(alpha),
+                    view_h.saturating_sub(4),
+                    flash,
+                );
+                fb.draw_rect(
+                    bottom.saturating_sub(4.max(alpha)),
+                    top,
+                    4.max(alpha),
+                    view_h.saturating_sub(4),
+                    flash,
                 );
             }
         }
@@ -1873,21 +2185,46 @@ impl FpsGameApp {
                 true
             }
             ' ' => {
-                // Ateş et.
-                if self.shoot_timer == 0 {
-                    self.shoot_timer = 10;
+                // Ateş et (silah gecikmesi sayesinde hız sınırlı).
+                if self.shoot_timer == 0 && !self.is_reloading {
+                    let delay = if self.weapon == WEAPON_SHOTGUN {
+                        SHOTGUN_FIRE_DELAY
+                    } else {
+                        PISTOL_FIRE_DELAY
+                    };
+                    self.shoot_timer = delay;
                     self.shooting = true;
+                    self.muzzle_flash_timer = MUZZLE_FLASH_TICKS;
                     let hit = self.shoot();
                     if hit {
                         self.play_sound(audio_dev, SoundKind::Hit);
+                    } else if self.ammo_per_weapon[self.weapon as usize] == 0 {
+                        // Mermi bitti: otomatik yeniden doldurma.
+                        self.start_reload();
+                        self.play_sound(audio_dev, SoundKind::Click);
                     } else {
                         self.play_sound(audio_dev, SoundKind::Shoot);
                     }
                 }
                 true
             }
+            '1' => {
+                if self.shoot_timer == 0 && !self.is_reloading {
+                    self.weapon = WEAPON_PISTOL;
+                    self.ammo = self.ammo_per_weapon[WEAPON_PISTOL as usize];
+                }
+                true
+            }
+            '2' => {
+                if self.shoot_timer == 0 && !self.is_reloading {
+                    self.weapon = WEAPON_SHOTGUN;
+                    self.ammo = self.ammo_per_weapon[WEAPON_SHOTGUN as usize];
+                }
+                true
+            }
             'r' | 'R' => {
-                self.respawn_enemies();
+                // Yeniden doldurma.
+                self.start_reload();
                 true
             }
             'e' | 'E' => {
@@ -1960,12 +2297,21 @@ impl FpsGameApp {
             *self = Self::new();
             return true;
         }
-        if self.shoot_timer == 0 {
-            self.shoot_timer = 10;
+        if self.shoot_timer == 0 && !self.is_reloading {
+            let delay = if self.weapon == WEAPON_SHOTGUN {
+                SHOTGUN_FIRE_DELAY
+            } else {
+                PISTOL_FIRE_DELAY
+            };
+            self.shoot_timer = delay;
             self.shooting = true;
+            self.muzzle_flash_timer = MUZZLE_FLASH_TICKS;
             let hit = self.shoot();
             if hit {
                 self.play_sound(audio_dev, SoundKind::Hit);
+            } else if self.ammo_per_weapon[self.weapon as usize] == 0 {
+                self.start_reload();
+                self.play_sound(audio_dev, SoundKind::Click);
             } else {
                 self.play_sound(audio_dev, SoundKind::Shoot);
             }
@@ -1992,21 +2338,26 @@ impl FpsGameApp {
                 let mut dx = 0.0f32;
                 let mut dy = 0.0f32;
 
+                let move_speed = if self.key_mask & KEY_SHIFT != 0 {
+                    SPRINT_SPEED
+                } else {
+                    WALK_SPEED
+                };
                 if self.key_mask & KEY_W != 0 {
-                    dx += self.dir_x * MOVE_SPEED;
-                    dy += self.dir_y * MOVE_SPEED;
+                    dx += self.dir_x * move_speed;
+                    dy += self.dir_y * move_speed;
                 }
                 if self.key_mask & KEY_S != 0 {
-                    dx -= self.dir_x * MOVE_SPEED;
-                    dy -= self.dir_y * MOVE_SPEED;
+                    dx -= self.dir_x * move_speed;
+                    dy -= self.dir_y * move_speed;
                 }
                 if self.key_mask & KEY_A != 0 {
-                    dx += self.dir_y * MOVE_SPEED;
-                    dy -= self.dir_x * MOVE_SPEED;
+                    dx += self.dir_y * move_speed;
+                    dy -= self.dir_x * move_speed;
                 }
                 if self.key_mask & KEY_D != 0 {
-                    dx -= self.dir_y * MOVE_SPEED;
-                    dy += self.dir_x * MOVE_SPEED;
+                    dx -= self.dir_y * move_speed;
+                    dy += self.dir_x * move_speed;
                 }
 
                 if dx != 0.0 && dy != 0.0 {
@@ -2017,10 +2368,10 @@ impl FpsGameApp {
 
                 let mut forward = 0.0f32;
                 if self.key_mask & KEY_UP != 0 {
-                    forward += MOVE_SPEED;
+                    forward += move_speed;
                 }
                 if self.key_mask & KEY_DOWN != 0 {
-                    forward -= MOVE_SPEED;
+                    forward -= move_speed;
                 }
                 dx += forward * self.dir_x;
                 dy += forward * self.dir_y;
@@ -2097,7 +2448,7 @@ impl FpsGameApp {
             }
         }
 
-        // Düşmanları yenile.
+        // Düşman AI'sı / dalga yönetimi (aşağıdaki blokta).
         if !cancelled {
             if budget.is_expired() {
                 cancelled = true;
@@ -2106,19 +2457,138 @@ impl FpsGameApp {
             }
         }
 
+        // Yeniden doldurma ve efekt zamanlayıcıları.
+        if !cancelled {
+            if budget.is_expired() {
+                cancelled = true;
+            } else {
+                if self.is_reloading {
+                    self.reload_timer = self.reload_timer.saturating_sub(1);
+                    if self.reload_timer == 0 {
+                        self.finish_reload();
+                        self.play_sound(audio_dev, SoundKind::Reload);
+                    }
+                }
+                if self.muzzle_flash_timer > 0 {
+                    self.muzzle_flash_timer -= 1;
+                }
+                if self.damage_flash_timer > 0 {
+                    self.damage_flash_timer -= 1;
+                }
+                // Silah sallanma (bobbing) — harekette artar, duruşta gevşer.
+                if self.moving {
+                    self.weapon_bob = (self.weapon_bob + 0.18).clamp(0.0, TAU);
+                } else {
+                    self.weapon_bob = (self.weapon_bob * 0.85).max(0.0);
+                }
+            }
+        }
+
+        // Düşman yapay zekası: oyuncuyu takip eder, mesafeye göre saldırır.
+        if !cancelled {
+            if budget.is_expired() {
+                cancelled = true;
+            } else {
+                for i in 0..self.enemy_count {
+                    if budget.is_expired() {
+                        cancelled = true;
+                        break;
+                    }
+                    // Kopyala (Enemy: Copy), böylece self.enemies üzerinde
+                    // uzun süreli mutable borrow tutulmaz.
+                    let mut e = self.enemies[i];
+
+                    if e.attack_timer > 0 {
+                        e.attack_timer -= 1;
+                    }
+
+                    if !e.alive {
+                        continue;
+                    }
+
+                    let dx = self.pos_x - e.x;
+                    let dy = self.pos_y - e.y;
+                    let dist = fast_sqrt(dx * dx + dy * dy);
+
+                    let mut should_attack = false;
+
+                    if dist > ENEMY_ATTACK_DIST && dist < MAX_DEPTH {
+                        let step = ENEMY_CHASE_SPEED;
+                        let nx = e.x + (dx / dist) * step;
+                        let ny = e.y + (dy / dist) * step;
+                        if !self.is_wall(nx, e.y) {
+                            e.x = nx;
+                        }
+                        if !self.is_wall(e.x, ny) {
+                            e.y = ny;
+                        }
+                    } else if dist <= ENEMY_ATTACK_DIST && e.attack_timer == 0 {
+                        should_attack = true;
+                    }
+
+                    // Değişiklikleri geri yaz.
+                    self.enemies[i] = e;
+
+                    if should_attack {
+                        self.enemies[i].attack_timer = ENEMY_ATTACK_DELAY;
+                        let dmg = ENEMY_ATTACK_DAMAGE;
+                        let mut armor_dmg = (dmg as f32 * 0.5) as u32;
+                        armor_dmg = armor_dmg.min(self.armor);
+                        let health_dmg = dmg.saturating_sub(armor_dmg);
+                        self.armor = self.armor.saturating_sub(armor_dmg);
+                        self.health = self.health.saturating_sub(health_dmg);
+                        self.damage_flash_timer = DAMAGE_FLASH_TICKS;
+                        self.play_sound(audio_dev, SoundKind::EnemyDamage);
+                    }
+                }
+            }
+        }
+
+        // Dalga sistemi: tüm düşmanlar öldüyse bir sonraki dalgayı başlat.
+        if !cancelled {
+            let all_dead = self
+                .enemies
+                .iter()
+                .take(self.enemy_count)
+                .all(|enemy| !enemy.alive);
+            if all_dead {
+                if self.wave_timer == 0 {
+                    self.wave = self.wave.saturating_add(1);
+                    self.wave_timer = 180;
+                    let spawn_points = [
+                        (2.0, 2.0),
+                        (2.0, 13.0),
+                        (13.0, 2.0),
+                        (13.0, 13.0),
+                        (7.0, 2.0),
+                        (2.0, 7.0),
+                        (13.0, 7.0),
+                        (7.0, 13.0),
+                    ];
+                    for (i, e) in self.enemies.iter_mut().take(self.enemy_count).enumerate() {
+                        if !e.alive {
+                            let (sx, sy) = spawn_points[i % spawn_points.len()];
+                            *e = Enemy {
+                                x: sx,
+                                y: sy,
+                                alive: true,
+                                hit_timer: 0,
+                                attack_timer: 0,
+                            };
+                        }
+                    }
+                } else {
+                    self.wave_timer -= 1;
+                }
+            }
+        }
+
         if !cancelled {
             if self.health == 0 {
                 crate::boot::console::serial_print("[FPS-GAME] Oyun sonu: Can tükendi (Lost)\n");
                 self.result = GameResult::Lost;
-            } else if self
-                .enemies
-                .iter()
-                .take(self.enemy_count)
-                .all(|enemy| !enemy.alive)
-            {
-                crate::boot::console::serial_print(
-                    "[FPS-GAME] Oyun sonu: Tüm düşmanler vuruldu (Won)\n",
-                );
+            } else if self.wave >= 8 {
+                crate::boot::console::serial_print("[FPS-GAME] Oyun sonu: 8 dalga geçildi (Won)\n");
                 self.result = GameResult::Won;
             }
         }
@@ -2143,7 +2613,10 @@ impl Default for FpsGameApp {
 pub enum SoundKind {
     Shoot,
     Hit,
+    Click,
+    Reload,
     Step,
     Door,
     Pickup,
+    EnemyDamage,
 }

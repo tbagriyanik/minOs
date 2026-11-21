@@ -242,16 +242,26 @@ pub fn register_default_windows(
         false,
     ));
 
-    // 9: Paint
-    compositor.add_window(gui::Window::new(
+    // 9: Paint — iki şeritli araç çubuğu için geniş bir varsayılan boyut;
+    // ekranı aşmayacak şekilde kelepçelenir.
+    let paint_w = 680.min(width.saturating_sub(20)).max(360);
+    let paint_h = 480
+        .min(height.saturating_sub(scaled_taskbar_h() + 10))
+        .max(240);
+    let mut paint_win = gui::Window::new(
         "cizim Tahtasi",
         "cizim",
-        180,
-        80,
-        520,
-        360,
+        width.saturating_sub(paint_w) / 2,
+        height.saturating_sub(paint_h + scaled_taskbar_h()) / 2,
+        paint_w,
+        paint_h,
         false,
-    ));
+    );
+    // İki şeritli araç çubuğu küçük pencerede üst üste binmesin diye
+    // yeniden boyutlandırma alt sınırı ölçekli taban birimle verilir.
+    paint_win.min_width = gui::metrics::sp(580);
+    paint_win.min_height = gui::metrics::sp(280);
+    compositor.add_window(paint_win);
 
     // 10: Terminal
     compositor.add_window(gui::Window::new(

@@ -580,6 +580,974 @@ fn search(board: &Board, depth: u8, mut alpha: i32, beta: i32) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
+// Ortak oyun durumu
+// ---------------------------------------------------------------------------
+
+/// Tek oyunculu oyunların sonucu.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum GameState {
+    #[default]
+    Playing,
+    Won,
+    Lost,
+}
+
+// ---------------------------------------------------------------------------
+// Mayın Tarlası (Minesweeper)
+// ---------------------------------------------------------------------------
+
+/// Tahtanın desteklediği en büyük hücre sayısı (16x16).
+pub const MINES_MAX_CELLS: usize = 16 * 16;
+
+/// Mayın Tarlası hücre durumu.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum CellState {
+    #[default]
+    Hidden,
+    Revealed,
+    Flagged,
+}
+
+/// Mayın Tarlası hücresi.
+#[derive(Clone, Copy, Default)]
+pub struct MineCell {
+    pub state: CellState,
+    pub is_mine: bool,
+    pub adjacent: u8,
+}
+
+/// Mayın Tarlası oyunu.
+///
+/// Üç zorluk seviyesi vardır: 9x9/10, 12x12/25 ve 16x16/50. İlk tıklanan
+/// hücre ve çevresindeki 3x3 alan her zaman mayınsızdır.
+#[derive(Clone, Copy)]
+pub struct Minesweeper {
+    pub level: usize,
+    pub rows: usize,
+    pub cols: usize,
+    pub mine_count: usize,
+    pub cells: [MineCell; MINES_MAX_CELLS],
+    pub revealed: usize,
+    pub flagged: usize,
+    pub state: GameState,
+    pub first_click: bool,
+    pub seed: u64,
+}
+
+impl Minesweeper {
+    pub fn new() -> Self {
+        Self {
+            level: 0,
+            rows: 9,
+            cols: 9,
+            mine_count: 10,
+            cells: [MineCell::default(); MINES_MAX_CELLS],
+            revealed: 0,
+            flagged: 0,
+            state: GameState::Playing,
+            first_click: true,
+            seed: 0x5EED_1234_ABCD_EF01,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.cells = [MineCell::default(); MINES_MAX_CELLS];
+        self.revealed = 0;
+        self.flagged = 0;
+        self.state = GameState::Playing;
+        self.first_click = true;
+        // Her yeni oyunda farklı bir mayın yerleşimi üret.
+        self.seed = self
+            .seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+    }
+
+    pub fn set_level(&mut self, level: usize) {
+        self.level = level.min(2);
+        let (rows, cols, mines) = match self.level {
+            1 => (12, 12, 25),
+            2 => (16, 16, 50),
+            _ => (9, 9, 10),
+        };
+        self.rows = rows;
+        self.cols = cols;
+        self.mine_count = mines;
+        self.reset();
+    }
+
+    #[inline]
+    pub fn cell_count(&self) -> usize {
+        self.rows * self.cols
+    }
+
+    fn rng_next(&mut self) -> u64 {
+        self.seed = self
+            .seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.seed
+    }
+
+    /// Mayınları yerleştirir; ilk tıklanan hücre ve 3x3 çevresi güvenlidir.
+    fn place_mines(&mut self, safe_r: usize, safe_c: usize) {
+        let mut candidates: Vec<usize> = Vec::with_capacity(self.cell_count());
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                let near_safe = r.abs_diff(safe_r) <= 1 && c.abs_diff(safe_c) <= 1;
+                if !near_safe {
+                    candidates.push(r * self.cols + c);
+                }
+            }
+        }
+        let count = self.mine_count.min(candidates.len());
+        self.mine_count = count;
+        for i in 0..count {
+            let remaining = candidates.len() - i;
+            let pick = i + (self.rng_next() as usize) % remaining;
+            candidates.swap(i, pick);
+            let idx = candidates[i];
+            self.cells[idx].is_mine = true;
+        }
+        self.recount_adjacent();
+    }
+
+    fn recount_adjacent(&mut self) {
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                let idx = r * self.cols + c;
+                if self.cells[idx].is_mine {
+                    continue;
+                }
+                let mut cnt = 0u8;
+                for dr in -1isize..=1 {
+                    for dc in -1isize..=1 {
+                        if dr == 0 && dc == 0 {
+                            continue;
+                        }
+                        let nr = r as isize + dr;
+                        let nc = c as isize + dc;
+                        if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize
+                        {
+                            continue;
+                        }
+                        let nidx = nr as usize * self.cols + nc as usize;
+                        if self.cells[nidx].is_mine {
+                            cnt += 1;
+                        }
+                    }
+                }
+                self.cells[idx].adjacent = cnt;
+            }
+        }
+    }
+
+    /// Hücreyi açar. Mayına basarsa kaybeder, boşsa komşuları da açar.
+    /// En az bir yeni hücre açıldıysa `true` döner.
+    pub fn reveal(&mut self, r: usize, c: usize) -> bool {
+        if self.state != GameState::Playing || r >= self.rows || c >= self.cols {
+            return false;
+        }
+        let start = r * self.cols + c;
+        if self.cells[start].state != CellState::Hidden {
+            return false;
+        }
+        if self.first_click {
+            self.first_click = false;
+            self.place_mines(r, c);
+        }
+        if self.cells[start].is_mine {
+            self.cells[start].state = CellState::Revealed;
+            self.state = GameState::Lost;
+            // Tüm mayınları göster.
+            for i in 0..self.cell_count() {
+                if self.cells[i].is_mine {
+                    self.cells[i].state = CellState::Revealed;
+                }
+            }
+            return true;
+        }
+        // Boş bölgeleri yinelemesiz taşkın doldurma ile aç.
+        let mut stack: Vec<usize> = Vec::new();
+        stack.push(start);
+        while let Some(idx) = stack.pop() {
+            if self.cells[idx].state != CellState::Hidden {
+                continue;
+            }
+            self.cells[idx].state = CellState::Revealed;
+            self.revealed += 1;
+            if self.cells[idx].adjacent != 0 {
+                continue;
+            }
+            let rr = idx / self.cols;
+            let cc = idx % self.cols;
+            for dr in -1isize..=1 {
+                for dc in -1isize..=1 {
+                    if dr == 0 && dc == 0 {
+                        continue;
+                    }
+                    let nr = rr as isize + dr;
+                    let nc = cc as isize + dc;
+                    if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize {
+                        continue;
+                    }
+                    let nidx = nr as usize * self.cols + nc as usize;
+                    if self.cells[nidx].state == CellState::Hidden {
+                        stack.push(nidx);
+                    }
+                }
+            }
+        }
+        self.check_win();
+        true
+    }
+
+    /// Açılmış bir sayının çevresindeki bayrak sayısı doğruysa komşularını açar.
+    pub fn chord(&mut self, r: usize, c: usize) -> bool {
+        if self.state != GameState::Playing || r >= self.rows || c >= self.cols {
+            return false;
+        }
+        let idx = r * self.cols + c;
+        let cell = self.cells[idx];
+        if cell.state != CellState::Revealed || cell.adjacent == 0 {
+            return false;
+        }
+        let mut flags = 0u8;
+        for dr in -1isize..=1 {
+            for dc in -1isize..=1 {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let nr = r as isize + dr;
+                let nc = c as isize + dc;
+                if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize {
+                    continue;
+                }
+                let nidx = nr as usize * self.cols + nc as usize;
+                if self.cells[nidx].state == CellState::Flagged {
+                    flags += 1;
+                }
+            }
+        }
+        if flags != cell.adjacent {
+            return false;
+        }
+        let mut opened = false;
+        for dr in -1isize..=1 {
+            for dc in -1isize..=1 {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let nr = r as isize + dr;
+                let nc = c as isize + dc;
+                if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize {
+                    continue;
+                }
+                let nidx = nr as usize * self.cols + nc as usize;
+                if self.cells[nidx].state == CellState::Hidden
+                    && self.reveal(nr as usize, nc as usize)
+                {
+                    opened = true;
+                }
+                if self.state != GameState::Playing {
+                    return opened;
+                }
+            }
+        }
+        opened
+    }
+
+    /// Bayrağı açar/kaldırır. Durum değiştiyse `true` döner.
+    pub fn toggle_flag(&mut self, r: usize, c: usize) -> bool {
+        if self.state != GameState::Playing || r >= self.rows || c >= self.cols {
+            return false;
+        }
+        let idx = r * self.cols + c;
+        match self.cells[idx].state {
+            CellState::Hidden => {
+                self.cells[idx].state = CellState::Flagged;
+                self.flagged += 1;
+                true
+            }
+            CellState::Flagged => {
+                self.cells[idx].state = CellState::Hidden;
+                self.flagged = self.flagged.saturating_sub(1);
+                true
+            }
+            CellState::Revealed => false,
+        }
+    }
+
+    fn check_win(&mut self) {
+        if self.state != GameState::Playing {
+            return;
+        }
+        let safe_cells = self.cell_count().saturating_sub(self.mine_count);
+        if self.revealed >= safe_cells {
+            self.state = GameState::Won;
+            // Kazanınca kalan mayınları otomatik bayrakla.
+            for i in 0..self.cell_count() {
+                if self.cells[i].is_mine && self.cells[i].state == CellState::Hidden {
+                    self.cells[i].state = CellState::Flagged;
+                }
+            }
+            self.flagged = self.mine_count;
+        }
+    }
+}
+
+impl Default for Minesweeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Satranç (Chess)
+// ---------------------------------------------------------------------------
+
+pub const CHESS_TILE: usize = 8;
+pub const CHESS_SQUARES: usize = CHESS_TILE * CHESS_TILE;
+
+/// Satranç taşı türleri.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum PieceKind {
+    #[default]
+    Pawn,
+    Rook,
+    Knight,
+    Bishop,
+    Queen,
+    King,
+}
+
+/// Satranç rengi.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum ChessSide {
+    #[default]
+    White,
+    Black,
+}
+
+impl ChessSide {
+    #[inline]
+    pub fn opposite(self) -> Self {
+        match self {
+            ChessSide::White => ChessSide::Black,
+            ChessSide::Black => ChessSide::White,
+        }
+    }
+}
+
+/// Satranç taşı.
+#[derive(Clone, Copy, Default)]
+pub struct ChessPiece {
+    pub kind: PieceKind,
+    pub side: ChessSide,
+    /// Şah/kale için rok hakkı; piyon terfisinde de `true` olur.
+    pub has_moved: bool,
+}
+
+/// Satranç hamlesi.
+#[derive(Clone, Copy)]
+pub struct ChessMove {
+    pub from: usize,
+    pub to: usize,
+    pub promotion: Option<PieceKind>,
+}
+
+/// Satranç oyununun sonucu.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum ChessStatus {
+    #[default]
+    Playing,
+    /// Şah mat; kazanan taraf.
+    Checkmate(ChessSide),
+    /// Pat (hamle yok ama şah yok): berabere.
+    Stalemate,
+    /// 50 hamle kuralı veya yetersiz materyal: berabere.
+    Draw,
+}
+
+/// Satranç tahtası (8x8).
+#[derive(Clone, Copy)]
+pub struct ChessBoard {
+    pub cells: [[Option<ChessPiece>; CHESS_TILE]; CHESS_TILE],
+    pub side_to_move: ChessSide,
+    pub status: ChessStatus,
+    pub halfmove_clock: u32,
+    pub fullmove_number: u32,
+    /// Piyon iki kare ilerlediğinde arkasında bıraktığı "geçiş" karesi.
+    pub en_passant: Option<usize>,
+}
+
+impl ChessBoard {
+    pub fn new() -> Self {
+        let mut cells = [[None; CHESS_TILE]; CHESS_TILE];
+        let back_rank = [
+            PieceKind::Rook,
+            PieceKind::Knight,
+            PieceKind::Bishop,
+            PieceKind::Queen,
+            PieceKind::King,
+            PieceKind::Bishop,
+            PieceKind::Knight,
+            PieceKind::Rook,
+        ];
+        for (c, kind) in back_rank.iter().enumerate() {
+            cells[0][c] = Some(ChessPiece {
+                kind: *kind,
+                side: ChessSide::Black,
+                has_moved: false,
+            });
+            cells[7][c] = Some(ChessPiece {
+                kind: *kind,
+                side: ChessSide::White,
+                has_moved: false,
+            });
+        }
+        for c in 0..CHESS_TILE {
+            cells[1][c] = Some(ChessPiece {
+                kind: PieceKind::Pawn,
+                side: ChessSide::Black,
+                has_moved: false,
+            });
+            cells[6][c] = Some(ChessPiece {
+                kind: PieceKind::Pawn,
+                side: ChessSide::White,
+                has_moved: false,
+            });
+        }
+        Self {
+            cells,
+            side_to_move: ChessSide::White,
+            status: ChessStatus::Playing,
+            halfmove_clock: 0,
+            fullmove_number: 1,
+            en_passant: None,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    #[inline]
+    fn in_bounds(r: isize, c: isize) -> bool {
+        (0..CHESS_TILE as isize).contains(&r) && (0..CHESS_TILE as isize).contains(&c)
+    }
+
+    #[inline]
+    fn square(r: usize, c: usize) -> usize {
+        r * CHESS_TILE + c
+    }
+
+    /// Karedeki taşın konumu (satır, sütun).
+    #[inline]
+    pub fn coords(sq: usize) -> (usize, usize) {
+        (sq / CHESS_TILE, sq % CHESS_TILE)
+    }
+
+    fn push_move(out: &mut Vec<ChessMove>, from: usize, to: usize) {
+        out.push(ChessMove {
+            from,
+            to,
+            promotion: None,
+        });
+    }
+
+    /// Piyon hamlesi: son satıra ulaşırsa dört terfi seçeneği üretir.
+    fn push_pawn_move(out: &mut Vec<ChessMove>, from: usize, to: usize) {
+        let row = to / CHESS_TILE;
+        if row == 0 || row == CHESS_TILE - 1 {
+            for kind in [
+                PieceKind::Queen,
+                PieceKind::Rook,
+                PieceKind::Bishop,
+                PieceKind::Knight,
+            ] {
+                out.push(ChessMove {
+                    from,
+                    to,
+                    promotion: Some(kind),
+                });
+            }
+        } else {
+            Self::push_move(out, from, to);
+        }
+    }
+
+    fn slide(
+        &self,
+        from_r: usize,
+        from_c: usize,
+        side: ChessSide,
+        dirs: &[(isize, isize)],
+        out: &mut Vec<ChessMove>,
+    ) {
+        let from = Self::square(from_r, from_c);
+        for &(dr, dc) in dirs {
+            let mut r = from_r as isize + dr;
+            let mut c = from_c as isize + dc;
+            while Self::in_bounds(r, c) {
+                match self.cells[r as usize][c as usize] {
+                    None => Self::push_move(out, from, Self::square(r as usize, c as usize)),
+                    Some(p) => {
+                        if p.side != side {
+                            Self::push_move(out, from, Self::square(r as usize, c as usize));
+                        }
+                        break;
+                    }
+                }
+                r += dr;
+                c += dc;
+            }
+        }
+    }
+
+    fn step(
+        &self,
+        from_r: usize,
+        from_c: usize,
+        side: ChessSide,
+        dirs: &[(isize, isize)],
+        out: &mut Vec<ChessMove>,
+    ) {
+        let from = Self::square(from_r, from_c);
+        for &(dr, dc) in dirs {
+            let r = from_r as isize + dr;
+            let c = from_c as isize + dc;
+            if !Self::in_bounds(r, c) {
+                continue;
+            }
+            match self.cells[r as usize][c as usize] {
+                None => Self::push_move(out, from, Self::square(r as usize, c as usize)),
+                Some(p) if p.side != side => {
+                    Self::push_move(out, from, Self::square(r as usize, c as usize))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Taşın kurallara göre (şah güvenliği hariç) hamlelerini üretir.
+    fn generate_pseudo(&self, r: usize, c: usize, out: &mut Vec<ChessMove>) {
+        let piece = match self.cells[r][c] {
+            Some(p) => p,
+            None => return,
+        };
+        let side = piece.side;
+        let from = Self::square(r, c);
+        match piece.kind {
+            PieceKind::Pawn => {
+                let dir = if side == ChessSide::White { -1 } else { 1 };
+                let start_row = if side == ChessSide::White { 6 } else { 1 };
+                let nr = r as isize + dir;
+                if Self::in_bounds(nr, c as isize) {
+                    let nr = nr as usize;
+                    if self.cells[nr][c].is_none() {
+                        Self::push_pawn_move(out, from, Self::square(nr, c));
+                        let nr2 = r as isize + 2 * dir;
+                        if r == start_row
+                            && Self::in_bounds(nr2, c as isize)
+                            && self.cells[nr2 as usize][c].is_none()
+                        {
+                            Self::push_move(out, from, Self::square(nr2 as usize, c));
+                        }
+                    }
+                    for dc in [-1isize, 1] {
+                        let nc = c as isize + dc;
+                        if !Self::in_bounds(nr as isize, nc) {
+                            continue;
+                        }
+                        let nc = nc as usize;
+                        match self.cells[nr][nc] {
+                            Some(p) if p.side != side => {
+                                Self::push_pawn_move(out, from, Self::square(nr, nc))
+                            }
+                            None if self.en_passant == Some(Self::square(nr, nc)) => {
+                                Self::push_move(out, from, Self::square(nr, nc))
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            PieceKind::Rook => self.slide(r, c, side, &[(-1, 0), (1, 0), (0, -1), (0, 1)], out),
+            PieceKind::Bishop => self.slide(r, c, side, &[(-1, -1), (-1, 1), (1, -1), (1, 1)], out),
+            PieceKind::Queen => self.slide(
+                r,
+                c,
+                side,
+                &[
+                    (-1, -1),
+                    (-1, 0),
+                    (-1, 1),
+                    (0, -1),
+                    (0, 1),
+                    (1, -1),
+                    (1, 0),
+                    (1, 1),
+                ],
+                out,
+            ),
+            PieceKind::Knight => self.step(
+                r,
+                c,
+                side,
+                &[
+                    (-2, -1),
+                    (-2, 1),
+                    (-1, -2),
+                    (-1, 2),
+                    (1, -2),
+                    (1, 2),
+                    (2, -1),
+                    (2, 1),
+                ],
+                out,
+            ),
+            PieceKind::King => {
+                self.step(
+                    r,
+                    c,
+                    side,
+                    &[
+                        (-1, -1),
+                        (-1, 0),
+                        (-1, 1),
+                        (0, -1),
+                        (0, 1),
+                        (1, -1),
+                        (1, 0),
+                        (1, 1),
+                    ],
+                    out,
+                );
+                self.generate_castles(r, c, piece, out);
+            }
+        }
+    }
+
+    fn rook_can_castle(&self, row: usize, col: usize, side: ChessSide) -> bool {
+        matches!(
+            self.cells[row][col],
+            Some(ChessPiece {
+                kind: PieceKind::Rook,
+                side: rook_side,
+                has_moved: false,
+            }) if rook_side == side
+        )
+    }
+
+    fn generate_castles(&self, r: usize, c: usize, piece: ChessPiece, out: &mut Vec<ChessMove>) {
+        if piece.kind != PieceKind::King || piece.has_moved {
+            return;
+        }
+        let home = if piece.side == ChessSide::White { 7 } else { 0 };
+        if r != home || c != 4 {
+            return;
+        }
+        let enemy = piece.side.opposite();
+        if self.is_square_attacked(home, 4, enemy) {
+            return;
+        }
+        let from = Self::square(home, 4);
+        // Kısa rok: f/g boş, kareler saldırı altında değil.
+        if self.rook_can_castle(home, 7, piece.side)
+            && self.cells[home][5].is_none()
+            && self.cells[home][6].is_none()
+            && !self.is_square_attacked(home, 5, enemy)
+            && !self.is_square_attacked(home, 6, enemy)
+        {
+            Self::push_move(out, from, Self::square(home, 6));
+        }
+        // Uzun rok: b/c/d boş, kareler saldırı altında değil.
+        if self.rook_can_castle(home, 0, piece.side)
+            && self.cells[home][1].is_none()
+            && self.cells[home][2].is_none()
+            && self.cells[home][3].is_none()
+            && !self.is_square_attacked(home, 3, enemy)
+            && !self.is_square_attacked(home, 2, enemy)
+        {
+            Self::push_move(out, from, Self::square(home, 2));
+        }
+    }
+
+    /// Verilen taraf için tüm yasal hamleleri üretir (şah güvenliği dahil).
+    pub fn generate_legal(&self, side: ChessSide, out: &mut Vec<ChessMove>) {
+        out.clear();
+        for r in 0..CHESS_TILE {
+            for c in 0..CHESS_TILE {
+                if self.cells[r][c].is_some_and(|p| p.side == side) {
+                    let mut pseudo: Vec<ChessMove> = Vec::new();
+                    self.generate_pseudo(r, c, &mut pseudo);
+                    for mv in pseudo {
+                        if self.is_legal(&mv) {
+                            out.push(mv);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Belirli bir kareden oynanabilecek yasal hamleler.
+    pub fn legal_from(&self, r: usize, c: usize) -> Vec<ChessMove> {
+        let mut all = Vec::new();
+        self.generate_legal(self.side_to_move, &mut all);
+        all.retain(|m| m.from == Self::square(r, c));
+        all
+    }
+
+    fn is_legal(&self, mv: &ChessMove) -> bool {
+        if mv.from >= CHESS_SQUARES || mv.to >= CHESS_SQUARES {
+            return false;
+        }
+        let mover = self.side_to_move;
+        let mut copy = *self;
+        copy.make_move(mv);
+        !copy.is_in_check(mover)
+    }
+
+    /// Hamleyi kurallara göre uygular ve sırayı değiştirir. Geçersizse `false`.
+    pub fn apply(&mut self, mv: &ChessMove) -> bool {
+        if self.status != ChessStatus::Playing {
+            return false;
+        }
+        let mut legal = Vec::new();
+        self.generate_legal(self.side_to_move, &mut legal);
+        let chosen = legal
+            .iter()
+            .find(|m| {
+                m.from == mv.from
+                    && m.to == mv.to
+                    && match mv.promotion {
+                        Some(kind) => m.promotion == Some(kind),
+                        None => m.promotion.is_none() || m.promotion == Some(PieceKind::Queen),
+                    }
+            })
+            .copied();
+        let Some(chosen) = chosen else {
+            return false;
+        };
+        self.make_move(&chosen);
+        self.refresh_status();
+        true
+    }
+
+    /// Doğrulanmış hamleyi tahtaya uygular (durum güncellemesi yapmaz).
+    fn make_move(&mut self, mv: &ChessMove) {
+        let (fr, fc) = Self::coords(mv.from);
+        let (tr, tc) = Self::coords(mv.to);
+        let Some(piece) = self.cells[fr][fc] else {
+            return;
+        };
+        let is_pawn = piece.kind == PieceKind::Pawn;
+        let mut captured = self.cells[tr][tc].is_some();
+        let is_castle = piece.kind == PieceKind::King && tc.abs_diff(fc) == 2;
+        self.cells[fr][fc] = None;
+        if is_castle {
+            let (rook_from, rook_to) = if tc > fc { (7, 5) } else { (0, 3) };
+            if let Some(mut rook) = self.cells[fr][rook_from].take() {
+                rook.has_moved = true;
+                self.cells[fr][rook_to] = Some(rook);
+            }
+        }
+        if is_pawn && tc != fc && !captured {
+            // Geçerken alma: yenilen piyon hedef sütunun başlangıç satırındadır.
+            if self.cells[fr][tc].is_some() {
+                captured = true;
+            }
+            self.cells[fr][tc] = None;
+        }
+        let new_kind = if is_pawn && (tr == 0 || tr == CHESS_TILE - 1) {
+            mv.promotion.unwrap_or(PieceKind::Queen)
+        } else {
+            piece.kind
+        };
+        self.cells[tr][tc] = Some(ChessPiece {
+            kind: new_kind,
+            side: piece.side,
+            has_moved: true,
+        });
+        self.en_passant = if is_pawn && fr.abs_diff(tr) == 2 {
+            Some(Self::square((fr + tr) / 2, fc))
+        } else {
+            None
+        };
+        if is_pawn || captured {
+            self.halfmove_clock = 0;
+        } else {
+            self.halfmove_clock = self.halfmove_clock.saturating_add(1);
+        }
+        if self.side_to_move == ChessSide::Black {
+            self.fullmove_number = self.fullmove_number.saturating_add(1);
+        }
+        self.side_to_move = self.side_to_move.opposite();
+    }
+
+    /// Hamleden sonra şah mat / pat / beraberlik durumunu tazeler.
+    pub fn refresh_status(&mut self) {
+        if self.halfmove_clock >= 100 || self.insufficient_material() {
+            self.status = ChessStatus::Draw;
+            return;
+        }
+        let side = self.side_to_move;
+        let mut legal = Vec::new();
+        self.generate_legal(side, &mut legal);
+        self.status = if !legal.is_empty() {
+            ChessStatus::Playing
+        } else if self.is_in_check(side) {
+            ChessStatus::Checkmate(side.opposite())
+        } else {
+            ChessStatus::Stalemate
+        };
+    }
+
+    pub fn king_square(&self, side: ChessSide) -> Option<(usize, usize)> {
+        for (r, row) in self.cells.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                if let Some(p) = *cell {
+                    if p.kind == PieceKind::King && p.side == side {
+                        return Some((r, c));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// `(r, c)` karesi `by` tarafından saldırı altında mı?
+    pub fn is_square_attacked(&self, r: usize, c: usize, by: ChessSide) -> bool {
+        // Piyonlar.
+        let pawn_row = r as isize + if by == ChessSide::White { 1 } else { -1 };
+        for dc in [-1isize, 1] {
+            let pc = c as isize + dc;
+            if Self::in_bounds(pawn_row, pc) {
+                if let Some(p) = self.cells[pawn_row as usize][pc as usize] {
+                    if p.kind == PieceKind::Pawn && p.side == by {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Atlar.
+        for (dr, dc) in [
+            (-2isize, -1isize),
+            (-2, 1),
+            (-1, -2),
+            (-1, 2),
+            (1, -2),
+            (1, 2),
+            (2, -1),
+            (2, 1),
+        ] {
+            let nr = r as isize + dr;
+            let nc = c as isize + dc;
+            if Self::in_bounds(nr, nc) {
+                if let Some(p) = self.cells[nr as usize][nc as usize] {
+                    if p.kind == PieceKind::Knight && p.side == by {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Şah.
+        for dr in -1isize..=1 {
+            for dc in -1isize..=1 {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let nr = r as isize + dr;
+                let nc = c as isize + dc;
+                if Self::in_bounds(nr, nc) {
+                    if let Some(p) = self.cells[nr as usize][nc as usize] {
+                        if p.kind == PieceKind::King && p.side == by {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        // Kale / vezir (yatay-dikey).
+        for (dr, dc) in [(-1isize, 0isize), (1, 0), (0, -1), (0, 1)] {
+            let mut nr = r as isize + dr;
+            let mut nc = c as isize + dc;
+            while Self::in_bounds(nr, nc) {
+                if let Some(p) = self.cells[nr as usize][nc as usize] {
+                    if p.side == by && (p.kind == PieceKind::Rook || p.kind == PieceKind::Queen) {
+                        return true;
+                    }
+                    break;
+                }
+                nr += dr;
+                nc += dc;
+            }
+        }
+        // Fil / vezir (çapraz).
+        for (dr, dc) in [(-1isize, -1isize), (-1, 1), (1, -1), (1, 1)] {
+            let mut nr = r as isize + dr;
+            let mut nc = c as isize + dc;
+            while Self::in_bounds(nr, nc) {
+                if let Some(p) = self.cells[nr as usize][nc as usize] {
+                    if p.side == by && (p.kind == PieceKind::Bishop || p.kind == PieceKind::Queen) {
+                        return true;
+                    }
+                    break;
+                }
+                nr += dr;
+                nc += dc;
+            }
+        }
+        false
+    }
+
+    /// Belirli tarafın şahı tehdit altında mı?
+    pub fn is_in_check(&self, side: ChessSide) -> bool {
+        match self.king_square(side) {
+            Some((r, c)) => self.is_square_attacked(r, c, side.opposite()),
+            None => false,
+        }
+    }
+
+    /// Yetersiz materyal (K-K, K+tek hafif taş, aynı renk karede iki fil).
+    pub fn insufficient_material(&self) -> bool {
+        let mut minors = 0usize;
+        let mut light_bishops = 0usize;
+        let mut dark_bishops = 0usize;
+        for (r, row) in self.cells.iter().enumerate().take(CHESS_TILE) {
+            for (c, cell) in row.iter().enumerate().take(CHESS_TILE) {
+                let Some(p) = *cell else { continue };
+                match p.kind {
+                    PieceKind::Pawn | PieceKind::Rook | PieceKind::Queen => return false,
+                    PieceKind::Bishop => {
+                        minors += 1;
+                        if (r + c) % 2 == 0 {
+                            light_bishops += 1;
+                        } else {
+                            dark_bishops += 1;
+                        }
+                    }
+                    PieceKind::Knight => minors += 1,
+                    PieceKind::King => {}
+                }
+            }
+        }
+        if minors <= 1 {
+            return true;
+        }
+        minors == 2 && (light_bishops == 2 || dark_bishops == 2)
+    }
+}
+
+impl Default for ChessBoard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Kayan blok bulmacası (Sliding Puzzle)
 // ---------------------------------------------------------------------------
 
@@ -899,5 +1867,213 @@ mod tests {
         assert!(bench_checkers_ai(2, 1) >= 1);
         assert!(bench_puzzle_work(50, 7) > 0);
         assert_eq!(shade_mix(0x000000, 0xFFFFFF, 256), 0x00FF_FFFF);
+    }
+
+    // ------------------------------------------------------------------
+    // Mayın Tarlası testleri
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn mines_first_click_opens_safe_area() {
+        let mut mines = Minesweeper::new();
+        assert!(mines.reveal(4, 4));
+        for r in 3..=5 {
+            for c in 3..=5 {
+                assert!(
+                    !mines.cells[r * mines.cols + c].is_mine,
+                    "ilk tıklama çevresinde mayın olmamalı"
+                );
+            }
+        }
+        assert_eq!(mines.cells[4 * mines.cols + 4].adjacent, 0);
+        assert!(mines.revealed > 1);
+    }
+
+    #[test]
+    fn mines_levels_change_board_size() {
+        let mut mines = Minesweeper::new();
+        mines.set_level(2);
+        assert_eq!((mines.rows, mines.cols, mines.mine_count), (16, 16, 50));
+        mines.set_level(1);
+        assert_eq!((mines.rows, mines.cols, mines.mine_count), (12, 12, 25));
+        mines.set_level(0);
+        assert_eq!((mines.rows, mines.cols, mines.mine_count), (9, 9, 10));
+    }
+
+    #[test]
+    fn mines_chord_reveals_when_flags_match() {
+        let mut mines = Minesweeper::new();
+        mines.rows = 3;
+        mines.cols = 3;
+        mines.mine_count = 1;
+        mines.first_click = false;
+        mines.cells[0].is_mine = true;
+        mines.recount_adjacent();
+        mines.cells[4].state = CellState::Revealed;
+        mines.revealed = 1;
+        mines.cells[0].state = CellState::Flagged;
+        mines.flagged = 1;
+        assert!(mines.chord(1, 1));
+        assert_eq!(mines.state, GameState::Won);
+        assert_eq!(mines.flagged, 1);
+    }
+
+    #[test]
+    fn mines_flag_toggles_only_hidden_cells() {
+        let mut mines = Minesweeper::new();
+        assert!(mines.toggle_flag(0, 0));
+        assert_eq!(mines.cells[0].state, CellState::Flagged);
+        assert!(!mines.reveal(0, 0));
+        assert!(mines.toggle_flag(0, 0));
+        assert_eq!(mines.cells[0].state, CellState::Hidden);
+        assert!(mines.reveal(0, 0));
+        assert!(!mines.toggle_flag(0, 0));
+    }
+
+    // ------------------------------------------------------------------
+    // Satranç testleri
+    // ------------------------------------------------------------------
+
+    fn empty_chess() -> ChessBoard {
+        let mut board = ChessBoard::new();
+        for row in board.cells.iter_mut() {
+            for cell in row.iter_mut() {
+                *cell = None;
+            }
+        }
+        board
+    }
+
+    fn put(board: &mut ChessBoard, r: usize, c: usize, kind: PieceKind, side: ChessSide) {
+        board.cells[r][c] = Some(ChessPiece {
+            kind,
+            side,
+            has_moved: false,
+        });
+    }
+
+    fn has_move(board: &ChessBoard, from: usize, to: usize) -> bool {
+        let mut list = Vec::new();
+        board.generate_legal(board.side_to_move, &mut list);
+        list.iter().any(|m| m.from == from && m.to == to)
+    }
+
+    #[test]
+    fn chess_castling_moves_rook() {
+        let mut board = empty_chess();
+        put(&mut board, 7, 4, PieceKind::King, ChessSide::White);
+        put(&mut board, 7, 7, PieceKind::Rook, ChessSide::White);
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        board.side_to_move = ChessSide::White;
+        assert!(has_move(&board, 7 * 8 + 4, 7 * 8 + 6));
+        let mv = ChessMove {
+            from: 7 * 8 + 4,
+            to: 7 * 8 + 6,
+            promotion: None,
+        };
+        assert!(board.apply(&mv));
+        assert_eq!(board.cells[7][6].map(|p| p.kind), Some(PieceKind::King));
+        assert_eq!(board.cells[7][5].map(|p| p.kind), Some(PieceKind::Rook));
+    }
+
+    #[test]
+    fn chess_cannot_castle_through_check() {
+        let mut board = empty_chess();
+        put(&mut board, 7, 4, PieceKind::King, ChessSide::White);
+        put(&mut board, 7, 7, PieceKind::Rook, ChessSide::White);
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        put(&mut board, 0, 5, PieceKind::Rook, ChessSide::Black);
+        board.side_to_move = ChessSide::White;
+        assert!(!has_move(&board, 7 * 8 + 4, 7 * 8 + 6));
+    }
+
+    #[test]
+    fn chess_en_passant_captures_pawn() {
+        let mut board = empty_chess();
+        put(&mut board, 7, 4, PieceKind::King, ChessSide::White);
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        put(&mut board, 3, 4, PieceKind::Pawn, ChessSide::White);
+        put(&mut board, 3, 3, PieceKind::Pawn, ChessSide::Black);
+        board.side_to_move = ChessSide::White;
+        board.en_passant = Some(2 * 8 + 3);
+        let mv = ChessMove {
+            from: 3 * 8 + 4,
+            to: 2 * 8 + 3,
+            promotion: None,
+        };
+        assert!(has_move(&board, mv.from, mv.to));
+        assert!(board.apply(&mv));
+        assert!(
+            board.cells[3][3].is_none(),
+            "geçerken alınan piyon silinmeli"
+        );
+        assert_eq!(board.cells[2][3].map(|p| p.kind), Some(PieceKind::Pawn));
+    }
+
+    #[test]
+    fn chess_promotion_offers_all_pieces() {
+        let mut board = empty_chess();
+        put(&mut board, 7, 4, PieceKind::King, ChessSide::White);
+        put(&mut board, 0, 7, PieceKind::King, ChessSide::Black);
+        put(&mut board, 1, 0, PieceKind::Pawn, ChessSide::White);
+        board.side_to_move = ChessSide::White;
+        let mut list = Vec::new();
+        board.generate_legal(ChessSide::White, &mut list);
+        let promotions = list.iter().filter(|m| m.from == 8 && m.to == 0).count();
+        assert_eq!(promotions, 4);
+        let mv = ChessMove {
+            from: 8,
+            to: 0,
+            promotion: Some(PieceKind::Knight),
+        };
+        assert!(board.apply(&mv));
+        assert_eq!(board.cells[0][0].map(|p| p.kind), Some(PieceKind::Knight));
+    }
+
+    #[test]
+    fn chess_pinned_piece_cannot_expose_king() {
+        let mut board = empty_chess();
+        put(&mut board, 7, 4, PieceKind::King, ChessSide::White);
+        put(&mut board, 6, 4, PieceKind::Rook, ChessSide::White);
+        put(&mut board, 0, 4, PieceKind::Rook, ChessSide::Black);
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        board.side_to_move = ChessSide::White;
+        // Kale e-hattından ayrılırsa şah açıkta kalır.
+        assert!(!has_move(&board, 6 * 8 + 4, 6 * 8 + 3));
+        // Hat üzerinde kalmak yasaldır.
+        assert!(has_move(&board, 6 * 8 + 4, 5 * 8 + 4));
+    }
+
+    #[test]
+    fn chess_checkmate_is_detected() {
+        let mut board = empty_chess();
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        put(&mut board, 1, 1, PieceKind::Queen, ChessSide::White);
+        put(&mut board, 2, 2, PieceKind::King, ChessSide::White);
+        board.side_to_move = ChessSide::Black;
+        board.refresh_status();
+        assert_eq!(board.status, ChessStatus::Checkmate(ChessSide::White));
+    }
+
+    #[test]
+    fn chess_stalemate_is_detected() {
+        let mut board = empty_chess();
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        put(&mut board, 2, 1, PieceKind::Queen, ChessSide::White);
+        put(&mut board, 2, 2, PieceKind::King, ChessSide::White);
+        board.side_to_move = ChessSide::Black;
+        board.refresh_status();
+        assert_eq!(board.status, ChessStatus::Stalemate);
+    }
+
+    #[test]
+    fn chess_insufficient_material_is_draw() {
+        let mut board = empty_chess();
+        put(&mut board, 7, 4, PieceKind::King, ChessSide::White);
+        put(&mut board, 0, 0, PieceKind::King, ChessSide::Black);
+        put(&mut board, 5, 5, PieceKind::Bishop, ChessSide::White);
+        board.side_to_move = ChessSide::Black;
+        board.refresh_status();
+        assert_eq!(board.status, ChessStatus::Draw);
     }
 }

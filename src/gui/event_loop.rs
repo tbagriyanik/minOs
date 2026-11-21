@@ -1182,6 +1182,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     if my < win.y + gui::scaled_titlebar_h() {
                         hit_window = Some((idx, gui::ContextKind::Window));
+                    } else if idx == 15 {
+                        // Oyunlar: Mayın Tarlası'nda sağ tık bayrak koyar.
+                        compositor.focus_window(idx);
+                        let (ax, ay, aw, ah) = app_layout_rect(15, &win);
+                        if fps_game_app.right_click(
+                            mx.saturating_sub(ax),
+                            my.saturating_sub(ay),
+                            aw,
+                            ah,
+                        ) {
+                            compositor.is_context_menu_open = false;
+                            state.force_render = true;
+                            break;
+                        }
+                        hit_window = Some((idx, gui::ContextKind::Window));
                     } else if idx == 10 {
                         // Terminal / CMD: Sağ tık seçimi panoya kopyalar veya panoyu yapıştırır
                         compositor.focus_window(idx);
@@ -1249,6 +1264,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         }
 
                         compositor.focus_window(idx);
+                    } else if win.app_id == 9 {
+                        // Paint: tuval üzerinde sağ tık silgi darbesi başlatır;
+                        // bağlam menüsü açılmaz. Şerit üzerinde sağ tık
+                        // genel pencere menüsüne düşer.
+                        compositor.focus_window(idx);
+                        let (ax, ay, aw, ah) = app_layout_rect(9, &win);
+                        let (cx, cy, cw, ch) = apps::paint::PaintApp::canvas_rect(aw, ah);
+                        let in_canvas = mx >= ax + cx
+                            && mx < ax + cx + cw
+                            && my >= ay + cy
+                            && my < ay + cy + ch;
+                        if in_canvas {
+                            // hit_window None kalır → menü açılmaz.
+                        } else {
+                            hit_window = Some((idx, gui::ContextKind::Window));
+                        }
                     } else {
                         compositor.focus_window(idx);
 
@@ -4825,16 +4856,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 let tool_circle_rect = (wx + r.0, wy + r.1, r.2, r.3);
                                 let r = apps::paint::PaintApp::picker_btn_rect();
                                 let picker_btn_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::brush_tool_rect();
+                                let brush_tool_rect = (wx + r.0, wy + r.1, r.2, r.3);
 
                                 let r = apps::paint::PaintApp::eraser_rect();
 
                                 let eraser_rect = (wx + r.0, wy + r.1, r.2, r.3);
 
-                                let r = apps::paint::PaintApp::brush_minus_rect();
+                                let r = apps::paint::PaintApp::brush_minus_rect(ww);
 
                                 let brush_minus_rect = (wx + r.0, wy + r.1, r.2, r.3);
 
-                                let r = apps::paint::PaintApp::brush_plus_rect();
+                                let r = apps::paint::PaintApp::brush_plus_rect(ww);
 
                                 let brush_plus_rect = (wx + r.0, wy + r.1, r.2, r.3);
 
@@ -4919,7 +4952,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                     }
                                                 }
 
-                                                _ => {
+                                                3 => {
                                                     // Farkli Kaydet: dosya adini turetip yeni dosyaya yaz.
 
                                                     let name = {
@@ -4957,6 +4990,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                             .refresh_from_vfs(&fs_mgr.vfs);
                                                     }
                                                 }
+
+                                                4 => {
+                                                    paint_apps[idx].as_mut().unwrap().undo();
+                                                }
+
+                                                5 => {
+                                                    paint_apps[idx].as_mut().unwrap().redo();
+                                                }
+
+                                                _ => {
+                                                    paint_apps[idx].as_mut().unwrap().clear();
+                                                }
                                             }
 
                                             menu_handled = true;
@@ -4988,6 +5033,29 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
                                     hit
                                 };
+
+                                // Renk seçici: hücre ve popup isabeti önceden
+                                // hesaplanır. Popup yalnızca tuval alanını
+                                // örttüğü için seçici açıkken araç çubuğu
+                                // düğmeleri normal şekilde çalışmaya devam
+                                // eder; tuvale tıklamak seçiciyi kapatır.
+                                let mut picker_cell_hit = None;
+                                let mut picker_inside_popup = false;
+                                if paint_apps[idx].as_ref().is_some_and(|p| p.picker_open) {
+                                    let pr = apps::paint::PaintApp::picker_rect();
+                                    picker_inside_popup =
+                                        gui::in_rect(mx, my, (wx + pr.0, wy + pr.1, pr.2, pr.3));
+                                    if picker_inside_popup {
+                                        for i in 0..apps::paint::PICKER_COLORS.len() {
+                                            let r = apps::paint::PaintApp::picker_cell_rect(i);
+                                            if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3))
+                                            {
+                                                picker_cell_hit = Some(i);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 if menu_handled {
 
@@ -5081,32 +5149,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                     paint_apps[idx].as_mut().unwrap().picker_open =
                                         !paint_apps[idx].as_mut().unwrap().picker_open;
-                                } else if paint_apps[idx].as_ref().is_some_and(|p| p.picker_open) {
-                                    // renk secici
+                                } else if gui::in_rect(mx, my, brush_tool_rect) {
                                     if paint_apps[idx].is_none() {
                                         paint_apps[idx] = Some(apps::paint::PaintApp::new());
                                     }
-                                    let mut picked = None;
-                                    for i in 0..apps::paint::PICKER_COLORS.len() {
-                                        let r = apps::paint::PaintApp::picker_cell_rect(i);
-                                        if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3)) {
-                                            picked = Some(i);
-                                            break;
-                                        }
-                                    }
-                                    if let Some(i) = picked {
-                                        let p = paint_apps[idx].as_mut().unwrap();
-                                        p.color = apps::paint::PICKER_COLORS[i];
-                                        p.tool = apps::paint::PaintTool::Brush;
-                                        p.picker_open = false;
-                                    } else {
-                                        // popup disina tiklandiysa kapat
-                                        let pr = apps::paint::PaintApp::picker_rect();
-                                        if !gui::in_rect(mx, my, (wx + pr.0, wy + pr.1, pr.2, pr.3))
-                                        {
-                                            paint_apps[idx].as_mut().unwrap().picker_open = false;
-                                        }
-                                    }
+
+                                    let p = paint_apps[idx].as_mut().unwrap();
+                                    p.tool = apps::paint::PaintTool::Brush;
+                                    p.picker_open = false;
                                 } else if gui::in_rect(mx, my, eraser_rect) {
                                     if paint_apps[idx].is_none() {
                                         paint_apps[idx] = Some(apps::paint::PaintApp::new());
@@ -5139,6 +5189,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
 
                                     paint_apps[idx].as_mut().unwrap().adjust_zoom(1);
+                                } else if let Some(i) = picker_cell_hit {
+                                    // Renk seçici hücresi.
+                                    if paint_apps[idx].is_none() {
+                                        paint_apps[idx] = Some(apps::paint::PaintApp::new());
+                                    }
+                                    let p = paint_apps[idx].as_mut().unwrap();
+                                    p.color = apps::paint::PICKER_COLORS[i];
+                                    p.tool = apps::paint::PaintTool::Brush;
+                                    p.picker_open = false;
+                                } else if picker_inside_popup {
+                                    // Popup içindeki boşluğa tıklama: kapat.
+                                    if paint_apps[idx].is_none() {
+                                        paint_apps[idx] = Some(apps::paint::PaintApp::new());
+                                    }
+                                    paint_apps[idx].as_mut().unwrap().picker_open = false;
                                 } else if swatch_hit {
                                     if paint_apps[idx].is_none() {
                                         paint_apps[idx] = Some(apps::paint::PaintApp::new());
@@ -5164,6 +5229,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
 
                                     let paint = paint_apps[idx].as_mut().unwrap();
+
+                                    // Tuvale tıklamak açık renk seçiciyi kapatır.
+                                    paint.picker_open = false;
 
                                     if let Some((cxp, cyp)) =
                                         paint.to_canvas(ww, wh, mx - wx, my - wy)
@@ -6922,6 +6990,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             gui::ui_text("Sayfa kaydediliyor...", "Saving page..."),
                             || browser_app.save_current_page(&mut fs_mgr.vfs),
                         )
+                    } else if app_is_focused(&compositor, 9) {
+                        match focused_window_for_app(&compositor, 9) {
+                            Some((paint_idx, pwin)) => {
+                                if paint_apps[paint_idx].is_none() {
+                                    paint_apps[paint_idx] = Some(apps::paint::PaintApp::new());
+                                }
+                                let (_, _, ww, wh) = app_layout_rect(9, &pwin);
+                                let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
+                                paint_apps[paint_idx].as_mut().is_some_and(|p| {
+                                    with_busy_progress(
+                                        &mut fb,
+                                        mx,
+                                        my,
+                                        gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."),
+                                        || p.save_bmp(&mut fs_mgr.vfs, cw, ch),
+                                    )
+                                })
+                            }
+                            None => false,
+                        }
                     } else {
                         false
                     };
@@ -6936,6 +7024,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         notepad_app.status_msg =
                             gui::ui_text("Yeni belge oluşturuldu", "New document created");
+                    } else if app_is_focused(&compositor, 9) {
+                        if let Some((paint_idx, _)) = focused_window_for_app(&compositor, 9) {
+                            if paint_apps[paint_idx].is_none() {
+                                paint_apps[paint_idx] = Some(apps::paint::PaintApp::new());
+                            }
+                            if let Some(paint) = paint_apps[paint_idx].as_mut() {
+                                paint.new_document();
+                            }
+                        }
                     }
                 }
 
@@ -6958,6 +7055,24 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         filemanager_app.set_path("/browser/pages");
                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                         open_app(&mut compositor, 0);
+                    } else if app_is_focused(&compositor, 9) {
+                        if let Some((paint_idx, _)) = focused_window_for_app(&compositor, 9) {
+                            if paint_apps[paint_idx].is_none() {
+                                paint_apps[paint_idx] = Some(apps::paint::PaintApp::new());
+                            }
+                            with_busy_progress(
+                                &mut fb,
+                                mx,
+                                my,
+                                gui::ui_text("BMP açılıyor...", "Opening BMP..."),
+                                || {
+                                    paint_apps[paint_idx]
+                                        .as_mut()
+                                        .unwrap()
+                                        .open_bmp(&fs_mgr.vfs)
+                                },
+                            );
+                        }
                     }
                 }
 
@@ -8195,6 +8310,31 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
+        // Sag fare dugmesi basiliyken Paint tuvalinde surukleme: Windows
+        // Paint davranisi olarak sag tiklayip suruklemek silgi darbesi
+        // baslatir. Sol tus darbesiyle ayni sekilde birakinca sonlanir.
+        if mouse.right_button && !mouse.left_button {
+            if let Some((paint_idx, w)) = focused_window_for_app(&compositor, 9) {
+                if w.is_focused {
+                    if paint_apps[paint_idx].is_none() {
+                        paint_apps[paint_idx] = Some(apps::paint::PaintApp::new());
+                    }
+
+                    let paint = paint_apps[paint_idx].as_mut().unwrap();
+
+                    let (ax, ay, aw, ah) = app_layout_rect(9, &w);
+
+                    if let Some((cxp, cyp)) =
+                        paint.to_canvas(aw, ah, mx.saturating_sub(ax), my.saturating_sub(ay))
+                    {
+                        paint.erase_drag(cxp, cyp);
+                    } else {
+                        paint.end_erase_drag();
+                    }
+                }
+            }
+        }
+
         if mouse_released {
             if let Some((idx, control)) = state.pending_window_control.take() {
                 if control == 0 {
@@ -8252,6 +8392,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             if let Some(paint_idx) = compositor.active_window_idx {
                 if let Some(paint) = paint_apps[paint_idx].as_mut() {
                     paint.end_stroke();
+                    paint.end_erase_drag();
                 }
             }
 
@@ -9262,7 +9403,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             || filemanager_app.drag_active
             || v3d_dragging;
 
-        let paint_active = mouse.left_button && app_is_focused(&compositor, 9);
+        let paint_active =
+            (mouse.left_button || mouse.right_button) && app_is_focused(&compositor, 9);
 
         let is_interacting = is_dragging || paint_active;
 

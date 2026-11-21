@@ -1,5 +1,13 @@
 use crate::drivers::video::Framebuffer;
-use crate::gui::{scaled_statusbar_h, scaled_toolbar_h, Color, MinGuiCompositor};
+use crate::gui::{
+    scaled_statusbar_h, scaled_titlebar_h, scaled_toolbar_h, sp, Color, MinGuiCompositor,
+};
+
+/// Temel ızgara birimini aktif UI ölçeğine göre büyütür.
+#[inline(always)]
+fn sc(base: usize) -> usize {
+    sp(base)
+}
 
 /// Tuval üzerinde tutulabilecek en fazla nokta.
 const MAX_POINTS: usize = 4096;
@@ -78,6 +86,8 @@ pub struct PaintApp {
     /// Şekil araçlarında sürüklemenin başlangıç ve geçerli noktası.
     pub shape_start: Option<(usize, usize)>,
     pub shape_current: Option<(usize, usize)>,
+    /// Sağ tuşla silme darbesinin son noktası (sol tuş `last`'ten ayrıdır).
+    pub erase_last: Option<(usize, usize)>,
     /// Geri al / ileri al yığınları (tuval anlık görüntüleri).
     pub undo_stack: alloc::vec::Vec<alloc::vec::Vec<PaintPoint>>,
     pub redo_stack: alloc::vec::Vec<alloc::vec::Vec<PaintPoint>>,
@@ -119,6 +129,7 @@ impl PaintApp {
             last: None,
             shape_start: None,
             shape_current: None,
+            erase_last: None,
             undo_stack: alloc::vec::Vec::new(),
             redo_stack: alloc::vec::Vec::new(),
             picker_open: false,
@@ -153,6 +164,7 @@ impl PaintApp {
         self.last = None;
         self.shape_start = None;
         self.shape_current = None;
+        self.erase_last = None;
     }
 
     /// Son değişikliği geri alır.
@@ -192,21 +204,70 @@ impl PaintApp {
         !self.redo_stack.is_empty()
     }
 
+    // ------------------------------------------------------------------
+    // Yerleşim
+    //
+    // Pencere içi koordinat sistemi başlık çubuğunu da kapsar (y = 0 üst
+    // kenar). İki şerit üstte durur: menü satırı (Dosya + dosya işlemleri +
+    // fırça boyutu) ve araç şeridi (palet, silgi, şekiller, renk seçici,
+    // zoom). Tuval bu şeritlerin altına, durum çubuğunun üstüne yerleşir.
+    // Tüm ölçüler `sp()` ile UI ölçeğine duyarlıdır; çizim (`render_content`)
+    // ve tıklama testi aynı `*_rect` yardımcılarını kullandığı için asla
+    // ayrışmaz.
+    // ------------------------------------------------------------------
+
+    /// Menü satırının üst kenarı (başlık çubuğunun hemen altı).
+    pub fn menu_y() -> usize {
+        scaled_titlebar_h() + sc(4)
+    }
+    /// Menü satırı yüksekliği.
+    pub fn menu_h() -> usize {
+        scaled_toolbar_h()
+    }
+    /// Araç şeridinin üst kenarı.
+    pub fn tool_y() -> usize {
+        Self::menu_y() + Self::menu_h() + sc(4)
+    }
+    /// Araç şeridi yüksekliği.
+    pub fn tool_h() -> usize {
+        sc(26)
+    }
+    /// Şerit içi düğmelerin üst kenarı (şerit yüksekliğine göre ortalanmış).
+    fn strip_btn_y(row_y: usize, row_h: usize) -> usize {
+        row_y + row_h.saturating_sub(sc(20)) / 2
+    }
+    /// Menü satırı düğmelerinin üst kenarı.
+    pub fn menu_btn_y() -> usize {
+        Self::strip_btn_y(Self::menu_y(), Self::menu_h())
+    }
+    /// Araç şeridi düğmelerinin üst kenarı.
+    pub fn tool_btn_y() -> usize {
+        Self::strip_btn_y(Self::tool_y(), Self::tool_h())
+    }
+    /// Tuvalin üst kenarı (araç şeridinin altı).
+    pub fn canvas_y() -> usize {
+        Self::tool_y() + Self::tool_h() + sc(4)
+    }
+    /// Durum çubuğunun üst kenarı (pencere yüksekliğine göre).
+    pub fn status_top(h: usize) -> usize {
+        h.saturating_sub(sc(4) + scaled_statusbar_h())
+    }
+    /// Tuvalin alt kenarı (durum çubuğunun üstünde küçük bir boşlukla).
+    fn canvas_bottom(h: usize) -> usize {
+        Self::status_top(h).saturating_sub(sc(6))
+    }
+
     /// Tuvalin başlangıç X koordinatı (pencere içi).
     pub fn canvas_x() -> usize {
-        8
-    }
-    /// Tuvalin başlangıç Y koordinatı (pencere içi, araç çubuğunun altı).
-    pub fn canvas_y() -> usize {
-        toolbar_h()
+        sc(8)
     }
 
     /// Tuval alanının (x, y, w, h) pencere içi ölçülerini hesaplar.
     pub fn canvas_rect(w: usize, h: usize) -> (usize, usize, usize, usize) {
         let x = Self::canvas_x();
         let y = Self::canvas_y();
-        let cw = w.saturating_sub(16);
-        let ch = h.saturating_sub(toolbar_h() + status_h() + 6);
+        let cw = w.saturating_sub(x * 2);
+        let ch = Self::canvas_bottom(h).saturating_sub(y);
         (x, y, cw, ch)
     }
 
@@ -272,7 +333,8 @@ impl PaintApp {
                 if self.last.is_none() {
                     self.push_undo();
                 }
-                self.erase(x, y);
+                let (sx, sy) = self.last.unwrap_or((x, y));
+                self.erase_segment(sx, sy, x, y);
                 self.last = Some((x, y));
             }
             PaintTool::Line | PaintTool::Rect | PaintTool::Circle => {
@@ -351,18 +413,64 @@ impl PaintApp {
 
     /// Silgi: merkez çevresindeki noktaları dairesel olarak kaldırır.
     pub fn erase(&mut self, x: usize, y: usize) {
+        self.erase_segment(x, y, x, y);
+    }
+
+    /// İki nokta arasındaki doğru parçasının silgi yarıçapı içindeki tüm
+    /// noktaları tek geçişte kaldırır. Hızlı sürüklemelerde dekesiz silme
+    /// sağlar (nokta başına tam tarama yerine doğru-parçası uzaklığı).
+    fn erase_segment(&mut self, x0: usize, y0: usize, x1: usize, y1: usize) {
+        let r2 = (ERASER_RADIUS * ERASER_RADIUS) as isize;
+        let sx = x0 as isize;
+        let sy = y0 as isize;
+        let ex = x1 as isize;
+        let ey = y1 as isize;
+        let dx = ex - sx;
+        let dy = ey - sy;
+        let len2 = dx * dx + dy * dy;
         let mut out = 0;
         for i in 0..self.len {
             let point = self.points[i];
-            let ddx = point.x.abs_diff(x) as isize;
-            let ddy = point.y.abs_diff(y) as isize;
-            let remove = ddx * ddx + ddy * ddy <= (ERASER_RADIUS * ERASER_RADIUS) as isize;
-            if !remove {
+            let px = point.x as isize;
+            let py = point.y as isize;
+            // Noktanın doğru parçasına en yakın noktasını bul (tam sayı).
+            let (nx, ny) = if len2 == 0 {
+                (sx, sy)
+            } else {
+                let proj = (px - sx) * dx + (py - sy) * dy;
+                if proj <= 0 {
+                    (sx, sy)
+                } else if proj >= len2 {
+                    (ex, ey)
+                } else {
+                    (sx + dx * proj / len2, sy + dy * proj / len2)
+                }
+            };
+            let ddx = px - nx;
+            let ddy = py - ny;
+            if ddx * ddx + ddy * ddy > r2 {
                 self.points[out] = point;
                 out += 1;
             }
         }
         self.len = out;
+    }
+
+    /// Sağ tuşla sürükleyerek silme (Windows Paint davranışı). Sol tuş
+    /// darbelerinden ayrı bir `erase_last` izi kullanır.
+    pub fn erase_drag(&mut self, x: usize, y: usize) {
+        if self.erase_last.is_none() {
+            self.push_undo();
+        }
+        let (sx, sy) = self.erase_last.unwrap_or((x, y));
+        self.erase_segment(sx, sy, x, y);
+        self.erase_last = Some((x, y));
+        self.status_msg = "";
+    }
+
+    /// Sağ tuş silme darbesini bitirir.
+    pub fn end_erase_drag(&mut self) {
+        self.erase_last = None;
     }
 
     pub fn end_stroke(&mut self) {
@@ -387,6 +495,7 @@ impl PaintApp {
         self.last = None;
         self.shape_start = None;
         self.shape_current = None;
+        self.erase_last = None;
     }
 
     pub fn clear(&mut self) {
@@ -397,6 +506,7 @@ impl PaintApp {
         self.last = None;
         self.shape_start = None;
         self.shape_current = None;
+        self.erase_last = None;
     }
 
     /// Belirtilen dosya adına BMP kaydeder (ör. "/root/Documents/deneme.bmp").
@@ -626,9 +736,65 @@ impl PaintApp {
                 }
             }
         }
+        self.len = 0;
         self.last = None;
+        self.shape_start = None;
+        self.shape_current = None;
+        self.erase_last = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.status_msg = crate::gui::ui_text("BMP açıldı", "BMP opened");
         true
+    }
+
+    /// Etiketli düğme: `enabled=false` iken tepki vermeyen soluk görünüm.
+    /// Etkin düğmeler ortak `draw_button`'ı kullanır; böylece hover/basma
+    /// animasyonu ve okunaklı metin rengi diğer uygulamalarla aynı olur.
+    fn draw_paint_button(
+        fb: &mut Framebuffer,
+        r: (usize, usize, usize, usize),
+        label: &str,
+        bg: u32,
+        enabled: bool,
+    ) {
+        if enabled {
+            MinGuiCompositor::draw_button(fb, r, bg, label, Color::TEXT_MAIN, false);
+            return;
+        }
+        let dim = MinGuiCompositor::shade(bg, -18);
+        fb.draw_rect(r.0, r.1, r.2, r.3, dim);
+        fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::BORDER);
+        let tw = MinGuiCompositor::text_width(label, 1);
+        let tx = r.0 + r.2.saturating_sub(tw) / 2;
+        let th = MinGuiCompositor::text_height();
+        let ty = r.1 + r.3.saturating_sub(th) / 2;
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            tx,
+            ty,
+            label,
+            Color::TEXT_MUTED,
+            (
+                r.0 + 2,
+                r.1 + 1,
+                r.2.saturating_sub(4),
+                r.3.saturating_sub(2),
+            ),
+        );
+    }
+
+    /// Verilen RGB üzerinde okunaklı çerçeve rengi (siyah/beyaz seçimi).
+    /// Palet ve renk seçicideki "seçili" işaretinin her renk üzerinde
+    /// görünür kalmasını sağlar.
+    fn contrast_on(rgb: u32) -> u32 {
+        let r = (rgb >> 16) & 0xFF;
+        let g = (rgb >> 8) & 0xFF;
+        let b = rgb & 0xFF;
+        if r * 299 + g * 587 + b * 114 >= 140_000 {
+            Color::BLACK
+        } else {
+            Color::WHITE
+        }
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
@@ -670,214 +836,345 @@ impl PaintApp {
         }
 
         // Şekil önizlemesi: sürükleme sırasında henüz noktalara işlenmemiş
-        // çizgi/dikdörtgen/daireyi doğrudan framebuffer'a çiz.
+        // çizgi/dikdörtgen/daireyi doğrudan framebuffer'a çiz. Nokta boyutu
+        // commit edilen fırça karesiyle aynıdır; sonuç WYSIWYG olur.
         if matches!(
             self.tool,
             PaintTool::Line | PaintTool::Rect | PaintTool::Circle
         ) && self.shape_start.is_some()
         {
             let color = crate::gui::theme::resolve(self.color);
-            self.raster_shape(|x, y| {
-                if x < canvas_w && y < canvas_h {
+            let pv = (self.brush_size * zoom / 100).max(2);
+            self.raster_shape(|sx, sy| {
+                if sx < canvas_w && sy < canvas_h {
                     let px = (canvas_x as isize
                         + canvas_w as isize / 2
-                        + (x as isize - canvas_w as isize / 2) * zoom as isize / 100)
+                        + (sx as isize - canvas_w as isize / 2) * zoom as isize / 100)
                         .max(0) as usize;
                     let py = (canvas_y as isize
                         + canvas_h as isize / 2
-                        + (y as isize - canvas_h as isize / 2) * zoom as isize / 100)
+                        + (sy as isize - canvas_h as isize / 2) * zoom as isize / 100)
                         .max(0) as usize;
                     if px >= canvas_x
                         && py >= canvas_y
                         && px < canvas_x + canvas_w
                         && py < canvas_y + canvas_h
                     {
-                        fb.draw_rect(px, py, 2, 2, color);
+                        fb.draw_rect(
+                            px.saturating_sub(pv / 2),
+                            py.saturating_sub(pv / 2),
+                            pv,
+                            pv,
+                            color,
+                        );
                     }
                 }
             });
         }
 
-        // 2. Üst Menü Çubuğu (Menu Bar: y + 28 .. y + 52)
-        fb.draw_rect(x + 6, y + 28, w.saturating_sub(12), 24, Color::TITLE_BAR);
-        let file_rect = Self::file_menu_rect(w);
-        fb.draw_rect(
-            x + file_rect.0,
-            y + file_rect.1,
-            file_rect.2,
-            file_rect.3,
-            Color::WINDOW_BG,
-        );
-        for dot in 0..3 {
-            fb.draw_rect(
-                x + file_rect.0 + 13,
-                y + file_rect.1 + 4 + dot * 5,
-                2,
-                2,
-                Color::TEXT_MAIN,
-            );
-        }
-
-        // 3. İkinci Satır: Araç ve Renk Çubuğu (Tools & Palette Strip: y + 54 .. y + 78)
-        fb.draw_rect(
-            x + 6,
-            y + 54,
-            w.saturating_sub(12),
-            26,
-            MinGuiCompositor::shade(Color::TITLE_BAR, -10),
-        );
-        fb.draw_rect_outline(x + 6, y + 54, w.saturating_sub(12), 26, Color::BORDER);
-
-        MinGuiCompositor::draw_string(
-            fb,
-            x + 12,
-            y + 60,
-            crate::gui::ui_text("Kalem:", "Pen:"),
-            Color::TEXT_MAIN,
-        );
-
-        // 4 Renk Kutusu (Palette Swatches)
-        for (i, color) in PALETTE.iter().enumerate() {
-            let swatch_x = x + 60 + i * 22;
-            fb.draw_rect(swatch_x, y + 58, 18, 18, *color);
-            fb.draw_rect_outline(swatch_x, y + 58, 18, 18, Color::BORDER);
-            if self.tool == PaintTool::Brush && self.color == *color {
-                fb.draw_rect_outline(swatch_x.saturating_sub(1), y + 57, 20, 20, Color::WHITE);
+        // Fırça/silgi ucu önizlemesi ve şekil artısı — imleç tuvalin
+        // üstündeyken çizilir; koyu çerçeve beyaz tuvalde her zaman görünür.
+        let (ptr_x, ptr_y) = MinGuiCompositor::pointer_position();
+        let ptr_on_canvas = ptr_x >= canvas_x
+            && ptr_x < canvas_x + canvas_w
+            && ptr_y >= canvas_y
+            && ptr_y < canvas_y + canvas_h;
+        if ptr_on_canvas {
+            match self.tool {
+                PaintTool::Brush | PaintTool::Eraser => {
+                    let size = if self.tool == PaintTool::Eraser {
+                        (ERASER_RADIUS * 2 * zoom / 100).max(4)
+                    } else {
+                        (self.brush_size * zoom / 100).max(2)
+                    };
+                    fb.draw_rect_outline(
+                        ptr_x.saturating_sub(size / 2),
+                        ptr_y.saturating_sub(size / 2),
+                        size,
+                        size,
+                        Color::BLACK,
+                    );
+                }
+                PaintTool::Line | PaintTool::Rect | PaintTool::Circle => {
+                    let color = crate::gui::theme::resolve(self.color);
+                    fb.draw_line(
+                        ptr_x.saturating_sub(6),
+                        ptr_y,
+                        ptr_x.saturating_add(6),
+                        ptr_y,
+                        color,
+                    );
+                    fb.draw_line(
+                        ptr_x,
+                        ptr_y.saturating_sub(6),
+                        ptr_x,
+                        ptr_y.saturating_add(6),
+                        color,
+                    );
+                }
             }
         }
 
-        // Silgi Butonu
-        let eraser_x = x + 154;
-        let eraser_bg = if self.tool == PaintTool::Eraser {
-            Color::ACCENT_BLUE
-        } else {
-            Color::WINDOW_BG
-        };
-        let eraser_fg = if self.tool == PaintTool::Eraser {
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE)
-        } else {
-            Color::TEXT_MAIN
-        };
-        fb.draw_rect(eraser_x, y + 56, 56, 22, eraser_bg);
-        fb.draw_rect_outline(eraser_x, y + 56, 56, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(
-            fb,
-            eraser_x + 8,
-            y + 60,
-            crate::gui::ui_text("Silgi", "Eraser"),
-            eraser_fg,
+        // 2. Menü satırı: Dosya menüsü + dosya işlemleri (solda) ve fırça
+        // boyutu kontrolü (sağda). Düğmeler ortak `draw_button` görünümünü
+        // kullanır; hover/basma animasyonu otomatik gelir.
+        fb.draw_rect(
+            x + sc(6),
+            y + Self::menu_y(),
+            w.saturating_sub(sc(12)),
+            Self::menu_h(),
+            Color::TITLE_BAR,
         );
-
-        // Şekil Araçları
-        let line_r = Self::tool_line_rect();
-        let line_bg = if self.tool == PaintTool::Line {
-            Color::ACCENT_BLUE
-        } else {
-            Color::WINDOW_BG
-        };
-        let line_fg = if self.tool == PaintTool::Line {
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE)
-        } else {
-            Color::TEXT_MAIN
-        };
-        fb.draw_rect(x + line_r.0, y + line_r.1, line_r.2, line_r.3, line_bg);
-        fb.draw_rect_outline(
-            x + line_r.0,
-            y + line_r.1,
-            line_r.2,
-            line_r.3,
+        fb.draw_line(
+            x + sc(6),
+            y + Self::menu_y() + Self::menu_h(),
+            x + w.saturating_sub(sc(6)),
+            y + Self::menu_y() + Self::menu_h(),
             Color::BORDER,
         );
-        MinGuiCompositor::draw_string(
-            fb,
-            x + line_r.0 + 6,
-            y + line_r.1 + 4,
-            crate::gui::ui_text("Çizgi", "Line"),
-            line_fg,
-        );
 
-        let rect_r = Self::tool_rect_rect();
-        let rect_bg = if self.tool == PaintTool::Rect {
+        let mby = Self::menu_btn_y();
+        let mlabel_y = mby + sc(20).saturating_sub(MinGuiCompositor::text_height()) / 2;
+        let draw_btn = |fb: &mut Framebuffer,
+                        r: (usize, usize, usize, usize),
+                        label: &str,
+                        bg: u32,
+                        enabled: bool| {
+            Self::draw_paint_button(fb, (x + r.0, y + r.1, r.2, r.3), label, bg, enabled);
+        };
+
+        // "Dosya" açılır menü düğmesi — etiketin sağında küçük üçgen imleç.
+        let fr = Self::file_menu_rect(w);
+        let file_bg = if self.file_menu_open {
             Color::ACCENT_BLUE
         } else {
             Color::WINDOW_BG
         };
-        let rect_fg = if self.tool == PaintTool::Rect {
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE)
-        } else {
-            Color::TEXT_MAIN
-        };
-        fb.draw_rect(x + rect_r.0, y + rect_r.1, rect_r.2, rect_r.3, rect_bg);
-        fb.draw_rect_outline(
-            x + rect_r.0,
-            y + rect_r.1,
-            rect_r.2,
-            rect_r.3,
-            Color::BORDER,
-        );
-        MinGuiCompositor::draw_string(
+        draw_btn(fb, fr, crate::gui::ui_text("Dosya", "File"), file_bg, true);
+        let tri_color = MinGuiCompositor::text_on(file_bg);
+        let tri_x = x + fr.0 + fr.2 - sc(14);
+        let tri_y = y + fr.1 + fr.3 / 2;
+        fb.draw_rect(tri_x, tri_y.saturating_sub(1), sc(7), sc(1), tri_color);
+        fb.draw_rect(tri_x + sc(1), tri_y, sc(5), sc(1), tri_color);
+        fb.draw_rect(tri_x + sc(2), tri_y + 1, sc(3), sc(1), tri_color);
+
+        // Dosya işlemleri — eskiden görünmez isabet alanlarıydı; artık
+        // gerçek düğmeler olarak çiziliyor, geri al/ileri al ve temizle
+        // uygun olmadığında soluk (devre dışı) görünür.
+        draw_btn(
             fb,
-            x + rect_r.0 + 6,
-            y + rect_r.1 + 4,
-            crate::gui::ui_text("Dikdörtgen", "Rect"),
-            rect_fg,
+            Self::open_btn_rect(w),
+            crate::gui::ui_text("Aç", "Open"),
+            Color::WINDOW_BG,
+            true,
+        );
+        draw_btn(
+            fb,
+            Self::save_btn_rect(w),
+            crate::gui::ui_text("Kaydet", "Save"),
+            Color::WINDOW_BG,
+            true,
+        );
+        draw_btn(
+            fb,
+            Self::undo_btn_rect(),
+            crate::gui::ui_text("Geri Al", "Undo"),
+            Color::WINDOW_BG,
+            self.can_undo(),
+        );
+        draw_btn(
+            fb,
+            Self::redo_btn_rect(),
+            crate::gui::ui_text("Yinele", "Redo"),
+            Color::WINDOW_BG,
+            self.can_redo(),
+        );
+        draw_btn(
+            fb,
+            Self::clear_btn_rect(w),
+            crate::gui::ui_text("Temizle", "Clear"),
+            Color::WINDOW_BG,
+            self.len > 0,
         );
 
-        let circ_r = Self::tool_circle_rect();
-        let circ_bg = if self.tool == PaintTool::Circle {
-            Color::ACCENT_BLUE
-        } else {
-            Color::WINDOW_BG
-        };
-        let circ_fg = if self.tool == PaintTool::Circle {
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE)
-        } else {
-            Color::TEXT_MAIN
-        };
-        fb.draw_rect(x + circ_r.0, y + circ_r.1, circ_r.2, circ_r.3, circ_bg);
-        fb.draw_rect_outline(
-            x + circ_r.0,
-            y + circ_r.1,
-            circ_r.2,
-            circ_r.3,
-            Color::BORDER,
-        );
+        // Fırça boyutu kontrolü — menü satırının sağ ucunda.
+        let gx = Self::brush_group_x(w);
         MinGuiCompositor::draw_string(
             fb,
-            x + circ_r.0 + 6,
-            y + circ_r.1 + 4,
-            crate::gui::ui_text("Daire", "Circle"),
-            circ_fg,
+            x + gx,
+            y + mlabel_y,
+            crate::gui::ui_text("Fırça:", "Brush:"),
+            Color::TEXT_MAIN,
+        );
+        let mut b_buf = [0u8; 8];
+        let b_str = format_num(self.brush_size, &mut b_buf);
+        let val_x = x + gx + sc(46);
+        MinGuiCompositor::draw_string(fb, val_x, y + mlabel_y, b_str, Color::ACCENT_BLUE);
+        let px_x = val_x + MinGuiCompositor::text_width(b_str, 1) + sc(3);
+        MinGuiCompositor::draw_string(fb, px_x, y + mlabel_y, "px", Color::TEXT_MUTED);
+        draw_btn(
+            fb,
+            Self::brush_minus_rect(w),
+            "-",
+            Color::WINDOW_BG,
+            self.brush_size > MIN_BRUSH_SIZE,
+        );
+        draw_btn(
+            fb,
+            Self::brush_plus_rect(w),
+            "+",
+            Color::WINDOW_BG,
+            self.brush_size < MAX_BRUSH_SIZE,
         );
 
-        // Renk seçici
-        let pick_r = Self::picker_btn_rect();
-        let pick_bg = if self.picker_open {
-            Color::ACCENT_BLUE
-        } else {
-            Color::WINDOW_BG
-        };
-        let pick_fg = if self.picker_open {
-            MinGuiCompositor::text_on(Color::ACCENT_BLUE)
-        } else {
-            Color::TEXT_MAIN
-        };
-        fb.draw_rect(x + pick_r.0, y + pick_r.1, pick_r.2, pick_r.3, pick_bg);
+        // 3. Araç şeridi: hızlı palet + silgi + şekil araçları + renk
+        // seçici (solda), zoom kontrolü (sağda).
+        let ty = Self::tool_y();
+        let tby = Self::tool_btn_y();
+        let tlabel_y = tby + sc(20).saturating_sub(MinGuiCompositor::text_height()) / 2;
+        fb.draw_rect(
+            x + sc(6),
+            y + ty,
+            w.saturating_sub(sc(12)),
+            Self::tool_h(),
+            MinGuiCompositor::shade(Color::TITLE_BAR, -10),
+        );
         fb.draw_rect_outline(
-            x + pick_r.0,
-            y + pick_r.1,
-            pick_r.2,
-            pick_r.3,
+            x + sc(6),
+            y + ty,
+            w.saturating_sub(sc(12)),
+            Self::tool_h(),
             Color::BORDER,
         );
-        MinGuiCompositor::draw_string(
+
+        // Hızlı palet — seçili renk her zeminde okunaklı kontrast çerçevesi
+        // alır; hover'da ince bir vurgu belirir.
+        let (hx, hy) = MinGuiCompositor::pointer_position();
+        for (i, &color) in PALETTE.iter().enumerate() {
+            let r = Self::swatch_rect(i);
+            let sxr = x + r.0;
+            let syr = y + r.1;
+            fb.draw_rect(sxr, syr, r.2, r.3, color);
+            fb.draw_rect_outline(sxr, syr, r.2, r.3, Color::BORDER);
+            let over = hx >= sxr && hx < sxr + r.2 && hy >= syr && hy < syr + r.3;
+            if self.color == color {
+                fb.draw_rect_outline(
+                    sxr.saturating_sub(1),
+                    syr.saturating_sub(1),
+                    r.2 + 2,
+                    r.3 + 2,
+                    Self::contrast_on(color),
+                );
+            } else if over {
+                fb.draw_rect_outline(
+                    sxr.saturating_sub(1),
+                    syr.saturating_sub(1),
+                    r.2 + 2,
+                    r.3 + 2,
+                    MinGuiCompositor::shade(Color::BORDER, 60),
+                );
+            }
+        }
+
+        // Renk seçici düğmesi.
+        draw_btn(
             fb,
-            x + pick_r.0 + 6,
-            y + pick_r.1 + 4,
+            Self::picker_btn_rect(),
             crate::gui::ui_text("Renkler", "Colors"),
-            pick_fg,
+            if self.picker_open {
+                Color::ACCENT_BLUE
+            } else {
+                Color::WINDOW_BG
+            },
+            true,
         );
 
+        // Fırça ve silgi — etkin araç vurgu rengiyle işaretlenir.
+        draw_btn(
+            fb,
+            Self::brush_tool_rect(),
+            crate::gui::ui_text("Fırça", "Brush"),
+            if self.tool == PaintTool::Brush {
+                Color::ACCENT_BLUE
+            } else {
+                Color::WINDOW_BG
+            },
+            true,
+        );
+        draw_btn(
+            fb,
+            Self::eraser_rect(),
+            crate::gui::ui_text("Silgi", "Eraser"),
+            if self.tool == PaintTool::Eraser {
+                Color::ACCENT_BLUE
+            } else {
+                Color::WINDOW_BG
+            },
+            true,
+        );
+
+        // Ayırıcı.
+        let sep_x = x + sc(284);
+        fb.draw_line(
+            sep_x,
+            y + ty + sc(6),
+            sep_x,
+            y + ty + Self::tool_h() - sc(6),
+            Color::BORDER,
+        );
+
+        // Şekil araçları — etkin araç vurgu rengiyle işaretlenir.
+        for (r, label, tool) in [
+            (
+                Self::tool_line_rect(),
+                crate::gui::ui_text("Çizgi", "Line"),
+                PaintTool::Line,
+            ),
+            (
+                Self::tool_rect_rect(),
+                crate::gui::ui_text("Dikdörtgen", "Rectangle"),
+                PaintTool::Rect,
+            ),
+            (
+                Self::tool_circle_rect(),
+                crate::gui::ui_text("Daire", "Circle"),
+                PaintTool::Circle,
+            ),
+        ] {
+            draw_btn(
+                fb,
+                r,
+                label,
+                if self.tool == tool {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::WINDOW_BG
+                },
+                true,
+            );
+        }
+
+        // Zoom kontrolü (sağda): "100%" + [-] [+]
+        let zm = Self::zoom_minus_rect(w);
+        draw_btn(fb, zm, "-", Color::WINDOW_BG, self.zoom > 50);
+        let zp = Self::zoom_plus_rect(w);
+        draw_btn(fb, zp, "+", Color::WINDOW_BG, self.zoom < 300);
+        let mut z_buf = [0u8; 8];
+        let z_str = format_num(self.zoom, &mut z_buf);
+        let mut zt = crate::gui::TextBuf::new();
+        zt.push_str(z_str);
+        zt.push_byte(b'%');
+        let ztxt = zt.as_str();
+        let zw = MinGuiCompositor::text_width(ztxt, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            x + zm.0.saturating_sub(sc(8) + zw),
+            y + tlabel_y,
+            ztxt,
+            Color::TEXT_MAIN,
+        );
+
+        // 4. Renk seçici açılır penceresi (tuvalin üstünde yüzer).
         if self.picker_open {
             let pr = Self::picker_rect();
             let pxr = x + pr.0;
@@ -891,88 +1188,68 @@ impl PaintApp {
                 let cyr = y + cr.1;
                 fb.draw_rect(cxr, cyr, cr.2, cr.3, cc);
                 fb.draw_rect_outline(cxr, cyr, cr.2, cr.3, Color::BORDER);
+                let over = hx >= cxr && hx < cxr + cr.2 && hy >= cyr && hy < cyr + cr.3;
                 if self.color == cc {
                     fb.draw_rect_outline(
                         cxr.saturating_sub(1),
                         cyr.saturating_sub(1),
                         cr.2 + 2,
                         cr.3 + 2,
-                        Color::WHITE,
+                        Self::contrast_on(cc),
+                    );
+                } else if over {
+                    fb.draw_rect_outline(
+                        cxr.saturating_sub(1),
+                        cyr.saturating_sub(1),
+                        cr.2 + 2,
+                        cr.3 + 2,
+                        MinGuiCompositor::shade(Color::BORDER, 60),
                     );
                 }
             }
         }
 
-        // Fırça Boyutu: "Fırça: {}px [-] [+]"
-        let brush_label_x = x + 218;
-        MinGuiCompositor::draw_string(
-            fb,
-            brush_label_x,
-            y + 60,
-            crate::gui::ui_text("Fırça:", "Brush:"),
-            Color::TEXT_MAIN,
+        // 5. Alt durum çubuğu
+        let sby = Self::status_top(h);
+        let status_w = w.saturating_sub(sc(12));
+        fb.draw_rect(x + sc(6), y + sby, status_w, status_h(), Color::TASKBAR_BG);
+        fb.draw_line(
+            x + sc(6),
+            y + sby,
+            x + sc(6) + status_w,
+            y + sby,
+            Color::BORDER,
         );
-        let mut b_buf = [0u8; 8];
-        let b_str = format_num(self.brush_size, &mut b_buf);
-        MinGuiCompositor::draw_string(fb, brush_label_x + 44, y + 60, b_str, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, brush_label_x + 60, y + 60, "px", Color::TEXT_MUTED);
+        let stext_y = y + sby + status_h().saturating_sub(MinGuiCompositor::text_height()) / 2;
 
-        let b_minus_x = brush_label_x + 80;
-        fb.draw_rect(b_minus_x, y + 56, 20, 22, Color::WINDOW_BG);
-        fb.draw_rect_outline(b_minus_x, y + 56, 20, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, b_minus_x + 6, y + 60, "-", Color::TEXT_MAIN);
-
-        let b_plus_x = b_minus_x + 24;
-        fb.draw_rect(b_plus_x, y + 56, 20, 22, Color::WINDOW_BG);
-        fb.draw_rect_outline(b_plus_x, y + 56, 20, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, b_plus_x + 5, y + 60, "+", Color::TEXT_MAIN);
-
-        // Yakınlaştırma (Zoom): "%100 [-] [+]" (Sağ Taraf)
-        let z_plus_x = x + w.saturating_sub(32);
-        fb.draw_rect(z_plus_x, y + 56, 22, 22, Color::WINDOW_BG);
-        fb.draw_rect_outline(z_plus_x, y + 56, 22, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, z_plus_x + 6, y + 60, "+", Color::TEXT_MAIN);
-
-        let z_minus_x = z_plus_x.saturating_sub(26);
-        fb.draw_rect(z_minus_x, y + 56, 22, 22, Color::WINDOW_BG);
-        fb.draw_rect_outline(z_minus_x, y + 56, 22, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, z_minus_x + 7, y + 60, "-", Color::TEXT_MAIN);
-
-        let mut z_buf = [0u8; 8];
-        let z_str = format_num(self.zoom, &mut z_buf);
-        let z_label_x = z_minus_x.saturating_sub(46);
-        MinGuiCompositor::draw_string(fb, z_label_x, y + 60, "%", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, z_label_x + 10, y + 60, z_str, Color::TEXT_MAIN);
-
-        // 4. Alt Durum Çubuğu (Status Bar: y + h - 24 .. y + h - 2)
-        let status_y = y + h.saturating_sub(24);
-        let status_w = w.saturating_sub(12);
-        fb.draw_rect(x + 6, status_y, status_w, 22, Color::TASKBAR_BG);
-        fb.draw_line(x + 6, status_y, x + 6 + status_w, status_y, Color::BORDER);
-
-        // Sol: Durum Mesajı
+        // Sol: durum mesajı
         MinGuiCompositor::draw_string_clipped(
             fb,
-            x + 12,
-            status_y + 4,
+            x + sc(12),
+            stext_y,
             self.status_text(),
             if self.tool == PaintTool::Eraser {
                 Color::ACCENT_BLUE
             } else {
                 Color::ACCENT_GREEN
             },
-            (x + 10, status_y + 2, status_w / 3, 18),
+            (
+                x + sc(10),
+                y + sby + sc(2),
+                status_w / 3,
+                status_h().saturating_sub(sc(4)),
+            ),
         );
 
-        // Orta: Dosya Adı
+        // Orta: dosya adı
         let doc_name = self.current_name();
         let doc_w = MinGuiCompositor::text_width(doc_name, 1);
         let doc_x = x + (w.saturating_sub(doc_w)) / 2;
-        MinGuiCompositor::draw_string(fb, doc_x, status_y + 4, doc_name, Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, doc_x, stext_y, doc_name, Color::TEXT_MAIN);
 
-        // Sağ: Bilgi Paneli (Nokta Sayısı & Fırça & Zoom)
-        // `alloc::format!` her karede heap tahsisi yapar; çekirdek heap'inde
-        // pahalı ve hataya açıktır. Sabit boyutlu `TextBuf` kullanılır.
+        // Sağ: nokta sayısı + fırça + zoom + imlecin tuval koordinatı.
+        // `alloc::format!` her karede heap tahsisi yapar; sabit boyutlu
+        // `TextBuf` kullanılır.
         let mut right_info = crate::gui::TextBuf::new();
         right_info.push_str(crate::gui::ui_text("Nokta:", "Pts:"));
         right_info.push_byte(b' ');
@@ -985,12 +1262,20 @@ impl PaintApp {
         right_info.push_usize(self.brush_size);
         right_info.push_str("px | %");
         right_info.push_usize(self.zoom);
+        if let Some((cxp, cyp)) =
+            self.to_canvas(w, h, ptr_x.saturating_sub(x), ptr_y.saturating_sub(y))
+        {
+            right_info.push_str(" | ");
+            right_info.push_usize(cxp);
+            right_info.push_byte(b',');
+            right_info.push_usize(cyp);
+        }
         let right_info = right_info.as_str();
         let right_w = MinGuiCompositor::text_width(right_info, 1);
-        let right_x = x + w.saturating_sub(right_w + 16);
-        MinGuiCompositor::draw_string(fb, right_x, status_y + 4, right_info, Color::TEXT_MUTED);
+        let right_x = x + w.saturating_sub(right_w + sc(16));
+        MinGuiCompositor::draw_string(fb, right_x, stext_y, right_info, Color::TEXT_MUTED);
 
-        // 5. Açılır Menü (File Dropdown: En Üst Katman)
+        // 6. "Dosya" açılır menüsü (en üst katman)
         if self.file_menu_open {
             let (mx, my, mw, mh) = Self::file_dropdown_rect(w, h);
             let drop_x = x + mx;
@@ -1000,17 +1285,49 @@ impl PaintApp {
             fb.draw_rect_outline(drop_x, drop_y, mw, mh, Color::BORDER);
 
             let labels = Self::file_menu_labels();
+            // Son üç öğe (Geri Al / Yinele / Temizle) uygun olmadığında
+            // menüde de soluk görünür.
+            let enabled = [
+                true,
+                true,
+                true,
+                true,
+                self.can_undo(),
+                self.can_redo(),
+                self.len > 0,
+            ];
             for (i, label) in labels.iter().enumerate() {
                 let r = Self::file_menu_item_rect(w, h, i);
-                let item_y = y + r.1;
                 let item_x = x + r.0;
-                fb.draw_rect(item_x, item_y, r.2, r.3, Color::TITLE_BAR_INACTIVE);
-                MinGuiCompositor::draw_string(fb, item_x + 8, item_y + 4, label, Color::TEXT_MAIN);
+                let item_y = y + r.1;
+                let over = hx >= item_x && hx < item_x + r.2 && hy >= item_y && hy < item_y + r.3;
+                fb.draw_rect(
+                    item_x,
+                    item_y,
+                    r.2,
+                    r.3,
+                    if over {
+                        MinGuiCompositor::shade(Color::TITLE_BAR_INACTIVE, 30)
+                    } else {
+                        Color::TITLE_BAR_INACTIVE
+                    },
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    item_x + sc(8),
+                    item_y + sc(4),
+                    label,
+                    if enabled[i] {
+                        Color::TEXT_MAIN
+                    } else {
+                        Color::TEXT_MUTED
+                    },
+                );
                 if i + 1 < Self::FILE_MENU_COUNT {
                     fb.draw_line(
-                        item_x + 2,
+                        item_x + sc(2),
                         item_y + r.3 + 1,
-                        item_x + r.2 - 2,
+                        item_x + r.2 - sc(2),
                         item_y + r.3 + 1,
                         Color::BORDER,
                     );
@@ -1019,98 +1336,138 @@ impl PaintApp {
         }
     }
 
-    /// "Dosya" menüsü düğmesinin pencere içi (x, y, w, h) ölçüleri.
-    /// `render_content` içindeki menü çubuğu (y + 28) ile birebir aynıdır.
-    pub fn file_menu_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(40), 28, 28, 22)
-    }
+    // ------------------------------------------------------------------
+    // İsabet alanları — `render_content` ile birebir aynı geometri.
+    // Tıklama testi bu fonksiyonları kullandığı için çizim ve etkileşim
+    // asla ayrışmaz. Tüm koordinatlar pencere içi (içerik) uzayındadır.
+    // ------------------------------------------------------------------
 
-    /// Hızlı aksiyon düğmeleri — `render_content` ile aynı koordinatlar.
-    /// Çizim ve tıklama testi bu fonksiyonları kullanır.
-    pub fn open_btn_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(196), 29, 58, 22)
+    /// "Dosya" açılır menü düğmesi.
+    pub fn file_menu_rect(_w: usize) -> (usize, usize, usize, usize) {
+        (sc(12), Self::menu_btn_y(), sc(60), sc(20))
     }
-    pub fn save_btn_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(134), 29, 62, 22)
+    /// Aç / Kaydet / Geri Al / Yinele / Temizle düğmeleri (menü satırı).
+    pub fn open_btn_rect(_w: usize) -> (usize, usize, usize, usize) {
+        (sc(82), Self::menu_btn_y(), sc(50), sc(20))
     }
-    pub fn clear_btn_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(68), 29, 60, 22)
+    pub fn save_btn_rect(_w: usize) -> (usize, usize, usize, usize) {
+        (sc(138), Self::menu_btn_y(), sc(58), sc(20))
     }
-    /// Renk kutusu (palet) dikdörtgeni — `render_content` ile aynı.
-    pub fn swatch_rect(index: usize) -> (usize, usize, usize, usize) {
-        (60 + index * 22, 58, 18, 18)
-    }
-    /// Geri Al / İleri Al düğmeleri.
     pub fn undo_btn_rect() -> (usize, usize, usize, usize) {
-        (74, 29, 50, 22)
+        (sc(202), Self::menu_btn_y(), sc(60), sc(20))
     }
     pub fn redo_btn_rect() -> (usize, usize, usize, usize) {
-        (128, 29, 50, 22)
+        (sc(268), Self::menu_btn_y(), sc(60), sc(20))
+    }
+    pub fn clear_btn_rect(_w: usize) -> (usize, usize, usize, usize) {
+        (sc(334), Self::menu_btn_y(), sc(64), sc(20))
     }
 
-    /// Araç düğmeleri.
-    pub fn tool_line_rect() -> (usize, usize, usize, usize) {
-        (346, 56, 44, 22)
+    /// Fırça boyutu grubunun sol kenarı — menü satırının sağ ucuna dayalı.
+    pub fn brush_group_x(w: usize) -> usize {
+        w.saturating_sub(sc(12) + sc(128))
     }
-    pub fn tool_rect_rect() -> (usize, usize, usize, usize) {
-        (394, 56, 64, 22)
+    /// Fırça küçült/büyüt düğmeleri (menü satırı, sağ taraf).
+    pub fn brush_minus_rect(w: usize) -> (usize, usize, usize, usize) {
+        (
+            Self::brush_group_x(w) + sc(80),
+            Self::menu_btn_y(),
+            sc(22),
+            sc(20),
+        )
     }
-    pub fn tool_circle_rect() -> (usize, usize, usize, usize) {
-        (462, 56, 50, 22)
+    pub fn brush_plus_rect(w: usize) -> (usize, usize, usize, usize) {
+        (
+            Self::brush_group_x(w) + sc(104),
+            Self::menu_btn_y(),
+            sc(22),
+            sc(20),
+        )
+    }
+
+    /// Renk kutusu (hızlı palet) dikdörtgeni.
+    pub fn swatch_rect(index: usize) -> (usize, usize, usize, usize) {
+        (
+            sc(12) + index * sc(22),
+            Self::tool_y() + sc(4),
+            sc(18),
+            sc(18),
+        )
     }
 
     /// Renk seçici düğmesi ve açılır grid.
+    fn picker_pop_x() -> usize {
+        sc(104)
+    }
+    fn picker_pop_y() -> usize {
+        Self::tool_y() + Self::tool_h() + sc(2)
+    }
     pub fn picker_btn_rect() -> (usize, usize, usize, usize) {
-        (516, 56, 54, 22)
+        (sc(104), Self::tool_btn_y(), sc(58), sc(20))
     }
     pub fn picker_rect() -> (usize, usize, usize, usize) {
-        (516, 82, 140, 96)
+        (Self::picker_pop_x(), Self::picker_pop_y(), sc(140), sc(98))
     }
     pub fn picker_cell_rect(index: usize) -> (usize, usize, usize, usize) {
         let row = index / 6;
         let col = index % 6;
-        (516 + 6 + col * 22, 82 + 6 + row * 22, 18, 18)
+        (
+            Self::picker_pop_x() + sc(6) + col * sc(22),
+            Self::picker_pop_y() + sc(6) + row * sc(22),
+            sc(18),
+            sc(18),
+        )
     }
 
+    /// Fırça aracı düğmesi (araç şeridi).
+    pub fn brush_tool_rect() -> (usize, usize, usize, usize) {
+        (sc(170), Self::tool_btn_y(), sc(46), sc(20))
+    }
     /// Silgi düğmesi.
     pub fn eraser_rect() -> (usize, usize, usize, usize) {
-        (154, 56, 56, 22)
+        (sc(224), Self::tool_btn_y(), sc(52), sc(20))
     }
-    /// Fırça küçült/büyüt düğmeleri.
-    pub fn brush_label_x() -> usize {
-        218
+    /// Şekil araçları (araç şeridi).
+    pub fn tool_line_rect() -> (usize, usize, usize, usize) {
+        (sc(292), Self::tool_btn_y(), sc(48), sc(20))
     }
-    pub fn brush_minus_rect() -> (usize, usize, usize, usize) {
-        (Self::brush_label_x() + 80, 56, 20, 22)
+    pub fn tool_rect_rect() -> (usize, usize, usize, usize) {
+        (sc(348), Self::tool_btn_y(), sc(70), sc(20))
     }
-    pub fn brush_plus_rect() -> (usize, usize, usize, usize) {
-        (Self::brush_label_x() + 104, 56, 20, 22)
+    pub fn tool_circle_rect() -> (usize, usize, usize, usize) {
+        (sc(426), Self::tool_btn_y(), sc(54), sc(20))
     }
-    /// Zoom küçült/büyüt düğmeleri (pencere genişliğine göre sağa dayalı).
+    /// Zoom küçült/büyüt düğmeleri (araç şeridi, sağa dayalı).
     pub fn zoom_plus_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(32), 56, 22, 22)
+        (
+            w.saturating_sub(sc(12) + sc(22)),
+            Self::tool_btn_y(),
+            sc(22),
+            sc(20),
+        )
     }
     pub fn zoom_minus_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(58), 56, 22, 22)
+        let plus = Self::zoom_plus_rect(w);
+        (plus.0.saturating_sub(sc(26)), plus.1, sc(22), sc(20))
     }
 
-    /// Açılır menü listesinin pencere içi (x, y, w, h) ölçüleri.
-    /// "Dosya" düğmesinin altına açılır; alta sığmazsa üste çevrilir ve
-    /// her zaman pencere sınırları içine kelepçelenir.
+    /// "Dosya" açılır menüsünün pencere içi (x, y, w, h) ölçüleri.
+    /// Düğmenin altına açılır; alta sığmazsa üste çevrilir ve her zaman
+    /// pencere sınırları içine kelepçelenir.
     pub fn file_dropdown_rect(w: usize, h: usize) -> (usize, usize, usize, usize) {
-        let mw = 174usize.min(w.saturating_sub(16));
-        let mh = 166usize.min(h.saturating_sub(8));
-        let mut mx = w.saturating_sub(182).max(4);
-        let mx_max = w.saturating_sub(mw + 4);
-        if mx > mx_max {
-            mx = mx_max;
+        let mw = sc(190).min(w.saturating_sub(sc(16)));
+        let mh = sc(170).min(h.saturating_sub(sc(8)));
+        let mx_max = w.saturating_sub(mw + sc(4));
+        let mx = sc(12).min(mx_max);
+        // "Dosya" düğmesinin alt kenarı: menu_y + menu_h
+        let below = Self::menu_y() + Self::menu_h() + sc(2);
+        let mut my = below;
+        if my + mh > h.saturating_sub(sc(4)) && Self::menu_y() >= mh + sc(6) {
+            // Alta sığmıyor: düğmenin üstüne aç.
+            my = Self::menu_y().saturating_sub(mh + sc(2));
         }
-        // "Dosya" düğmesi: (w-40, 28, 28, 22) -> alt kenar 50
-        let below = 52usize;
-        let above = 28usize.saturating_sub(mh + 4);
-        let mut my = if below + mh <= h { below } else { above };
-        let y_min = 4usize;
-        let y_max = h.saturating_sub(mh + 4);
+        let y_min = sc(4);
+        let y_max = h.saturating_sub(mh + sc(4));
         if my < y_min {
             my = y_min;
         } else if my > y_max && y_max >= y_min {
@@ -1138,7 +1495,12 @@ impl PaintApp {
     /// Açılır menüdeki öğe (x, y, w, h) koordinatlarını (pencere içi) döndürür.
     pub fn file_menu_item_rect(w: usize, h: usize, index: usize) -> (usize, usize, usize, usize) {
         let (mx, my, mw, _mh) = Self::file_dropdown_rect(w, h);
-        (mx + 4, my + 4 + index * 22, mw.saturating_sub(8), 21)
+        (
+            mx + sc(4),
+            my + sc(4) + index * sc(22),
+            mw.saturating_sub(sc(8)),
+            sc(21),
+        )
     }
 
     pub fn adjust_brush(&mut self, delta: i8) {

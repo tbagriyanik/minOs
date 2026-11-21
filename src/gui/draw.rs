@@ -83,6 +83,16 @@ impl MinGuiCompositor {
         POINTER_DOWN.store(down, Ordering::Relaxed);
     }
 
+    /// Son bilinen işaretçi konumu (ekran pikseli, mutlak koordinat).
+    /// Uygulamalar imleç önizlemesi (fırça ucu vb.) çizmek için kullanır.
+    #[inline(always)]
+    pub fn pointer_position() -> (usize, usize) {
+        (
+            POINTER_X.load(Ordering::Relaxed),
+            POINTER_Y.load(Ordering::Relaxed),
+        )
+    }
+
     /// Siyah veya beyaz metinden, verilen zemin üzerinde daha okunaklı olanı seçer.
     pub fn text_on(background: u32) -> u32 {
         let c = theme::resolve(background);

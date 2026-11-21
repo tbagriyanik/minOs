@@ -4,16 +4,20 @@
 //! * **Dama** — Türk/uluslararası kurallı, yapay zekâya karşı 2D dama.
 //! * **Mayın Tarlası** — klasik mayın tarlası; hücreleri aç, bayrak koy, tüm
 //!   güvenli hücreleri açarak kazan.
-//! * **Satranç** — 8x8 satranç tahtası, temel hamle kurallarıyla iki oyunculu.
+//! * **Satranç** — 8x8 satranç tahtası; tam yasal hamle kontrolü, rok, geçerken
+//!   alma, terfi, şah mat/pat ve iki oyunculu oynanış.
 //!
-//! Tüm oyun mantığı bu modül içinde yer alır; `game_core` sadece dama motoru
-//! için korunur. Ses, ana döngüde (`GameApp::sound_pending`) PC Speaker / HDA
-//! üzerinden çalınır.
+//! Tüm oyun mantığı (dama, mayın tarlası, satranç) `game_core` içinde saf
+//! olarak tutulur; bu modül yalnızca çizim ve girdi yönetimini yapar. Ses,
+//! ana döngüde (`GameApp::sound_pending`) PC Speaker / HDA üzerinden çalınır.
 
 use crate::drivers::video::Framebuffer;
 use crate::gui::{scaled_statusbar_h, sp, Color, MinGuiCompositor, TextBuf};
 
-use super::game_core::{self, Board, Move};
+use super::game_core::{
+    self, Board, CellState, ChessBoard, ChessMove, ChessSide, ChessStatus, GameState, Minesweeper,
+    Move, PieceKind,
+};
 
 /// Bölüm sekmesi sayısı.
 pub const TAB_COUNT: usize = 3;
@@ -24,9 +28,13 @@ const TAB_CHESS: usize = 2;
 const TAB_Y: usize = 28;
 const TAB_H: usize = 24;
 const TAB_W: usize = 96;
+const TOOLBAR_Y: usize = TAB_Y + TAB_H + 4;
+const TOOLBAR_H: usize = 20;
 
+/// Durum çubuğu iki satır (bilgi + ipucu) gösterebildiği için normal
+/// durum çubuğundan biraz daha yüksektir.
 fn status_h() -> usize {
-    scaled_statusbar_h()
+    scaled_statusbar_h() + sp(10)
 }
 
 /// Ses efektleri: ana döngü bu kimliğe bakarak ton üretir.
@@ -38,753 +46,6 @@ pub enum Sound {
     Win,
     Lose,
     Tick,
-}
-
-/// Oyun durumu.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum GameState {
-    Playing,
-    Won,
-    Lost,
-}
-
-/// Mayın Tarlası hücre durumu.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum CellState {
-    #[default]
-    Hidden,
-    Revealed,
-    Flagged,
-}
-
-/// Mayın Tarlası hücresi.
-#[derive(Clone, Copy, Default)]
-pub struct MineCell {
-    pub state: CellState,
-    pub is_mine: bool,
-    pub adjacent: u8,
-}
-
-/// Mayın Tarlası oyunu.
-pub struct Minesweeper {
-    pub level: usize,
-    pub rows: usize,
-    pub cols: usize,
-    pub mine_count: usize,
-    pub cells: [MineCell; 81], // 9x9 max
-    pub revealed: usize,
-    pub flagged: usize,
-    pub state: GameState,
-    pub first_click: bool,
-    pub seed: u64,
-}
-
-impl Minesweeper {
-    pub fn new() -> Self {
-        Self {
-            level: 0,
-            rows: 9,
-            cols: 9,
-            mine_count: 10,
-            cells: [MineCell::default(); 81],
-            revealed: 0,
-            flagged: 0,
-            state: GameState::Playing,
-            first_click: true,
-            seed: 0x5EED_1234,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.cells = [MineCell::default(); 81];
-        self.revealed = 0;
-        self.flagged = 0;
-        self.state = GameState::Playing;
-        self.first_click = true;
-    }
-
-    pub fn set_level(&mut self, level: usize) {
-        self.level = level.min(2);
-        let (rows, cols, mines) = match self.level {
-            1 => (9, 9, 18),
-            2 => (9, 9, 28),
-            _ => (9, 9, 10),
-        };
-        self.rows = rows;
-        self.cols = cols;
-        self.mine_count = mines;
-        self.reset();
-    }
-
-    fn rng_next(&mut self) -> u64 {
-        self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-        self.seed
-    }
-
-    /// Mayınları yerleştir (ilk tıklama hücresi ve komşuları mayın olmasın).
-    fn place_mines(&mut self, safe_r: usize, safe_c: usize) {
-        let mut placed = 0;
-        while placed < self.mine_count {
-            let r = (self.rng_next() as usize) % self.rows;
-            let c = (self.rng_next() as usize) % self.cols;
-            let idx = r * self.cols + c;
-            if (r == safe_r && c == safe_c) || self.cells[idx].is_mine {
-                continue;
-            }
-            // Komşu hücreleri de güvenli tut (3x3 etrafı).
-            let mut safe = true;
-            for dr in 0isize..=2 {
-                for dc in 0isize..=2 {
-                    let nr = r as isize + dr - 1;
-                    let nc = c as isize + dc - 1;
-                    if nr == safe_r as isize && nc == safe_c as isize {
-                        safe = false;
-                    }
-                }
-            }
-            if !safe {
-                continue;
-            }
-            self.cells[idx].is_mine = true;
-            placed += 1;
-        }
-        // Komşu mayın sayılarını hesapla.
-        for r in 0..self.rows {
-            for c in 0..self.cols {
-                let idx = r * self.cols + c;
-                if self.cells[idx].is_mine {
-                    continue;
-                }
-                let mut cnt = 0u8;
-                for dr in 0isize..=2 {
-                    for dc in 0isize..=2 {
-                        if dr == 1 && dc == 1 {
-                            continue;
-                        }
-                        let nr = r as isize + dr - 1;
-                        let nc = c as isize + dc - 1;
-                        if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize
-                        {
-                            continue;
-                        }
-                        let nidx = nr as usize * self.cols + nc as usize;
-                        if self.cells[nidx].is_mine {
-                            cnt += 1;
-                        }
-                    }
-                }
-                self.cells[idx].adjacent = cnt;
-            }
-        }
-    }
-
-    /// Hücreyi açar. Mayına basarsa kaybet, boşsa komşuları da açar.
-    pub fn reveal(&mut self, r: usize, c: usize) {
-        if r >= self.rows || c >= self.cols {
-            return;
-        }
-        let idx = r * self.cols + c;
-        let cell = &self.cells[idx];
-        if cell.state != CellState::Hidden {
-            return;
-        }
-        if self.first_click {
-            self.first_click = false;
-            self.place_mines(r, c);
-            // İlk tıklama mayın olmamalı; eğer mayın çıktıysa taşı.
-            if self.cells[idx].is_mine {
-                self.cells[idx].is_mine = false;
-                // Komşuları yeniden hesapla.
-                for rr in 0..self.rows {
-                    for cc in 0..self.cols {
-                        let i = rr * self.cols + cc;
-                        if self.cells[i].is_mine {
-                            continue;
-                        }
-                        let mut cnt = 0u8;
-                        for dr in 0isize..=2 {
-                            for dc in 0isize..=2 {
-                                if dr == 1 && dc == 1 {
-                                    continue;
-                                }
-                                let nr = rr as isize + dr - 1;
-                                let nc = cc as isize + dc - 1;
-                                if nr < 0
-                                    || nr >= self.rows as isize
-                                    || nc < 0
-                                    || nc >= self.cols as isize
-                                {
-                                    continue;
-                                }
-                                let ni = nr as usize * self.cols + nc as usize;
-                                if self.cells[ni].is_mine {
-                                    cnt += 1;
-                                }
-                            }
-                        }
-                        self.cells[i].adjacent = cnt;
-                    }
-                }
-            }
-        }
-        self.cells[idx].state = CellState::Revealed;
-        self.revealed += 1;
-        if self.cells[idx].is_mine {
-            self.state = GameState::Lost;
-            // Tüm mayınları göster.
-            for rr in 0..self.rows {
-                for cc in 0..self.cols {
-                    let i = rr * self.cols + cc;
-                    if self.cells[i].is_mine {
-                        self.cells[i].state = CellState::Revealed;
-                    }
-                }
-            }
-            return;
-        }
-        if self.cells[idx].adjacent == 0 {
-            for dr in 0isize..=2 {
-                for dc in 0isize..=2 {
-                    if dr == 1 && dc == 1 {
-                        continue;
-                    }
-                    let nr = r as isize + dr - 1;
-                    let nc = c as isize + dc - 1;
-                    if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize {
-                        continue;
-                    }
-                    self.reveal(nr as usize, nc as usize);
-                }
-            }
-        }
-        self.check_win();
-    }
-
-    pub fn toggle_flag(&mut self, r: usize, c: usize) {
-        if r >= self.rows || c >= self.cols {
-            return;
-        }
-        let idx = r * self.cols + c;
-        let cell = &mut self.cells[idx];
-        if cell.state == CellState::Hidden {
-            cell.state = CellState::Flagged;
-            self.flagged += 1;
-        } else if cell.state == CellState::Flagged {
-            cell.state = CellState::Hidden;
-            self.flagged = self.flagged.saturating_sub(1);
-        }
-    }
-
-    fn check_win(&mut self) {
-        if self.state != GameState::Playing {
-            return;
-        }
-        let safe_cells = self.rows * self.cols - self.mine_count;
-        if self.revealed >= safe_cells {
-            self.state = GameState::Won;
-        }
-    }
-}
-
-impl Default for Minesweeper {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Satranç taşı türleri.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum PieceKind {
-    #[default]
-    Pawn,
-    Rook,
-    Knight,
-    Bishop,
-    Queen,
-    King,
-}
-
-/// Satranç rengi.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum ChessSide {
-    #[default]
-    White,
-    Black,
-}
-
-/// Satranç taşı.
-#[derive(Clone, Copy, Default)]
-pub struct ChessPiece {
-    pub kind: PieceKind,
-    pub side: ChessSide,
-    pub has_moved: bool,
-}
-
-/// Satranç hamlesi.
-#[derive(Clone, Copy)]
-pub struct ChessMove {
-    pub from: usize,
-    pub to: usize,
-    pub promotion: Option<PieceKind>,
-}
-
-/// Satranç tahtası (8x8).
-pub struct ChessBoard {
-    pub cells: [[Option<ChessPiece>; 8]; 8],
-    pub side_to_move: ChessSide,
-    pub state: GameState,
-    pub halfmove_clock: u32,
-    pub fullmove_number: u32,
-}
-
-impl ChessBoard {
-    pub fn new() -> Self {
-        let mut cells = [[None; 8]; 8];
-        // Siyah arka sıra (satır 0).
-        cells[0][0] = Some(ChessPiece {
-            kind: PieceKind::Rook,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][1] = Some(ChessPiece {
-            kind: PieceKind::Knight,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][2] = Some(ChessPiece {
-            kind: PieceKind::Bishop,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][3] = Some(ChessPiece {
-            kind: PieceKind::Queen,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][4] = Some(ChessPiece {
-            kind: PieceKind::King,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][5] = Some(ChessPiece {
-            kind: PieceKind::Bishop,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][6] = Some(ChessPiece {
-            kind: PieceKind::Knight,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        cells[0][7] = Some(ChessPiece {
-            kind: PieceKind::Rook,
-            side: ChessSide::Black,
-            has_moved: false,
-        });
-        for slot in cells[1].iter_mut() {
-            *slot = Some(ChessPiece {
-                kind: PieceKind::Pawn,
-                side: ChessSide::Black,
-                has_moved: false,
-            });
-        }
-        // Beyaz arka sıra (satır 7).
-        cells[7][0] = Some(ChessPiece {
-            kind: PieceKind::Rook,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][1] = Some(ChessPiece {
-            kind: PieceKind::Knight,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][2] = Some(ChessPiece {
-            kind: PieceKind::Bishop,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][3] = Some(ChessPiece {
-            kind: PieceKind::Queen,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][4] = Some(ChessPiece {
-            kind: PieceKind::King,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][5] = Some(ChessPiece {
-            kind: PieceKind::Bishop,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][6] = Some(ChessPiece {
-            kind: PieceKind::Knight,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        cells[7][7] = Some(ChessPiece {
-            kind: PieceKind::Rook,
-            side: ChessSide::White,
-            has_moved: false,
-        });
-        for slot in cells[6].iter_mut() {
-            *slot = Some(ChessPiece {
-                kind: PieceKind::Pawn,
-                side: ChessSide::White,
-                has_moved: false,
-            });
-        }
-        Self {
-            cells,
-            side_to_move: ChessSide::White,
-            state: GameState::Playing,
-            halfmove_clock: 0,
-            fullmove_number: 1,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        *self = Self::new();
-    }
-
-    fn in_bounds(r: isize, c: isize) -> bool {
-        (0..8).contains(&r) && (0..8).contains(&c)
-    }
-
-    /// Verilen karedeki taşı hareket ettirebilecek hedefleri listeler (şah kontrolü hariç basit).
-    fn generate_pseudo_legal(&self, r: usize, c: usize, out: &mut alloc::vec::Vec<ChessMove>) {
-        let piece = match self.cells[r][c] {
-            Some(p) => p,
-            None => return,
-        };
-        match piece.kind {
-            PieceKind::Pawn => {
-                let dir = if piece.side == ChessSide::White {
-                    -1
-                } else {
-                    1
-                };
-                let start_row = if piece.side == ChessSide::White { 6 } else { 1 };
-                // İleri adım.
-                let nr = r as isize + dir;
-                if Self::in_bounds(nr, c as isize) && self.cells[nr as usize][c].is_none() {
-                    out.push(ChessMove {
-                        from: r * 8 + c,
-                        to: nr as usize * 8 + c,
-                        promotion: None,
-                    });
-                    // İki kare ileri.
-                    if r == start_row {
-                        let nr2 = r as isize + 2 * dir;
-                        if Self::in_bounds(nr2, c as isize) && self.cells[nr2 as usize][c].is_none()
-                        {
-                            out.push(ChessMove {
-                                from: r * 8 + c,
-                                to: nr2 as usize * 8 + c,
-                                promotion: None,
-                            });
-                        }
-                    }
-                }
-                // Çapraz yeme.
-                for dc in [-1isize, 1] {
-                    let nr = r as isize + dir;
-                    let nc = c as isize + dc;
-                    if Self::in_bounds(nr, nc) {
-                        if let Some(p) = self.cells[nr as usize][nc as usize] {
-                            if p.side != piece.side {
-                                out.push(ChessMove {
-                                    from: r * 8 + c,
-                                    to: nr as usize * 8 + nc as usize,
-                                    promotion: None,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            PieceKind::Rook => {
-                let dirs = [(-1isize, 0), (1, 0), (0, -1), (0, 1)];
-                for (dr, dc) in dirs.iter() {
-                    let mut nr = r as isize;
-                    let mut nc = c as isize;
-                    for _ in 0..7 {
-                        nr += dr;
-                        nc += dc;
-                        if !Self::in_bounds(nr, nc) {
-                            break;
-                        }
-                        match self.cells[nr as usize][nc as usize] {
-                            None => {
-                                out.push(ChessMove {
-                                    from: r * 8 + c,
-                                    to: nr as usize * 8 + nc as usize,
-                                    promotion: None,
-                                });
-                            }
-                            Some(p) => {
-                                if p.side != piece.side {
-                                    out.push(ChessMove {
-                                        from: r * 8 + c,
-                                        to: nr as usize * 8 + nc as usize,
-                                        promotion: None,
-                                    });
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            PieceKind::Knight => {
-                let dirs = [
-                    (-2, -1),
-                    (-2, 1),
-                    (-1, -2),
-                    (-1, 2),
-                    (1, -2),
-                    (1, 2),
-                    (2, -1),
-                    (2, 1),
-                ];
-                for (dr, dc) in dirs.iter() {
-                    let nr = r as isize + dr;
-                    let nc = c as isize + dc;
-                    if !Self::in_bounds(nr, nc) {
-                        continue;
-                    }
-                    match self.cells[nr as usize][nc as usize] {
-                        None => {
-                            out.push(ChessMove {
-                                from: r * 8 + c,
-                                to: nr as usize * 8 + nc as usize,
-                                promotion: None,
-                            });
-                        }
-                        Some(p) => {
-                            if p.side != piece.side {
-                                out.push(ChessMove {
-                                    from: r * 8 + c,
-                                    to: nr as usize * 8 + nc as usize,
-                                    promotion: None,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            PieceKind::Bishop => {
-                let dirs = [(-1, -1), (-1, 1), (1, -1), (1, 1)];
-                for (dr, dc) in dirs.iter() {
-                    let mut nr = r as isize;
-                    let mut nc = c as isize;
-                    for _ in 0..7 {
-                        nr += dr;
-                        nc += dc;
-                        if !Self::in_bounds(nr, nc) {
-                            break;
-                        }
-                        match self.cells[nr as usize][nc as usize] {
-                            None => {
-                                out.push(ChessMove {
-                                    from: r * 8 + c,
-                                    to: nr as usize * 8 + nc as usize,
-                                    promotion: None,
-                                });
-                            }
-                            Some(p) => {
-                                if p.side != piece.side {
-                                    out.push(ChessMove {
-                                        from: r * 8 + c,
-                                        to: nr as usize * 8 + nc as usize,
-                                        promotion: None,
-                                    });
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            PieceKind::Queen => {
-                let dirs = [
-                    (-1, -1),
-                    (-1, 0),
-                    (-1, 1),
-                    (0, -1),
-                    (0, 1),
-                    (1, -1),
-                    (1, 0),
-                    (1, 1),
-                ];
-                for (dr, dc) in dirs.iter() {
-                    let mut nr = r as isize;
-                    let mut nc = c as isize;
-                    for _ in 0..7 {
-                        nr += dr;
-                        nc += dc;
-                        if !Self::in_bounds(nr, nc) {
-                            break;
-                        }
-                        match self.cells[nr as usize][nc as usize] {
-                            None => {
-                                out.push(ChessMove {
-                                    from: r * 8 + c,
-                                    to: nr as usize * 8 + nc as usize,
-                                    promotion: None,
-                                });
-                            }
-                            Some(p) => {
-                                if p.side != piece.side {
-                                    out.push(ChessMove {
-                                        from: r * 8 + c,
-                                        to: nr as usize * 8 + nc as usize,
-                                        promotion: None,
-                                    });
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            PieceKind::King => {
-                let dirs = [
-                    (-1, -1),
-                    (-1, 0),
-                    (-1, 1),
-                    (0, -1),
-                    (0, 1),
-                    (1, -1),
-                    (1, 0),
-                    (1, 1),
-                ];
-                for (dr, dc) in dirs.iter() {
-                    let nr = r as isize + dr;
-                    let nc = c as isize + dc;
-                    if !Self::in_bounds(nr, nc) {
-                        continue;
-                    }
-                    match self.cells[nr as usize][nc as usize] {
-                        None => {
-                            out.push(ChessMove {
-                                from: r * 8 + c,
-                                to: nr as usize * 8 + nc as usize,
-                                promotion: None,
-                            });
-                        }
-                        Some(p) => {
-                            if p.side != piece.side {
-                                out.push(ChessMove {
-                                    from: r * 8 + c,
-                                    to: nr as usize * 8 + nc as usize,
-                                    promotion: None,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Tüm pseudo-legal hamleleri listeler.
-    pub fn generate_all(&self, side: ChessSide, out: &mut alloc::vec::Vec<ChessMove>) {
-        for r in 0..8 {
-            for c in 0..8 {
-                if let Some(p) = self.cells[r][c] {
-                    if p.side == side {
-                        self.generate_pseudo_legal(r, c, out);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Hamleyi uygular (şah kontrolü kontrolü yapılmadan basit uygulama).
-    pub fn apply(&mut self, mv: &ChessMove) -> bool {
-        let (fr, fc) = (mv.from / 8, mv.from % 8);
-        let (tr, tc) = (mv.to / 8, mv.to % 8);
-        let piece = match self.cells[fr][fc] {
-            Some(p) => p,
-            None => return false,
-        };
-        if piece.side != self.side_to_move {
-            return false;
-        }
-        // Hedef kendi taşı mı?
-        if let Some(p) = self.cells[tr][tc] {
-            if p.side == piece.side {
-                return false;
-            }
-        }
-        // Geçerli mi?
-        let mut legal: alloc::vec::Vec<ChessMove> = alloc::vec::Vec::new();
-        self.generate_pseudo_legal(fr, fc, &mut legal);
-        if !legal.iter().any(|m| m.to == mv.to) {
-            return false;
-        }
-        self.cells[tr][tc] = Some(ChessPiece {
-            kind: piece.kind,
-            side: piece.side,
-            has_moved: true,
-        });
-        self.cells[fr][fc] = None;
-        self.side_to_move = match piece.side {
-            ChessSide::White => ChessSide::Black,
-            ChessSide::Black => ChessSide::White,
-        };
-        self.fullmove_number += 1;
-        true
-    }
-
-    /// Şahın konumu.
-    fn find_king(&self, side: ChessSide) -> Option<(usize, usize)> {
-        for (r, row) in self.cells.iter().enumerate() {
-            for (c, cell) in row.iter().enumerate() {
-                if let Some(p) = *cell {
-                    if p.kind == PieceKind::King && p.side == side {
-                        return Some((r, c));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Belirli tarafın şahı tehdit altında mı?
-    pub fn is_in_check(&self, side: ChessSide) -> bool {
-        let king = match self.find_king(side) {
-            Some(k) => k,
-            None => return false,
-        };
-        let enemy = match side {
-            ChessSide::White => ChessSide::Black,
-            ChessSide::Black => ChessSide::White,
-        };
-        for r in 0..8 {
-            for c in 0..8 {
-                if let Some(p) = self.cells[r][c] {
-                    if p.side == enemy {
-                        let mut targets: alloc::vec::Vec<ChessMove> = alloc::vec::Vec::new();
-                        self.generate_pseudo_legal(r, c, &mut targets);
-                        if targets.iter().any(|m| m.to == king.0 * 8 + king.1) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
-    }
-}
-
-impl Default for ChessBoard {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Satranç seçili kare ve hedefleri.
@@ -807,11 +68,23 @@ pub struct GameApp {
     pub losses: u32,
     pub draws: u32,
     pub last_move: Option<Move>,
+    /// Oyuncunun hamlesinden önceki konumlar (geri al için).
+    pub history: alloc::vec::Vec<Board>,
+    /// Yapay zekâ derinliği: 0 kolay, 1 orta, 2 zor.
+    pub ai_level: usize,
     // --- Mayın Tarlası ---
     pub mines: Minesweeper,
+    pub mine_started_ms: Option<u64>,
+    pub mine_elapsed_ms: u64,
+    /// Seviye başına en iyi süre (ms); 0 = henüz yok.
+    pub mine_best_ms: [u64; 3],
     // --- Satranç ---
     pub chess: ChessBoard,
     pub chess_sel: ChessSel,
+    pub chess_history: alloc::vec::Vec<ChessBoard>,
+    pub chess_last: Option<ChessMove>,
+    /// Terfi seçimi bekleyen hamle.
+    pub chess_pending: Option<ChessMove>,
     // --- Ses ---
     pub sound_pending: Sound,
     pub sound_volume: u8,
@@ -839,12 +112,20 @@ impl GameApp {
             losses: 0,
             draws: 0,
             last_move: None,
+            history: alloc::vec::Vec::new(),
+            ai_level: 1,
             mines: Minesweeper::new(),
+            mine_started_ms: None,
+            mine_elapsed_ms: 0,
+            mine_best_ms: [0; 3],
             chess: ChessBoard::new(),
             chess_sel: ChessSel {
                 selected: None,
                 targets: alloc::vec::Vec::new(),
             },
+            chess_history: alloc::vec::Vec::new(),
+            chess_last: None,
+            chess_pending: None,
             sound_pending: Sound::None,
             sound_volume: 60,
             // Oyun sesleri kullanıcı özellikle açana kadar kapalıdır.
@@ -881,9 +162,9 @@ impl GameApp {
         )
     }
 
-    /// Oyun alanı: sekmenin altında kalan kare alan.
+    /// Oyun alanı: araç çubuğunun altında kalan kare alan.
     pub fn board_rect(win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let top = sp(TAB_Y + TAB_H + 8);
+        let top = sp(TOOLBAR_Y + TOOLBAR_H + 6);
         let avail_h = win_h.saturating_sub(top + status_h() + sp(6) + sp(34));
         let avail_w = win_w.saturating_sub(sp(16));
         let side = avail_w.min(avail_h).max(sp(96));
@@ -903,13 +184,42 @@ impl GameApp {
     }
 
     pub fn mine_level_rect(level: usize) -> (usize, usize, usize, usize) {
-        let (x, y, _, h) = Self::sound_rect();
-        (x + sp(80) + level * sp(58), y, sp(54), h)
+        (sp(8) + level * sp(58), sp(TOOLBAR_Y), sp(54), sp(TOOLBAR_H))
+    }
+
+    /// Dama zorluk düğmeleri (Mayın Tarlası düğmeleriyle aynı konum).
+    pub fn ai_level_rect(level: usize) -> (usize, usize, usize, usize) {
+        Self::mine_level_rect(level)
+    }
+
+    /// "Geri Al" düğmesi: araç çubuğunda zorluk düğmelerinin sağında.
+    pub fn undo_rect(tab: usize) -> (usize, usize, usize, usize) {
+        let x = if tab == TAB_GAME {
+            sp(8) + 3 * sp(58) + sp(6)
+        } else {
+            sp(8)
+        };
+        (x, sp(TOOLBAR_Y), sp(72), sp(TOOLBAR_H))
     }
 
     pub fn set_mine_level(&mut self, level: usize) {
         self.mines.set_level(level);
+        self.mine_started_ms = None;
+        self.mine_elapsed_ms = 0;
         self.sound_pending = Sound::None;
+    }
+
+    pub fn set_ai_level(&mut self, level: usize) {
+        self.ai_level = level.min(2);
+        self.sound_pending = Sound::Tick;
+    }
+
+    pub fn ai_depth(&self) -> u8 {
+        match self.ai_level {
+            0 => 1,
+            2 => 3,
+            _ => 2,
+        }
     }
 
     pub fn toggle_sound(&mut self) {
@@ -928,6 +238,7 @@ impl GameApp {
         self.player_light = player_light;
         self.selected = None;
         self.targets.clear();
+        self.history.clear();
         self.last_move = None;
         self.thinking = false;
         self.ai_wait = 0;
@@ -957,7 +268,12 @@ impl GameApp {
             return;
         }
         if let Some(mv) = self.targets.iter().find(|m| m.to() == index).copied() {
+            let previous = self.board;
             if self.board.apply(&mv) {
+                self.history.push(previous);
+                if self.history.len() > 64 {
+                    self.history.remove(0);
+                }
                 self.last_move = Some(mv);
                 self.sound_pending = if mv.is_capture() {
                     Sound::Capture
@@ -1033,41 +349,151 @@ impl GameApp {
         }
     }
 
+    /// Oyuncunun son hamlesini (ve varsa bilgisayarın cevabını) geri alır.
+    pub fn undo_checkers(&mut self) {
+        let Some(previous) = self.history.pop() else {
+            self.message = crate::gui::ui_text("Geri alınacak hamle yok", "No move to undo");
+            self.sound_pending = Sound::Tick;
+            return;
+        };
+        // Bitmiş bir oyun geri alınıyorsa istatistiği de geri al.
+        if let Some(light_won) = self.board.winner() {
+            if light_won == self.player_light {
+                self.wins = self.wins.saturating_sub(1);
+            } else {
+                self.losses = self.losses.saturating_sub(1);
+            }
+        } else if self.board.is_draw() {
+            self.draws = self.draws.saturating_sub(1);
+        }
+        self.board = previous;
+        self.selected = None;
+        self.targets.clear();
+        self.last_move = None;
+        self.thinking = false;
+        self.ai_wait = 0;
+        self.message = crate::gui::ui_text("Hamle geri alındı", "Move undone");
+        self.sound_pending = Sound::Tick;
+    }
+
     // -----------------------------------------------------------------------
     // Mayın Tarlası girdisi
     // -----------------------------------------------------------------------
 
     pub fn click_mine_cell(&mut self, r: usize, c: usize) {
-        if self.tab != TAB_MINES {
+        if self.tab != TAB_MINES || self.mines.state != GameState::Playing {
             return;
         }
-        if self.mines.state != GameState::Playing {
-            return;
+        let idx = r * self.mines.cols + c;
+        let cell_state = self
+            .mines
+            .cells
+            .get(idx)
+            .map(|cell| cell.state)
+            .unwrap_or(CellState::Hidden);
+        match cell_state {
+            CellState::Revealed => {
+                if self.mines.chord(r, c) {
+                    self.after_mine_action();
+                } else {
+                    self.sound_pending = Sound::Tick;
+                }
+                return;
+            }
+            CellState::Flagged => {
+                self.sound_pending = Sound::Tick;
+                return;
+            }
+            CellState::Hidden => {}
         }
-        self.mines.reveal(r, c);
-        self.sound_pending = if self.mines.state == GameState::Won {
-            Sound::Win
-        } else if self.mines.state == GameState::Lost {
-            Sound::Lose
-        } else {
-            Sound::Move
+        if self.mine_started_ms.is_none() {
+            self.mine_started_ms = Some(crate::monotonic_ms());
+        }
+        if self.mines.reveal(r, c) {
+            self.after_mine_action();
+        }
+    }
+
+    fn after_mine_action(&mut self) {
+        match self.mines.state {
+            GameState::Won => {
+                self.stop_mine_timer();
+                self.sound_pending = Sound::Win;
+            }
+            GameState::Lost => {
+                self.stop_mine_timer();
+                self.sound_pending = Sound::Lose;
+            }
+            GameState::Playing => self.sound_pending = Sound::Move,
+        }
+    }
+
+    fn stop_mine_timer(&mut self) {
+        let Some(start) = self.mine_started_ms.take() else {
+            return;
         };
+        let elapsed = crate::monotonic_ms().saturating_sub(start);
+        self.mine_elapsed_ms = elapsed;
+        if self.mines.state == GameState::Won {
+            let level = self.mines.level.min(2);
+            let best = &mut self.mine_best_ms[level];
+            if *best == 0 || elapsed < *best {
+                *best = elapsed;
+            }
+        }
     }
 
     pub fn right_click_mine_cell(&mut self, r: usize, c: usize) {
-        if self.tab != TAB_MINES {
+        if self.tab != TAB_MINES || self.mines.state != GameState::Playing {
             return;
         }
-        if self.mines.state != GameState::Playing {
-            return;
+        if self.mines.toggle_flag(r, c) {
+            self.sound_pending = Sound::Tick;
         }
-        self.mines.toggle_flag(r, c);
-        self.sound_pending = Sound::Tick;
     }
 
     pub fn reset_mines(&mut self) {
         self.mines.reset();
+        self.mine_started_ms = None;
+        self.mine_elapsed_ms = 0;
         self.sound_pending = Sound::Tick;
+    }
+
+    /// Piksel koordinatını mayın hücresine çevirir.
+    fn cell_of_mines(
+        px: usize,
+        py: usize,
+        rect: (usize, usize, usize, usize),
+        rows: usize,
+        cols: usize,
+    ) -> Option<(usize, usize)> {
+        let (x, y, w, h) = rect;
+        if w == 0 || h == 0 || px < x || py < y || px >= x + w || py >= y + h {
+            return None;
+        }
+        let cw = (w / cols).max(1);
+        let ch = (h / rows).max(1);
+        let col = ((px - x) / cw).min(cols - 1);
+        let row = ((py - y) / ch).min(rows - 1);
+        Some((row, col))
+    }
+
+    /// Pencere içi sağ tıklama: mayın tarlasında bayrak koyar/kaldırır.
+    pub fn right_click(&mut self, px: usize, py: usize, w: usize, h: usize) -> bool {
+        if self.tab != TAB_MINES {
+            return false;
+        }
+        let Some((r, c)) = Self::cell_of_mines(
+            px,
+            py,
+            Self::board_rect(w, h),
+            self.mines.rows,
+            self.mines.cols,
+        ) else {
+            return false;
+        };
+        self.right_click_mine_cell(r, c);
+        true
     }
 
     // -----------------------------------------------------------------------
@@ -1075,51 +501,186 @@ impl GameApp {
     // -----------------------------------------------------------------------
 
     pub fn click_chess_cell(&mut self, r: usize, c: usize) {
-        if self.tab != TAB_CHESS {
+        if self.tab != TAB_CHESS || self.chess_pending.is_some() {
             return;
         }
-        if self.chess.state != GameState::Playing {
+        if self.chess.status != ChessStatus::Playing {
             return;
         }
         let idx = r * 8 + c;
         // Seçili karenin hedefi mi?
         if let Some(_sel) = self.chess_sel.selected {
             if let Some(mv) = self.chess_sel.targets.iter().find(|m| m.to == idx).copied() {
-                if self.chess.apply(&mv) {
-                    self.sound_pending = Sound::Move;
-                    if self.chess.is_in_check(self.chess.side_to_move) {
-                        self.message = crate::gui::ui_text("Şah!", "Check!");
-                    }
+                if mv.promotion.is_some() {
+                    // Terfi seçimi için hamleyi beklet.
+                    self.chess_pending = Some(mv);
+                    self.sound_pending = Sound::Tick;
+                } else {
+                    self.commit_chess_move(mv, None);
                 }
-                self.chess_sel.selected = None;
-                self.chess_sel.targets.clear();
                 return;
             }
         }
-        // Yeni taş seçimi (sıraındaki oyuncunun taşı).
+        // Yeni taş seçimi (sırası gelen oyuncunun taşı).
         self.chess_sel.selected = None;
         self.chess_sel.targets.clear();
         if let Some(piece) = self.chess.cells[r][c] {
-            let is_player = match self.chess.side_to_move {
-                ChessSide::White => piece.side == ChessSide::White,
-                ChessSide::Black => piece.side == ChessSide::Black,
-            };
-            if is_player {
-                let mut list: alloc::vec::Vec<ChessMove> = alloc::vec::Vec::new();
-                self.chess.generate_pseudo_legal(r, c, &mut list);
-                self.chess_sel.selected = Some((r, c));
-                self.chess_sel.targets = list;
+            if piece.side == self.chess.side_to_move {
+                let list = self.chess.legal_from(r, c);
+                if list.is_empty() {
+                    self.message =
+                        crate::gui::ui_text("Bu taşın oynayabileceği hamle yok", "No legal move");
+                } else {
+                    self.chess_sel.selected = Some((r, c));
+                    self.chess_sel.targets = list;
+                    self.message =
+                        crate::gui::ui_text("Hedef kareye tıkla", "Click a target square");
+                }
                 self.sound_pending = Sound::Tick;
             }
         }
+    }
+
+    /// Doğrulanmış satranç hamlesini uygular ve geçmişe kaydeder.
+    pub fn commit_chess_move(&mut self, mv: ChessMove, promotion: Option<PieceKind>) {
+        if self.chess.status != ChessStatus::Playing {
+            return;
+        }
+        let mut mv = mv;
+        if mv.promotion.is_some() {
+            mv.promotion = Some(promotion.unwrap_or(PieceKind::Queen));
+        }
+        let (fr, fc) = ChessBoard::coords(mv.from);
+        let (tr, tc) = ChessBoard::coords(mv.to);
+        let capture = self.chess.cells[tr][tc].is_some()
+            || self.chess.cells[fr][fc].is_some_and(|p| p.kind == PieceKind::Pawn && fc != tc);
+        let previous = self.chess;
+        if self.chess.apply(&mv) {
+            self.chess_history.push(previous);
+            if self.chess_history.len() > 128 {
+                self.chess_history.remove(0);
+            }
+            self.chess_last = Some(mv);
+            self.chess_pending = None;
+            self.chess_sel.selected = None;
+            self.chess_sel.targets.clear();
+            self.update_chess_message();
+            self.sound_pending = match self.chess.status {
+                ChessStatus::Checkmate(_) => Sound::Win,
+                _ if capture => Sound::Capture,
+                _ => Sound::Move,
+            };
+        }
+    }
+
+    /// Terfi panelinde seçilen taşı uygular.
+    pub fn choose_promotion(&mut self, kind: PieceKind) {
+        if let Some(mv) = self.chess_pending.take() {
+            self.commit_chess_move(mv, Some(kind));
+        }
+    }
+
+    pub fn cancel_promotion(&mut self) {
+        self.chess_pending = None;
+        self.message = crate::gui::ui_text("Terfi iptal edildi", "Promotion cancelled");
+        self.sound_pending = Sound::Tick;
+    }
+
+    fn update_chess_message(&mut self) {
+        self.message = match self.chess.status {
+            ChessStatus::Checkmate(ChessSide::White) => {
+                crate::gui::ui_text("Şah mat! Beyaz kazandı", "Checkmate! White wins")
+            }
+            ChessStatus::Checkmate(ChessSide::Black) => {
+                crate::gui::ui_text("Şah mat! Siyah kazandı", "Checkmate! Black wins")
+            }
+            ChessStatus::Stalemate => crate::gui::ui_text("Pat! Berabere", "Stalemate! Draw"),
+            ChessStatus::Draw => crate::gui::ui_text("Berabere", "Draw"),
+            ChessStatus::Playing => {
+                if self.chess.is_in_check(self.chess.side_to_move) {
+                    crate::gui::ui_text("Şah!", "Check!")
+                } else {
+                    crate::gui::ui_text("Hedef kareye tıkla", "Click a target square")
+                }
+            }
+        };
+    }
+
+    /// Satrançta son hamleyi geri alır.
+    pub fn undo_chess(&mut self) {
+        if self.chess_pending.take().is_some() {
+            self.message = crate::gui::ui_text("Terfi iptal edildi", "Promotion cancelled");
+            self.sound_pending = Sound::Tick;
+            return;
+        }
+        let Some(previous) = self.chess_history.pop() else {
+            self.message = crate::gui::ui_text("Geri alınacak hamle yok", "No move to undo");
+            self.sound_pending = Sound::Tick;
+            return;
+        };
+        self.chess = previous;
+        self.chess_sel.selected = None;
+        self.chess_sel.targets.clear();
+        self.chess_last = None;
+        self.message = crate::gui::ui_text("Hamle geri alındı", "Move undone");
+        self.sound_pending = Sound::Tick;
     }
 
     pub fn reset_chess(&mut self) {
         self.chess.reset();
         self.chess_sel.selected = None;
         self.chess_sel.targets.clear();
+        self.chess_history.clear();
+        self.chess_last = None;
+        self.chess_pending = None;
         self.message = "";
         self.sound_pending = Sound::Tick;
+    }
+
+    /// Terfi panelindeki dört düğmenin dikdörtgenleri (Vezir, Kale, Fil, At).
+    pub fn promotion_rects(win_w: usize, win_h: usize) -> [(usize, usize, usize, usize); 4] {
+        let (bx, by, bw, bh) = Self::board_rect(win_w, win_h);
+        let cell = (bw / 8).max(sp(20));
+        let gap = sp(6);
+        let total = 4 * cell + 3 * gap;
+        let x = bx + bw.saturating_sub(total) / 2;
+        let y = by + bh.saturating_sub(cell) / 2;
+        [
+            (x, y, cell, cell),
+            (x + cell + gap, y, cell, cell),
+            (x + 2 * (cell + gap), y, cell, cell),
+            (x + 3 * (cell + gap), y, cell, cell),
+        ]
+    }
+
+    /// Terfi panelinde tıklamayı işler. Panel açıkken tüm tıklamaları tüketir.
+    pub fn click_promotion(&mut self, px: usize, py: usize, w: usize, h: usize) -> bool {
+        if self.chess_pending.is_none() {
+            return false;
+        }
+        let kinds = [
+            PieceKind::Queen,
+            PieceKind::Rook,
+            PieceKind::Bishop,
+            PieceKind::Knight,
+        ];
+        for (i, rect) in Self::promotion_rects(w, h).iter().enumerate() {
+            if crate::gui::in_rect(px, py, *rect) {
+                self.choose_promotion(kinds[i]);
+                return true;
+            }
+        }
+        // Panel dışına tıklamak terfiyi iptal eder.
+        self.cancel_promotion();
+        true
+    }
+
+    pub fn undo_current(&mut self) {
+        match self.tab {
+            TAB_GAME => self.undo_checkers(),
+            TAB_CHESS => self.undo_chess(),
+            _ => {}
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1135,7 +696,7 @@ impl GameApp {
         {
             if self.ai_wait > 0 {
                 self.ai_wait -= 1;
-            } else if let Some(mv) = game_core::choose_move(&self.board, 3) {
+            } else if let Some(mv) = game_core::choose_move(&self.board, self.ai_depth()) {
                 if self.board.apply(&mv) {
                     self.last_move = Some(mv);
                     self.sound_pending = if mv.is_capture() {
@@ -1150,6 +711,16 @@ impl GameApp {
             } else {
                 self.thinking = false;
                 self.finish_turn();
+            }
+        }
+        // Mayın Tarlası süresi: yalnızca saniye değiştiğinde yeniden çiz.
+        if self.mines.state == GameState::Playing {
+            if let Some(start) = self.mine_started_ms {
+                let elapsed = crate::monotonic_ms().saturating_sub(start);
+                if self.tab == TAB_MINES && elapsed / 1000 != self.mine_elapsed_ms / 1000 {
+                    changed = true;
+                }
+                self.mine_elapsed_ms = elapsed;
             }
         }
         changed
@@ -1246,15 +817,24 @@ impl GameApp {
                 },
                 Color::TEXT_MAIN,
             );
-            if self.tab == TAB_MINES {
+            if self.tab == TAB_MINES || self.tab == TAB_GAME {
                 let labels = [
                     crate::gui::ui_text("Kolay", "Easy"),
                     crate::gui::ui_text("Orta", "Medium"),
                     crate::gui::ui_text("Zor", "Hard"),
                 ];
                 for (level, label) in labels.iter().enumerate() {
-                    let (lx, ly, lw, lh) = Self::mine_level_rect(level);
-                    let bg = if self.mines.level == level {
+                    let (lx, ly, lw, lh) = if self.tab == TAB_MINES {
+                        Self::mine_level_rect(level)
+                    } else {
+                        Self::ai_level_rect(level)
+                    };
+                    let active = if self.tab == TAB_MINES {
+                        self.mines.level == level
+                    } else {
+                        self.ai_level == level
+                    };
+                    let bg = if active {
                         Color::ACCENT_BLUE
                     } else {
                         Color::TITLE_BAR
@@ -1269,7 +849,33 @@ impl GameApp {
                     );
                 }
             }
+            if self.tab == TAB_GAME || self.tab == TAB_CHESS {
+                let (ux, uy, uw, uh) = Self::undo_rect(self.tab);
+                fb.draw_rounded_rect(x + ux, y + uy, uw, uh, 5, Color::TITLE_BAR);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    x + ux + sp(7),
+                    y + uy + (uh.saturating_sub(MinGuiCompositor::text_height())) / 2,
+                    crate::gui::ui_text("Geri Al", "Undo"),
+                    Color::TEXT_MAIN,
+                );
+            }
         }
+    }
+
+    fn push_time(buf: &mut TextBuf, ms: u64) {
+        let total = ms / 1000;
+        let minutes = total / 60;
+        let seconds = total % 60;
+        if minutes > 0 {
+            buf.push_usize(minutes as usize);
+            buf.push_byte(b':');
+            if seconds < 10 {
+                buf.push_byte(b'0');
+            }
+        }
+        buf.push_usize(seconds as usize);
+        buf.push_byte(b's');
     }
 
     fn render_status(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
@@ -1299,6 +905,13 @@ impl GameApp {
                     left.push_str(" - ");
                     left.push_str(self.message);
                 }
+                left.push_str("   ");
+                left.push_str(crate::gui::ui_text("Siz: ", "You: "));
+                left.push_usize(self.wins as usize);
+                left.push_str(crate::gui::ui_text("  Bilgisayar: ", "  Computer: "));
+                left.push_usize(self.losses as usize);
+                left.push_str(crate::gui::ui_text("  Berabere: ", "  Draws: "));
+                left.push_usize(self.draws as usize);
             }
             TAB_MINES => {
                 left.push_str(crate::gui::ui_text("Mayın: ", "Mines: "));
@@ -1306,6 +919,15 @@ impl GameApp {
                 left.push_str("   ");
                 left.push_str(crate::gui::ui_text("Açık: ", "Revealed: "));
                 left.push_usize(self.mines.revealed);
+                left.push_str("   ");
+                left.push_str(crate::gui::ui_text("Süre: ", "Time: "));
+                Self::push_time(&mut left, self.mine_elapsed_ms);
+                let best = self.mine_best_ms[self.mines.level.min(2)];
+                if best > 0 {
+                    left.push_str("   ");
+                    left.push_str(crate::gui::ui_text("En iyi: ", "Best: "));
+                    Self::push_time(&mut left, best);
+                }
                 left.push_str("   ");
                 match self.mines.state {
                     GameState::Won => left.push_str(crate::gui::ui_text("Kazandınız!", "You win!")),
@@ -1322,13 +944,29 @@ impl GameApp {
                 };
                 left.push_str(side);
                 left.push_str(crate::gui::ui_text(" sırası", " to move"));
-                if self.chess.state == GameState::Won {
-                    left.push_str(" - ");
-                    left.push_str(crate::gui::ui_text("Kazandı!", "Won!"));
-                }
-                if self.chess.is_in_check(self.chess.side_to_move) {
-                    left.push_str(" - ");
-                    left.push_str(crate::gui::ui_text("ŞAH!", "CHECK!"));
+                left.push_str(" - ");
+                match self.chess.status {
+                    ChessStatus::Checkmate(ChessSide::White) => left.push_str(crate::gui::ui_text(
+                        "Şah mat! Beyaz kazandı",
+                        "Checkmate! White wins",
+                    )),
+                    ChessStatus::Checkmate(ChessSide::Black) => left.push_str(crate::gui::ui_text(
+                        "Şah mat! Siyah kazandı",
+                        "Checkmate! Black wins",
+                    )),
+                    ChessStatus::Stalemate => {
+                        left.push_str(crate::gui::ui_text("Pat! Berabere", "Stalemate! Draw"))
+                    }
+                    ChessStatus::Draw => left.push_str(crate::gui::ui_text("Berabere", "Draw")),
+                    ChessStatus::Playing => {
+                        if self.chess.is_in_check(self.chess.side_to_move) {
+                            left.push_str(crate::gui::ui_text("ŞAH!", "CHECK!"));
+                        } else if !self.message.is_empty() {
+                            left.push_str(self.message);
+                        } else {
+                            left.push_str(crate::gui::ui_text("Oynanıyor", "Playing"));
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1343,16 +981,16 @@ impl GameApp {
         );
         let hint = match self.tab {
             TAB_GAME => crate::gui::ui_text(
-                "Tıkla taşı seç, hedefe tıkla oynayın",
-                "Click to select, click target to move",
+                "Taşı seç, hedefe tıkla; Geri Al ile son hamleyi geri al",
+                "Select and click target; Undo reverts the last move",
             ),
             TAB_MINES => crate::gui::ui_text(
-                "Sol tık aç, sağ tık bayrak",
-                "Left click reveal, right click flag",
+                "Sol tık aç, sağ tık bayrak; açık sayıya tıkla çevresini aç",
+                "Left click reveal, right click flag; click a number to chord",
             ),
             TAB_CHESS => crate::gui::ui_text(
-                "Taşı seç, hedefe tıkla oynayın",
-                "Select piece, click target to move",
+                "Taşı seç, hedefe tıkla; piyon terfisinde taş seç",
+                "Select piece, click target; choose a piece on promotion",
             ),
             _ => crate::gui::ui_text("", ""),
         };
@@ -1533,6 +1171,11 @@ impl GameApp {
         let cell_w = bw / 8;
         let cell_h = bh / 8;
         fb.draw_rounded_rect(bx - 4, by - 4, bw + 8, bh + 8, 6, Color::BORDER);
+        let check_square = if self.chess.is_in_check(self.chess.side_to_move) {
+            self.chess.king_square(self.chess.side_to_move)
+        } else {
+            None
+        };
 
         for r in 0..8 {
             for c in 0..8 {
@@ -1545,6 +1188,30 @@ impl GameApp {
                     MinGuiCompositor::shade(Color::TITLE_BAR, -20)
                 };
                 fb.draw_rect(cx, cy, cell_w, cell_h, color);
+
+                // Son hamlenin kareleri.
+                if let Some(mv) = self.chess_last {
+                    if mv.from == r * 8 + c || mv.to == r * 8 + c {
+                        fb.draw_rect(
+                            cx,
+                            cy,
+                            cell_w,
+                            cell_h,
+                            MinGuiCompositor::shade(Color::ACCENT_YELLOW, -70),
+                        );
+                    }
+                }
+                // Şah tehdidi altındaki şah.
+                if check_square == Some((r, c)) {
+                    fb.draw_rect_outline(cx, cy, cell_w, cell_h, Color::ACCENT_RED);
+                    fb.draw_rect_outline(
+                        cx + 1,
+                        cy + 1,
+                        cell_w.saturating_sub(2),
+                        cell_h.saturating_sub(2),
+                        Color::ACCENT_RED,
+                    );
+                }
 
                 // Seçili kare.
                 if self.chess_sel.selected == Some((r, c)) {
@@ -1595,6 +1262,64 @@ impl GameApp {
                 }
             }
         }
+
+        // Piyon terfisi paneli.
+        if self.chess_pending.is_some() {
+            let rects = Self::promotion_rects(w, h);
+            let (fx, fy, _, _) = rects[0];
+            let (lx, _ly, lw, lh) = rects[3];
+            let pad = sp(8);
+            let label_h = sp(16);
+            let px = x + fx.saturating_sub(pad);
+            let py = y + fy.saturating_sub(pad + label_h);
+            let pw = (lx + lw).saturating_sub(fx) + 2 * pad;
+            let ph = lh + 2 * pad + label_h;
+            fb.draw_rounded_rect(px, py, pw, ph, 8, Color::TITLE_BAR);
+            fb.draw_rounded_rect_outline(px, py, pw, ph, 8, Color::ACCENT_YELLOW);
+            MinGuiCompositor::draw_string(
+                fb,
+                px + pad,
+                py + sp(3),
+                crate::gui::ui_text("Terfi: taş seç", "Promotion: choose"),
+                Color::TEXT_MAIN,
+            );
+            let kinds = [
+                PieceKind::Queen,
+                PieceKind::Rook,
+                PieceKind::Bishop,
+                PieceKind::Knight,
+            ];
+            let (fill, outline) = match self.chess.side_to_move {
+                ChessSide::White => (0xF4F1EA, 0x14141C),
+                ChessSide::Black => (0x1A1A22, 0xF4F1EA),
+            };
+            for (i, kind) in kinds.iter().enumerate() {
+                let (rx, ry, rw, rh) = rects[i];
+                fb.draw_rounded_rect(
+                    x + rx,
+                    y + ry,
+                    rw,
+                    rh,
+                    5,
+                    MinGuiCompositor::shade(Color::WINDOW_BG, 18),
+                );
+                fb.draw_rounded_rect_outline(x + rx, y + ry, rw, rh, 5, Color::BORDER);
+                let icon_idx = match kind {
+                    PieceKind::King => 8usize,
+                    PieceKind::Queen => 9,
+                    PieceKind::Rook => 10,
+                    PieceKind::Knight => 11,
+                    PieceKind::Bishop => 12,
+                    PieceKind::Pawn => 13,
+                };
+                let icon_sz = ((rw.min(rh) * 86) / 100).max(12);
+                let icon_x = x + rx + rw.saturating_sub(icon_sz) / 2;
+                let icon_y = y + ry + rh.saturating_sub(icon_sz) / 2;
+                MinGuiCompositor::draw_chess_piece_styled(
+                    fb, icon_x, icon_y, icon_sz, icon_idx, fill, outline,
+                );
+            }
+        }
     }
 
     /// Dolu daire (satır satır tarama).
@@ -1643,25 +1368,6 @@ impl GameApp {
         Some(game_core::idx(row, col))
     }
 
-    /// Piksel koordinatını mayın hücresine çevirir.
-    fn cell_of_mines(
-        px: usize,
-        py: usize,
-        rect: (usize, usize, usize, usize),
-        rows: usize,
-        cols: usize,
-    ) -> Option<(usize, usize)> {
-        let (x, y, w, h) = rect;
-        if w == 0 || h == 0 || px < x || py < y || px >= x + w || py >= y + h {
-            return None;
-        }
-        let cw = (w / cols).max(1);
-        let ch = (h / rows).max(1);
-        let col = ((px - x) / cw).min(cols - 1);
-        let row = ((py - y) / ch).min(rows - 1);
-        Some((row, col))
-    }
-
     /// Piksel koordinatını satranç karesine çevirir (8x8).
     fn cell_of_chess(
         px: usize,
@@ -1681,6 +1387,10 @@ impl GameApp {
 
     /// Pencere içi tıklamayı işler. Yeniden çizim gerekiyorsa `true` döner.
     pub fn click(&mut self, px: usize, py: usize, w: usize, h: usize) -> bool {
+        // Terfi paneli açıkken tıklamalar yalnızca panele gider.
+        if self.chess_pending.is_some() {
+            return self.click_promotion(px, py, w, h);
+        }
         // Sekmeler.
         for tab in 0..TAB_COUNT {
             if crate::gui::in_rect(px, py, Self::tab_rect(tab)) {
@@ -1699,6 +1409,20 @@ impl GameApp {
                     return true;
                 }
             }
+        }
+        if self.tab == TAB_GAME {
+            for level in 0..3 {
+                if crate::gui::in_rect(px, py, Self::ai_level_rect(level)) {
+                    self.set_ai_level(level);
+                    return true;
+                }
+            }
+        }
+        if (self.tab == TAB_GAME || self.tab == TAB_CHESS)
+            && crate::gui::in_rect(px, py, Self::undo_rect(self.tab))
+        {
+            self.undo_current();
+            return true;
         }
         match self.tab {
             TAB_GAME => {
@@ -1743,8 +1467,20 @@ impl GameApp {
         }
     }
 
-    /// Klavye kısayolları: 1-3 bölüm, N yeni oyun, S ses testi.
+    /// Klavye kısayolları: 1-3 bölüm, N yeni oyun, S ses, U geri al.
     pub fn handle_key(&mut self, ch: char) -> bool {
+        // Terfi paneli açıkken Q/R/B/N ile taş seç, Esc ile iptal et.
+        if self.chess_pending.is_some() {
+            match ch {
+                'q' | 'Q' => self.choose_promotion(PieceKind::Queen),
+                'r' | 'R' => self.choose_promotion(PieceKind::Rook),
+                'b' | 'B' => self.choose_promotion(PieceKind::Bishop),
+                'n' | 'N' => self.choose_promotion(PieceKind::Knight),
+                '\x1b' => self.cancel_promotion(),
+                _ => {}
+            }
+            return true;
+        }
         match ch {
             '\t' => {
                 self.select_tab((self.tab + 1) % TAB_COUNT);
@@ -1764,6 +1500,10 @@ impl GameApp {
             }
             's' | 'S' => {
                 self.toggle_sound();
+                true
+            }
+            'u' | 'U' => {
+                self.undo_current();
                 true
             }
             '1'..='3' => {

@@ -121,6 +121,36 @@ const POLICE_COLOR: u32 = 0xE6E8EC;
 /// polis aracı mavi bandı.
 const POLICE_BLUE: u32 = 0x1D4E9C;
 
+/// Far rengi (gece modunda aracın önünü aydınlatır).
+const HEADLIGHT_COLOR: u32 = 0xFFF6E0;
+/// Gece gökyüzü üst rengi.
+const NIGHT_SKY_TOP: u32 = 0x02040A;
+/// Gece gökyüzü alt rengi.
+const NIGHT_SKY_HORIZON: u32 = 0x1A2438;
+/// Gün gökyüzü üst rengi.
+const DAY_SKY_TOP: u32 = 0x3A6EBC;
+/// Gün gökyüzü alt rengi.
+const DAY_SKY_HORIZON: u32 = 0x6EB3FA;
+
+/// Gün/döngü saati (0.0 = gece yarısı, 0.25 = sabah, 0.5 = öğle, 0.75 = akşam).
+const DAY_CYCLE_SPEED: f32 = 0.015; // saniye başına döngü ilerleme
+/// Gece başlangıç eşiği (0.0..1.0).
+const NIGHT_START: f32 = 0.72;
+/// Geçiş yumuşaklığı (0.0..1.0).
+const NIGHT_FADE: f32 = 0.18;
+
+// Parçacık sistemi (egzoz dumanı, çarpışma gnisteri, drift tozu).
+const MAX_PARTICLES: usize = 48;
+/// Yakıt tankı kapasitesi (litre).
+const FUEL_CAPACITY: f32 = 60.0;
+/// Yakıt tüketimi (litre/km, başlangıç).
+const FUEL_CONSUMPTION_BASE: f32 = 0.07;
+/// Yakıt uyarı eşiği (litrede).
+const FUEL_WARN: f32 = 8.0;
+
+// Drift durumu.
+const DRIFT_SMOKE_INTERVAL: f32 = 0.06;
+
 // Tuş maska bayrakları.
 const KEY_UP: u16 = 1 << 0;
 const KEY_DOWN: u16 = 1 << 1;
@@ -211,6 +241,29 @@ fn shade(color: u32, factor: f32) -> u32 {
     let g = (((color >> 8) & 0xFF) as f32 * f) as u32;
     let b = ((color & 0xFF) as f32 * f) as u32;
     (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
+}
+
+/// İki renk arasında lineer interpolasyon (t: 0..1).
+#[inline(always)]
+fn lerp_color(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let r = (((a >> 16) & 0xFF) as f32 * (1.0 - t) + ((b >> 16) & 0xFF) as f32 * t) as u32;
+    let g = (((a >> 8) & 0xFF) as f32 * (1.0 - t) + ((b >> 8) & 0xFF) as f32 * t) as u32;
+    let bl = ((a & 0xFF) as f32 * (1.0 - t) + (b & 0xFF) as f32 * t) as u32;
+    (r << 16) | (g << 8) | bl
+}
+
+/// İki 8-bit kanal değeri arasında interpolasyon.
+#[inline(always)]
+fn lerp_u8(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    ((a as f32 * (1.0 - t) + b as f32 * t) as u32).min(255)
+}
+
+/// Gökyüzü rengi için interpolasyon (gece/gün geçişi).
+#[inline(always)]
+fn lerp_sky(a: u32, b: u32, t: f32) -> u32 {
+    lerp_color(a, b, t)
 }
 
 /// Deterministik karma: şehir düzeni her açılışta aynıdır.
@@ -537,6 +590,31 @@ pub struct Reward {
     pub phase: f32,
 }
 
+/// Parçacık (egzoz dumanı, çarpışma gnisteri, drift tozu).
+#[derive(Clone, Copy)]
+pub struct Particle {
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    pub life: f32, // kalan yaşam (saniye)
+    pub max_life: f32,
+    pub size: f32,
+    pub color: u32,
+    pub kind: ParticleKind,
+}
+
+/// Parçacık türü.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ParticleKind {
+    /// Egzoz dumanı.
+    Exhaust,
+    /// Çarpışma gnisteri.
+    Spark,
+    /// Drift tozu.
+    Dust,
+}
+
 /// Oyun durumu.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CityState {
@@ -687,6 +765,26 @@ pub struct CityDriveApp {
     pub crash_flash: u32,
     pub state: CityState,
     pub engine_freq: u32,
+    // Gün/gece döngüsü (0.0..1.0).
+    pub time_of_day: f32,
+    // Yakıt (litre).
+    pub fuel: f32,
+    /// Drift açısı (rad, pozitif sağa, negatif sola).
+    pub drift_angle: f32,
+    /// Drift puanı.
+    pub drift_score: u32,
+    /// Drift dumanı sayacı.
+    pub drift_smoke_timer: f32,
+    // Parçacık sistemi.
+    pub particles: [Particle; MAX_PARTICLES],
+    // Zamanlayıcı (saniye).
+    pub lap_timer: f32,
+    /// Geçtiği son kontrol noktası indeksi.
+    pub checkpoint: usize,
+    /// En iyi tur zamanı (saniye).
+    pub best_lap: f32,
+    /// Kontrol noktaları (düz sabit bir döngü).
+    pub checkpoints: [(f32, f32); 8],
 }
 
 impl CityDriveApp {
@@ -733,6 +831,26 @@ impl CityDriveApp {
             crash_flash: 0,
             state: CityState::Menu,
             engine_freq: 0,
+            time_of_day: 0.5,
+            fuel: FUEL_CAPACITY,
+            drift_angle: 0.0,
+            drift_score: 0,
+            drift_smoke_timer: 0.0,
+            particles: [Particle {
+                x: 0.0,
+                y: 0.0,
+                vx: 0.0,
+                vy: 0.0,
+                life: 0.0,
+                max_life: 0.0,
+                size: 0.0,
+                color: 0,
+                kind: ParticleKind::Exhaust,
+            }; MAX_PARTICLES],
+            lap_timer: 0.0,
+            checkpoint: 0,
+            best_lap: 0.0,
+            checkpoints: [(0.0, 0.0); 8],
         };
         app.reset_world();
         app
@@ -751,6 +869,30 @@ impl CityDriveApp {
         self.distance = 0.0;
         self.crashes = 0;
         self.crash_flash = 0;
+        self.time_of_day = 0.5;
+        self.fuel = FUEL_CAPACITY;
+        self.drift_angle = 0.0;
+        self.drift_score = 0;
+        self.drift_smoke_timer = 0.0;
+        self.lap_timer = 0.0;
+        self.checkpoint = 0;
+
+        // Kontrol noktalarını şehrin dört köşesine ve orta noktalarına yerleştir.
+        let cp: [(f32, f32); 8] = [
+            (10.0, 10.0),
+            (50.0, 10.0),
+            (50.0, 50.0),
+            (10.0, 50.0),
+            (30.0, 10.0),
+            (50.0, 30.0),
+            (30.0, 50.0),
+            (10.0, 30.0),
+        ];
+        self.checkpoints = cp;
+
+        for p in self.particles.iter_mut() {
+            p.life = 0.0;
+        }
 
         self.spawn_traffic();
         self.spawn_rewards();
@@ -974,6 +1116,12 @@ impl CityDriveApp {
         }
         self.anim_t += dt;
 
+        // --- Gün/gece döngüsü ---
+        self.time_of_day += DAY_CYCLE_SPEED * dt;
+        if self.time_of_day >= 1.0 {
+            self.time_of_day -= 1.0;
+        }
+
         // Basılı tutulan fizik tuşları (W/A/S/D, ok tuşları, Space).
         // Tuş yalnızca basılı tutulduğu sürece etkilidir; tek basışla
         // hızlanıp sürekli ilerlemeye devam etmemesi için `key_mask`
@@ -1015,6 +1163,16 @@ impl CityDriveApp {
 
         // --- Rölanti ve hava direnci (karesel) ---
         let v_abs = absf(self.speed);
+
+        // --- Yakıt tüketimi ---
+        if v_abs > 0.5 {
+            let consumption = FUEL_CONSUMPTION_BASE * (1.0 + v_abs * 0.15) * dt;
+            self.fuel = (self.fuel - consumption).max(0.0);
+            if self.fuel == 0.0 && self.speed != 0.0 {
+                self.speed *= 0.5;
+            }
+        }
+
         if v_abs > 0.01 {
             let sgn = if self.speed > 0.0 { 1.0 } else { -1.0 };
             let coast = DRAG_BASE + DRAG_K * v_abs * v_abs;
@@ -1024,7 +1182,8 @@ impl CityDriveApp {
         }
 
         // --- El freni ---
-        if self.key_mask & KEY_HAND != 0 && v_abs > 0.05 {
+        let handbrake = self.key_mask & KEY_HAND != 0 && v_abs > 0.05;
+        if handbrake {
             let sgn = if self.speed > 0.0 { 1.0 } else { -1.0 };
             self.speed -= sgn * HANDBRAKE * dt;
         }
@@ -1033,15 +1192,44 @@ impl CityDriveApp {
         }
         self.speed = self.speed.clamp(-MAX_REVERSE, MAX_SPEED);
 
-        // --- Direksiyon: bisiklet modeli ---
-        // Direksiyon kolu hedef konuma doğru sınırlı hızda gider; böylece
-        // yön değişimi ani olmaz.
+        // --- Drift: el freni ile arka tekerlek traksiyonu kaybolur, araç sarkar ---
         let steer_input =
             (self.key_mask & KEY_RIGHT != 0) as i32 - (self.key_mask & KEY_LEFT != 0) as i32;
         let steer_target = steer_input as f32;
         let max_delta = STEER_RATE * dt;
         self.steer_cmd += (steer_target - self.steer_cmd).clamp(-max_delta, max_delta);
 
+        let drift_active = handbrake && absf(self.steer_cmd) > 0.25 && v_abs > 3.0;
+        if drift_active {
+            // Drift açısı: direksiyon yönüne göre arka çıkış, sınırlı.
+            let drift_target = self.steer_cmd * 1.6;
+            self.drift_angle += (drift_target - self.drift_angle).clamp(-4.0 * dt, 4.0 * dt);
+            // Drift'te ivme azalır, yanal sürüklenme oluşur.
+            let fx = cos(self.heading + self.drift_angle * 0.5);
+            let fy = sin(self.heading + self.drift_angle * 0.5);
+            let nx = self.car_x + fx * self.speed * dt * 0.85;
+            let ny = self.car_y + fy * self.speed * dt * 0.85;
+            if !self.collides(nx, ny) {
+                self.car_x = nx;
+                self.car_y = ny;
+            }
+            self.heading += self.drift_angle * 0.5 * dt;
+            self.drift_smoke_timer += dt;
+            if self.drift_smoke_timer >= DRIFT_SMOKE_INTERVAL {
+                self.drift_smoke_timer = 0.0;
+                self.spawn_particle(ParticleKind::Dust, self.car_x, self.car_y, 0.0, 0.0);
+                self.drift_score = self.drift_score.saturating_add(1);
+            }
+        } else {
+            self.drift_angle *= 1.0 - 6.0 * dt;
+            if absf(self.drift_angle) < 0.01 {
+                self.drift_angle = 0.0;
+            }
+        }
+
+        // --- Direksiyon: bisiklet modeli ---
+        // Direksiyon kolu zaten drift bloğu içinde güncellendi; burada yalnızca
+        // yaw (yaw hızı) hesaplanır.
         // Sarma yarıçapı hıza bağlıdır: yüksek hızda direksiyon açısı
         // daralır, dönüş çapı büyür (gerçek araç davranışı).
         let speed_abs = absf(self.speed);
@@ -1056,24 +1244,38 @@ impl CityDriveApp {
             self.heading += core::f32::consts::TAU;
         }
 
-        // --- İlerleme ve çarpışma ---
-        let fx = cos(self.heading);
-        let fy = sin(self.heading);
-        let nx = self.car_x + fx * self.speed * dt;
-        let ny = self.car_y + fy * self.speed * dt;
-        if self.collides(nx, ny) {
-            if absf(self.speed) > 2.0 {
-                self.crashes += 1;
-                self.crash_flash = 14;
+        // --- İlerleme ve çarpışma (drift aktifse zaten drift bloğu içinde hareket edildi) ---
+        if !drift_active {
+            let fx = cos(self.heading);
+            let fy = sin(self.heading);
+            let nx = self.car_x + fx * self.speed * dt;
+            let ny = self.car_y + fy * self.speed * dt;
+            if self.collides(nx, ny) {
+                if absf(self.speed) > 2.0 {
+                    self.crashes += 1;
+                    self.crash_flash = 14;
+                    self.spawn_particle(
+                        ParticleKind::Spark,
+                        self.car_x,
+                        self.car_y,
+                        -fx * 2.0,
+                        -fy * 2.0,
+                    );
+                }
+                self.speed *= -0.18;
+            } else {
+                self.car_x = nx;
+                self.car_y = ny;
             }
-            self.speed *= -0.18;
-        } else {
-            self.car_x = nx;
-            self.car_y = ny;
+            self.car_x = self.car_x.clamp(0.4, CITY_W as f32 - 0.4);
+            self.car_y = self.car_y.clamp(0.4, CITY_H as f32 - 0.4);
+            self.distance += absf(self.speed) * dt;
         }
-        self.car_x = self.car_x.clamp(0.4, CITY_W as f32 - 0.4);
-        self.car_y = self.car_y.clamp(0.4, CITY_H as f32 - 0.4);
-        self.distance += absf(self.speed) * dt;
+
+        // Yakıt bittiyse aracı durdur.
+        if self.fuel <= 0.0 {
+            self.speed = 0.0;
+        }
 
         // --- Kamera yönü araca hafif gecikmeyle takip eder ---
         let mut diff = self.heading - self.cam_dir;
@@ -1084,6 +1286,21 @@ impl CityDriveApp {
             diff += core::f32::consts::TAU;
         }
         self.cam_dir += diff * (8.0 * dt).min(1.0);
+
+        // --- Parçacık sistemi güncellemesi ---
+        self.update_particles(dt);
+
+        // Egzoz dumanı (hızlıyken arka tekerleklerden).
+        if v_abs > 4.0 {
+            let exhaust_timer = self.anim_t;
+            if (exhaust_timer * 30.0) as u32 % 4 == 0 {
+                let back_x = self.car_x - cos(self.heading) * 1.2;
+                let back_y = self.car_y - sin(self.heading) * 1.2;
+                let smoke_vx = -cos(self.heading) * 0.5 + (self.anim_t % 1.0 - 0.5) * 0.2;
+                let smoke_vy = -sin(self.heading) * 0.5 + (self.anim_t % 1.0 - 0.5) * 0.2;
+                self.spawn_particle(ParticleKind::Exhaust, back_x, back_y, smoke_vx, smoke_vy);
+            }
+        }
 
         // --- Trafik ---
         self.update_traffic(dt);
@@ -1129,6 +1346,27 @@ impl CityDriveApp {
         if remaining == MAX_REWARDS as u32 {
             // Tüm ödüller toplandı: yenileri belirir.
             self.spawn_rewards();
+        }
+
+        // --- Kontrol noktaları (zaman koşusu) ---
+        if self.state == CityState::Driving {
+            let cp = self.checkpoints[self.checkpoint];
+            let dx = cp.0 - self.car_x;
+            let dy = cp.1 - self.car_y;
+            if dx * dx + dy * dy < 4.0 {
+                self.checkpoint = (self.checkpoint + 1) % self.checkpoints.len();
+                if self.checkpoint == 0 {
+                    // Tur tamamlandı.
+                    if self.best_lap == 0.0 || self.lap_timer < self.best_lap {
+                        self.best_lap = self.lap_timer;
+                    }
+                    self.lap_timer = 0.0;
+                    self.score = self.score.saturating_add(500);
+                } else {
+                    self.score = self.score.saturating_add(100);
+                }
+            }
+            self.lap_timer += dt;
         }
 
         if self.crash_flash > 0 {
@@ -1298,6 +1536,50 @@ impl CityDriveApp {
                 c.brake = 0.0;
             }
             c.speed = c.speed.clamp(0.0, c.target_speed);
+
+            // Şerit değiştirme: yavaş araçın arkasında kalmak yerine boş şerite geç.
+            if gap < safe && c.speed < c.target_speed * 0.7 {
+                let other_lane_dir = -c.lane_dir;
+                let (_, other_lane_y) = lane_point(c.axis, c.road, other_lane_dir);
+                let my_lateral = match c.axis {
+                    LaneAxis::Horizontal => c.y,
+                    LaneAxis::Vertical => c.x,
+                };
+                let lateral_gap = absf(my_lateral - other_lane_y);
+                // Diğer şeritte aynı bölgede araç var mı?
+                let mut other_lane_clear = true;
+                for (j, other) in self.traffic.iter().enumerate() {
+                    if i == j || other.turn.is_some() {
+                        continue;
+                    }
+                    if other.axis != c.axis
+                        || other.road != c.road
+                        || other.lane_dir != other_lane_dir
+                    {
+                        continue;
+                    }
+                    let d = (other.along() - c.along()) * c.lane_dir;
+                    if d > -12.0 && d < 12.0 {
+                        other_lane_clear = false;
+                        break;
+                    }
+                }
+                if other_lane_clear && lateral_gap > 1.0 {
+                    // Şerit değiştir: yönü ters çevir, yanal konumu ayarla.
+                    c.lane_dir = other_lane_dir;
+                    let (dx, dy) = lane_dir_vec(c.axis, c.lane_dir);
+                    let (rtx, rty) = right_vec(dx, dy);
+                    let center = c.road as f32 * ROAD_PERIOD as f32 + ROAD_AXIS_OFF;
+                    let (lane_x, lane_y) = match c.axis {
+                        LaneAxis::Horizontal => (0.0, center + rty * LANE_OFF),
+                        LaneAxis::Vertical => (center + rtx * LANE_OFF, 0.0),
+                    };
+                    c.x = lane_x;
+                    c.y = lane_y;
+                    c.brake = 0.3;
+                }
+            }
+
             self.traffic[i] = c;
         }
     }
@@ -1459,6 +1741,76 @@ impl CityDriveApp {
         false
     }
 
+    /// Yeni bir parçacık oluşturur (boş slot varsa).
+    fn spawn_particle(&mut self, kind: ParticleKind, x: f32, y: f32, vx: f32, vy: f32) {
+        let (life, size, color) = match kind {
+            ParticleKind::Exhaust => (0.8, 3.0, 0x6B7280),
+            ParticleKind::Spark => (0.4, 2.0, 0xFFE08C),
+            ParticleKind::Dust => (0.6, 2.5, 0x9CA3AF),
+        };
+        for p in self.particles.iter_mut() {
+            if p.life <= 0.0 {
+                *p = Particle {
+                    x,
+                    y,
+                    vx,
+                    vy,
+                    life,
+                    max_life: life,
+                    size,
+                    color,
+                    kind,
+                };
+                return;
+            }
+        }
+    }
+
+    /// Tüm parçacıkları günceller ve süresi dolanları temizler.
+    fn update_particles(&mut self, dt: f32) {
+        for p in self.particles.iter_mut() {
+            if p.life <= 0.0 {
+                continue;
+            }
+            p.life -= dt;
+            if p.life > 0.0 {
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.vx *= 1.0 - 4.0 * dt;
+                p.vy *= 1.0 - 4.0 * dt;
+                p.size *= p.life / p.max_life;
+            }
+        }
+    }
+
+    /// Parçacığı ekranda çizer (zemin izdüşümüyle).
+    fn draw_particles(
+        &self,
+        fb: &mut Framebuffer,
+        _top: usize,
+        win_w: usize,
+        horizon: usize,
+        focal: f32,
+        zbuf: &[f32; 1024],
+    ) {
+        for p in self.particles.iter() {
+            if p.life <= 0.0 {
+                continue;
+            }
+            let (screen_x, _depth, scale) = match self.project(p.x, p.y, win_w, focal, zbuf) {
+                Some(v) => v,
+                None => continue,
+            };
+            let t = p.life / p.max_life;
+            let alpha = t.clamp(0.0, 1.0);
+            let size = (p.size * scale * 0.5).max(1.0) as usize;
+            let color = shade(p.color, alpha);
+            let y0 = (horizon as f32 + CAM_H * scale - size as f32 * 0.5) as usize;
+            let x0 = screen_x.saturating_sub(size as i32 / 2) as usize;
+            fb.draw_rect(x0, y0, size, size, color);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Çizim
     // -----------------------------------------------------------------------
@@ -1491,31 +1843,75 @@ impl CityDriveApp {
         let plane_y = dir_x * PLANE_LEN;
         let focal = view_h as f32 * 0.5;
 
-        // 1) Gökyüzü: dikey gradyan ve güneş.
+        // 1) Gökyüzü: gün/gece döngüsüne bağlı dikey gradyan ve güneş/ay.
+        let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;
+        let night_t = if self.time_of_day > NIGHT_START {
+            ((self.time_of_day - NIGHT_START) / NIGHT_FADE).clamp(0.0, 1.0)
+        } else if self.time_of_day < 0.28 {
+            ((0.28 - self.time_of_day) / NIGHT_FADE).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let sky_top = if is_night {
+            let a = NIGHT_SKY_TOP;
+            let b = DAY_SKY_TOP;
+            lerp_sky(a, b, night_t)
+        } else {
+            let a = DAY_SKY_TOP;
+            let b = NIGHT_SKY_TOP;
+            lerp_sky(a, b, night_t)
+        };
+        let sky_horizon = if is_night {
+            lerp_sky(NIGHT_SKY_HORIZON, DAY_SKY_HORIZON, night_t)
+        } else {
+            lerp_sky(DAY_SKY_HORIZON, NIGHT_SKY_HORIZON, night_t)
+        };
         for row in 0..(horizon - top) {
             if budget.is_expired() {
                 return false;
             }
             let t = row as f32 / (horizon - top).max(1) as f32;
-            let r = (58.0 + 120.0 * t) as u32;
-            let g = (110.0 + 95.0 * t) as u32;
-            let b = (185.0 + 45.0 * t) as u32;
+            let r = lerp_u8((sky_top >> 16) & 0xFF, (sky_horizon >> 16) & 0xFF, t);
+            let g = lerp_u8((sky_top >> 8) & 0xFF, (sky_horizon >> 8) & 0xFF, t);
+            let b = lerp_u8(sky_top & 0xFF, sky_horizon & 0xFF, t);
             fb.draw_rect(win_x, top + row, win_w, 1, (r << 16) | (g << 8) | b);
         }
-        let sun_x = win_x + (win_w as f32 * 0.74) as usize;
-        let sun_y = top + ((horizon - top) as f32 * 0.24) as usize;
-        for dy in -9i32..=9 {
-            for dx in -9i32..=9 {
-                let d2 = dx * dx + dy * dy;
-                if d2 <= 72 {
-                    let color = if d2 <= 30 { 0xFFF6C8 } else { 0xFFE9A0 };
-                    fb.draw_rect(
-                        (sun_x as i32 + dx).max(0) as usize,
-                        (sun_y as i32 + dy).max(0) as usize,
-                        1,
-                        1,
-                        color,
-                    );
+        if is_night {
+            // Ay: küçük, beyaz-mavi.
+            let moon_x = win_x + (win_w as f32 * 0.22) as usize;
+            let moon_y = top + ((horizon - top) as f32 * 0.30) as usize;
+            for dy in -5i32..=5 {
+                for dx in -5i32..=5 {
+                    let d2 = dx * dx + dy * dy;
+                    if d2 <= 20 {
+                        let color = if d2 <= 8 { 0xE8EEFF } else { 0xC8D4F0 };
+                        fb.draw_rect(
+                            (moon_x as i32 + dx).max(0) as usize,
+                            (moon_y as i32 + dy).max(0) as usize,
+                            1,
+                            1,
+                            color,
+                        );
+                    }
+                }
+            }
+        } else {
+            // Güneş.
+            let sun_x = win_x + (win_w as f32 * 0.74) as usize;
+            let sun_y = top + ((horizon - top) as f32 * 0.24) as usize;
+            for dy in -9i32..=9 {
+                for dx in -9i32..=9 {
+                    let d2 = dx * dx + dy * dy;
+                    if d2 <= 72 {
+                        let color = if d2 <= 30 { 0xFFF6C8 } else { 0xFFE9A0 };
+                        fb.draw_rect(
+                            (sun_x as i32 + dx).max(0) as usize,
+                            (sun_y as i32 + dy).max(0) as usize,
+                            1,
+                            1,
+                            color,
+                        );
+                    }
                 }
             }
         }
@@ -1539,7 +1935,12 @@ impl CityDriveApp {
                 let ry = dir_y + plane_y * cxf;
                 let fx = self.car_x + rx * dist;
                 let fy = self.car_y + ry * dist;
-                let color = self.floor_color(fx, fy, dist);
+                let mut color = self.floor_color(fx, fy, dist);
+                // Gece gölgelemesi.
+                if is_night {
+                    let night_f = 0.35 + 0.35 * night_t;
+                    color = shade(color, night_f);
+                }
                 fb.draw_rect(win_x + col, row, 4.min(win_w - col), 2, color);
             }
         }
@@ -1639,8 +2040,10 @@ impl CityDriveApp {
             let side_shade = if side == 0 { 1.0 } else { 0.74 };
             let factor = dist_shade * side_shade;
             let wall_color = shade(tone, factor);
+            let roof_color = shade(tone, factor * 0.55);
             let win_color = shade(WINDOW_COLOR, factor);
             let lit_color = shade(WINDOW_LIT_COLOR, factor);
+            let cornice = shade(tone, factor * 0.82);
 
             // Yatay doku koordinatı (sütun başına sabit).
             let wall_u = if side == 0 {
@@ -1648,7 +2051,7 @@ impl CityDriveApp {
             } else {
                 fractf(perp * rx)
             };
-            let window_x = wall_u > 0.16 && wall_u < 0.84;
+            let window_x = wall_u > 0.12 && wall_u < 0.88;
 
             let row_start = (y_top.max(top as f32) as usize).min(top + view_h);
             let row_end = (y_bottom.max(top as f32) as usize).min(top + view_h);
@@ -1658,22 +2061,39 @@ impl CityDriveApp {
             for row in row_start..row_end {
                 let z = CAM_H + (horizon as f32 - row as f32) / scale;
                 let storey_f = fractf(z / STOREY_H);
-                let band = storey_f < 0.62;
-                let color = if window_x && band {
-                    // Pencerelerin bir kısmı yanıyor.
-                    if ((hit_x * 31 + hit_y * 17 + (row / 7) as i32) % 5) == 0 {
-                        lit_color
-                    } else {
-                        win_color
-                    }
-                } else {
-                    wall_color
-                };
-                fb.draw_rect(win_x + col, row, col_step, 1, color);
+                let storey_idx = floorf(z / STOREY_H) as i32;
+                let is_top_row = row == row_start;
+
+                // Tavan/çatı çizgısı (en üst satır).
+                if is_top_row && storeys > 0.0 {
+                    fb.draw_rect(win_x + col, row, col_step, 1, roof_color);
+                    continue;
+                }
+                // Körnice: her kat arası ince finta çizgi.
+                if storey_idx > 0 && storey_f < 0.03 {
+                    fb.draw_rect(win_x + col, row, col_step, 1, cornice);
+                    continue;
+                }
+                // Zemin katı kapısı (en altta, orta bölgede).
+                if storey_idx == 0 && storey_f > 0.78 && storey_f < 0.92 && window_x {
+                    fb.draw_rect(win_x + col, row, col_step, 1, shade(0x3A3A3A, factor));
+                    continue;
+                }
+                // Pencereler: kat başına iki pencere, gece yanık.
+                let in_window_band = storey_f > 0.12 && storey_f < 0.55;
+                let window_col = wall_u > 0.22 && wall_u < 0.42 || wall_u > 0.58 && wall_u < 0.78;
+                let lit = is_night
+                    && ((hit_x * 13 + hit_y * 7 + row as i32 * 3 + storey_idx * 11) % 7) == 0;
+                if in_window_band && window_col && window_x {
+                    let color = if lit { lit_color } else { win_color };
+                    fb.draw_rect(win_x + col, row, col_step, 1, color);
+                    continue;
+                }
+                fb.draw_rect(win_x + col, row, col_step, 1, wall_color);
             }
         }
 
-        // 4) Sprite'lar: ödüller ve trafik araçları.
+        // 4) Sprite'lar: ödüller, trafik araçları ve parçacıklar.
         for reward in self.rewards.iter() {
             if !reward.active {
                 continue;
@@ -1683,6 +2103,7 @@ impl CityDriveApp {
         for car in self.traffic.iter() {
             self.draw_vehicle(fb, top, win_w, horizon, focal, &zbuf, car);
         }
+        self.draw_particles(fb, top, win_w, horizon, focal, &zbuf);
 
         // 5) HUD.
         self.render_hud(fb, win_x, top, win_w, view_h);
@@ -1712,9 +2133,24 @@ impl CityDriveApp {
             T_PARK => PARK_COLOR,
             _ => ROAD_COLOR,
         };
-        // Yol orta çizgisi: iki yönü ayıran kesikli sarı çizgi.
         let ly = modf(fy, ROAD_PERIOD as f32);
         let lx = modf(fx, ROAD_PERIOD as f32);
+
+        // Kavşakta yaya geçişi (beyaz kalın çizgiler).
+        let inter_x = absf(ly - ROAD_AXIS_OFF) < 0.12;
+        let inter_y = absf(lx - ROAD_AXIS_OFF) < 0.12;
+        if kind == T_ROAD && (inter_x || inter_y) {
+            let cross = if inter_x {
+                modf(fx, 1.6) < 0.8
+            } else {
+                modf(fy, 1.6) < 0.8
+            };
+            if cross {
+                return shade(0xF0F0F0, shade_f);
+            }
+        }
+
+        // Yol kenar çizgileri (iki yönü ayıran kesikli sarı çizgi).
         if kind == T_ROAD
             && (absf(ly) < 0.11
                 || absf(ly - ROAD_HALF as f32) < 0.11
@@ -1723,11 +2159,20 @@ impl CityDriveApp {
         {
             return shade(EDGE_LINE_COLOR, shade_f);
         }
+        // Şerit işaretleri (kırık beyaz çizgi).
         if absf(ly - ROAD_AXIS_OFF) < 0.15 && modf(fx, 3.2) < 1.9 {
             return shade(LANE_COLOR, shade_f);
         }
         if absf(lx - ROAD_AXIS_OFF) < 0.15 && modf(fy, 3.2) < 1.9 {
             return shade(LANE_COLOR, shade_f);
+        }
+        // Kıvırcık (curb): cadde ile kaldırım sınırı.
+        if kind == T_SIDEWALK {
+            let curb_x = absf(lx) < 0.06 || absf(lx - ROAD_HALF as f32) < 0.06;
+            let curb_y = absf(ly) < 0.06 || absf(ly - ROAD_HALF as f32) < 0.06;
+            if curb_x || curb_y {
+                return shade(0xB8B8B8, shade_f);
+            }
         }
         let roughness = if kind == T_ROAD {
             0.94 + (hash4(cx as usize, cy as usize, 53, 17) % 7) as f32 * 0.015
@@ -1791,6 +2236,7 @@ impl CityDriveApp {
         zbuf: &[f32; 1024],
         car: &TrafficCar,
     ) {
+        let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;
         let (screen_x, depth, scale) = match self.project(car.x, car.y, win_w, focal, zbuf) {
             Some(v) => v,
             None => return,
@@ -2121,6 +2567,31 @@ impl CityDriveApp {
             }
             _ => {}
         }
+
+        // Gece modunda ön facing araçlar için far ışığı konisi (yere düşen ışık).
+        if is_night && front {
+            let glow_h = (h * 60 / 100).max(4);
+            let glow_w = (lw * 90 / 100).max(6);
+            let glow_x = lx.saturating_add((lw.saturating_sub(glow_w)) / 2);
+            let glow_y = y1.saturating_sub(glow_h);
+            let glow = shade(HEADLIGHT_COLOR, factor * 0.35);
+            draw_clipped(fb, &runs, run_count, glow_x, glow_y, glow_w, glow_h, glow);
+            // Far merkezi parlaklığı.
+            let core_h = (h * 10 / 100).max(2);
+            let core_w = (lw * 30 / 100).max(4);
+            let core_x = lx.saturating_add((lw.saturating_sub(core_w)) / 2);
+            let core_y = y1.saturating_sub(skirt + core_h + 2);
+            draw_clipped(
+                fb,
+                &runs,
+                run_count,
+                core_x,
+                core_y,
+                core_w,
+                core_h,
+                shade(0xFFFFFF, factor),
+            );
+        }
     }
 
     /// Toplanabilir ödülü bilboard olarak çizer.
@@ -2316,26 +2787,27 @@ impl CityDriveApp {
         win_w: usize,
         win_h: usize,
     ) {
-        // Hız ve dönüş yarıçapı paneli (sol alt).
-        let panel_w = 250.min(win_w.saturating_sub(20));
-        let panel_h = 74;
+        // Hız / RPM / yakıt / drift paneli (sol alt).
+        let panel_w = 260.min(win_w.saturating_sub(20));
+        let panel_h = 104;
         let px = win_x + 10;
         let py = win_y + win_h.saturating_sub(panel_h + 10);
         fb.draw_rect(px, py, panel_w, panel_h, 0x141922);
         fb.draw_rect_outline(px, py, panel_w, panel_h, 0x2E3A4A);
 
+        // Hız.
         let speed_kmh = (absf(self.speed) * 3.6) as u32;
-        let mut label = crate::gui::TextBuf::new();
-        label.push_usize(speed_kmh as usize);
-        label.push_str(" ");
-        label.push_str(crate::gui::ui_text("km/sa", "km/h"));
-        MinGuiCompositor::draw_string(fb, px + 10, py + 8, label.as_str(), Color::TEXT_MAIN);
+        let mut speed_buf = crate::gui::TextBuf::new();
+        speed_buf.push_usize(speed_kmh as usize);
+        speed_buf.push_str(" ");
+        speed_buf.push_str(crate::gui::ui_text("km/sa", "km/h"));
+        MinGuiCompositor::draw_string(fb, px + 10, py + 8, speed_buf.as_str(), Color::TEXT_MAIN);
 
         // Hız çubuğu.
         let bar_x = px + 10;
-        let bar_y = py + 26;
+        let bar_y = py + 22;
         let bar_w = panel_w - 20;
-        let bar_h = 12;
+        let bar_h = 10;
         fb.draw_rect(bar_x, bar_y, bar_w, bar_h, 0x232A35);
         let ratio = (absf(self.speed) / MAX_SPEED).min(1.0);
         let fill_w = ((bar_w as f32) * ratio) as usize;
@@ -2348,6 +2820,62 @@ impl CityDriveApp {
         };
         fb.draw_rect(bar_x, bar_y, fill_w, bar_h, fill_color);
 
+        // RPM (sanal: hıza ve direksiyona bağlı).
+        let rpm =
+            ((absf(self.speed) / MAX_SPEED) * 8000.0 * (1.0 + absf(self.steer_cmd) * 0.3)) as u32;
+        let mut rpm_buf = crate::gui::TextBuf::new();
+        rpm_buf.push_str(crate::gui::ui_text("RPM: ", "RPM: "));
+        rpm_buf.push_usize(rpm as usize);
+        MinGuiCompositor::draw_string(fb, px + 10, py + 36, rpm_buf.as_str(), Color::TEXT_MUTED);
+
+        // Vites (sanal: hıza bağlı).
+        let gear = if self.speed < -0.5 {
+            crate::gui::ui_text("R", "R")
+        } else if self.speed < 2.0 {
+            crate::gui::ui_text("N", "N")
+        } else if self.speed < 8.0 {
+            crate::gui::ui_text("1", "1")
+        } else if self.speed < 14.0 {
+            crate::gui::ui_text("2", "2")
+        } else if self.speed < 20.0 {
+            crate::gui::ui_text("3", "3")
+        } else {
+            crate::gui::ui_text("4", "4")
+        };
+        let mut gear_buf = crate::gui::TextBuf::new();
+        gear_buf.push_str(crate::gui::ui_text("Vit: ", "Gear: "));
+        gear_buf.push_str(gear);
+        MinGuiCompositor::draw_string(fb, px + 90, py + 36, gear_buf.as_str(), Color::TEXT_MUTED);
+
+        // Yakıt çubuğu.
+        let fuel_bar_h = 8;
+        let fuel_label = crate::gui::ui_text("Yakıt: ", "Fuel: ");
+        MinGuiCompositor::draw_string(fb, px + 10, py + 48, fuel_label, Color::TEXT_MUTED);
+        let fuel_ratio = (self.fuel / FUEL_CAPACITY).clamp(0.0, 1.0);
+        let fuel_fill_w = ((panel_w - 20 - 40) as f32 * fuel_ratio) as usize;
+        let fuel_color = if fuel_ratio < 0.15 {
+            0xFF6B6B
+        } else if fuel_ratio < 0.30 {
+            0xF0B040
+        } else {
+            0x62D6A8
+        };
+        fb.draw_rect(px + 50, py + 58, panel_w - 60, fuel_bar_h, 0x232A35);
+        fb.draw_rect(px + 50, py + 58, fuel_fill_w, fuel_bar_h, fuel_color);
+        if fuel_ratio < 0.15 {
+            let mut warn_buf = crate::gui::TextBuf::new();
+            warn_buf.push_str(crate::gui::ui_text("Düşük yakıt!", "Low fuel!"));
+            MinGuiCompositor::draw_string(fb, px + 10, py + 68, warn_buf.as_str(), 0xFF6B6B);
+        }
+
+        // Drift puanı.
+        if self.drift_score > 0 {
+            let mut drift_buf = crate::gui::TextBuf::new();
+            drift_buf.push_str(crate::gui::ui_text("Drift: ", "Drift: "));
+            drift_buf.push_usize(self.drift_score as usize);
+            MinGuiCompositor::draw_string(fb, px + 10, py + 80, drift_buf.as_str(), 0xFFD700);
+        }
+
         // Dönüş yarıçapı göstergesi (bisiklet modeli).
         let mut radius_buf = crate::gui::TextBuf::new();
         radius_buf.push_str(crate::gui::ui_text("Dönüş yarıçapı: ", "Turn radius: "));
@@ -2359,9 +2887,9 @@ impl CityDriveApp {
         } else {
             radius_buf.push_str(crate::gui::ui_text("düz", "straight"));
         }
-        MinGuiCompositor::draw_string(fb, px + 10, py + 46, radius_buf.as_str(), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, px + 10, py + 92, radius_buf.as_str(), Color::TEXT_MUTED);
 
-        // Skor, mesafe ve toplanan ödül (sol üst).
+        // Skor, mesafe, ödül ve yakıt (sol üst).
         let mut score_buf = crate::gui::TextBuf::new();
         score_buf.push_str(crate::gui::ui_text("Skor: ", "Score: "));
         score_buf.push_usize(self.score as usize);
@@ -2371,11 +2899,42 @@ impl CityDriveApp {
         score_buf.push_str(" m  ");
         score_buf.push_str(crate::gui::ui_text("Ödül: ", "Prizes: "));
         score_buf.push_usize(self.collected as usize);
+        score_buf.push_str("  ");
+        score_buf.push_str(crate::gui::ui_text("Yakıt: ", "Fuel: "));
+        score_buf.push_usize((self.fuel * 10.0) as usize);
+        score_buf.push_str(" L");
         MinGuiCompositor::draw_string(
             fb,
             win_x + 10,
             win_y + 8,
             score_buf.as_str(),
+            if self.fuel < FUEL_WARN {
+                0xFF6B6B
+            } else {
+                Color::TEXT_MUTED
+            },
+        );
+
+        // Zaman / tur (sağ üst, mini haritanın altında).
+        let mut time_buf = crate::gui::TextBuf::new();
+        let hour = (self.time_of_day * 24.0) as u32;
+        let minute = ((self.time_of_day * 24.0 * 60.0) % 60.0) as u32;
+        time_buf.push_str(crate::gui::ui_text("Saat: ", "Time: "));
+        time_buf.push_usize(hour as usize);
+        time_buf.push_str(":");
+        if minute < 10 {
+            time_buf.push_str("0");
+        }
+        time_buf.push_usize(minute as usize);
+        time_buf.push_str("  ");
+        time_buf.push_str(crate::gui::ui_text("Tur: ", "Lap: "));
+        time_buf.push_usize(self.lap_timer as usize);
+        time_buf.push_str("s");
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + win_w.saturating_sub(MinGuiCompositor::text_width(time_buf.as_str(), 1)) - 10,
+            win_y + 8,
+            time_buf.as_str(),
             Color::TEXT_MUTED,
         );
 
@@ -2387,8 +2946,8 @@ impl CityDriveApp {
 
         // Kontrol ipuçları (alt orta).
         let hint = crate::gui::ui_text(
-            "W/S gaz-fren  A/D direksiyon  Space el freni  R sifirla  Esc duraklat",
-            "W/S throttle-brake  A/D steer  Space handbrake  R reset  Esc pause",
+            "W/S gaz-fren  A/D direksiyon  Space el freni (drift)  R sifirla  Esc duraklat",
+            "W/S throttle-brake  A/D steer  Space handbrake (drift)  R reset  Esc pause",
         );
         MinGuiCompositor::draw_string(
             fb,
@@ -2418,8 +2977,8 @@ impl CityDriveApp {
                     "W/S throttle-brake · A/D steer · Space handbrake",
                 );
                 let goal = crate::gui::ui_text(
-                    "Madeni paraları ve ödülleri topla, trafikten kaç!",
-                    "Collect coins and prizes, dodge traffic!",
+                    "Ödülleri topla, yakıtını koru, drift yap, tur tamamla!",
+                    "Collect prizes, manage fuel, drift, complete laps!",
                 );
                 let cx = win_x + win_w / 2;
                 let cy = win_y + win_h / 2;
@@ -2475,8 +3034,11 @@ impl CityDriveApp {
 
     /// Üstten bakış mini harita.
     fn render_minimap(&self, fb: &mut Framebuffer, x: usize, y: usize, size: usize) {
-        fb.draw_rect(x, y, size, size, 0x10141A);
-        fb.draw_rect_outline(x, y, size, size, 0x2E3A4A);
+        let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;
+        let bg = if is_night { 0x05070A } else { 0x10141A };
+        let outline = if is_night { 0x1A2438 } else { 0x2E3A4A };
+        fb.draw_rect(x, y, size, size, bg);
+        fb.draw_rect_outline(x, y, size, size, outline);
         let view_cells = 26.0f32;
         let scale = size as f32 / view_cells;
 
@@ -2513,6 +3075,21 @@ impl CityDriveApp {
             if px >= x as f32 && px < (x + size) as f32 && py >= y as f32 && py < (x + size) as f32
             {
                 fb.draw_rect(px as usize, py as usize, 3, 3, car.color);
+            }
+        }
+
+        // Kontrol noktaları.
+        for (i, cp) in self.checkpoints.iter().enumerate() {
+            let px = x as f32 + (cp.0 - self.car_x) * scale;
+            let py = y as f32 + (cp.1 - self.car_y) * scale;
+            if px >= x as f32 && px < (x + size) as f32 && py >= y as f32 && py < (y + size) as f32
+            {
+                let color = if i == self.checkpoint {
+                    0xFFD700
+                } else {
+                    0x4A4A4A
+                };
+                fb.draw_rect(px as usize, py as usize, 4, 4, color);
             }
         }
 

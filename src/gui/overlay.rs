@@ -237,6 +237,68 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Ekran okuyucu bildirim bandını çizer.
+    ///
+    /// Band, ekranın altında görev çubuğunun hemen üstünde yer alır ve
+    /// `announcer` kuyruğundaki en son bildirimi gösterir. Süresi dolan
+    /// bildirimler burada temizlenir.
+    pub fn render_announcement_overlay(&self, fb: &mut Framebuffer, tb_y: usize) {
+        let now_ms = crate::monotonic_ms();
+        let Some(item) = self.announcer.current() else {
+            return;
+        };
+        if item.is_expired(now_ms) {
+            return;
+        }
+
+        let text = item.text_str();
+        if text.is_empty() {
+            return;
+        }
+
+        let accent = match item.kind {
+            a11y::AnnounceKind::Status => Color::ACCENT_BLUE,
+            a11y::AnnounceKind::Alert => Color::ACCENT_YELLOW,
+        };
+
+        let max_w = fb.width.saturating_sub(sp(24)).max(1);
+        let text_w = Self::text_width(text, 1).min(max_w.saturating_sub(sp(28)));
+        let band_w = (text_w + sp(28)).min(max_w);
+        let band_h = sp(28);
+        let band_x = (fb.width.saturating_sub(band_w)) / 2;
+        let band_y = tb_y.saturating_sub(band_h + sp(8));
+
+        fb.draw_shadow(band_x, band_y, band_w, band_h, Color::SHADOW);
+        fb.draw_rounded_rect(band_x, band_y, band_w, band_h, 6, Color::TASKBAR_BG);
+        fb.draw_rounded_rect_outline(band_x, band_y, band_w, band_h, 6, accent);
+        // Sol kenarda tür renginde ince dikey bant.
+        fb.draw_rounded_rect(
+            band_x + 2,
+            band_y + 4,
+            4,
+            band_h.saturating_sub(8),
+            2,
+            accent,
+        );
+
+        Self::draw_string(
+            fb,
+            band_x + sp(12),
+            band_y + (band_h.saturating_sub(Self::text_height())) / 2,
+            text,
+            Color::TEXT_MAIN,
+        );
+    }
+
+    /// Süresi dolmuş ekran okuyucu bildirimlerini temizler.
+    ///
+    /// Ana döngüde her karede çağrılır; kuyrukta süresi dolmuş girdi
+    /// kalmadığında hiçbir iş yapmaz.
+    pub fn expire_announcements(&mut self) {
+        let now_ms = crate::monotonic_ms();
+        self.announcer.expire(now_ms);
+    }
+
     /// Yönlü yeniden boyutlandırma imleci: kenarlar için çift ok, köşeler için çapraz.
     fn draw_resize_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, edge: ResizeEdge) {
         use ResizeEdge::*;

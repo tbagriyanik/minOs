@@ -45,6 +45,8 @@ const COMPLETION_COMMANDS: &[&str] = &[
     "clear",
     "mem",
     "meminfo",
+    "free",
+    "env",
     "ps",
     "apps",
     "ipconfig",
@@ -1361,6 +1363,26 @@ impl TerminalApp {
                 "open <uygulama_adı>\n  Masaüstü uygulamasını açar.\n  Uygulamalar: files, settings, notepad, browser, image, music, video, taskmgr, calc, paint, cmd, pkgmgr, panel\n  Örnek: open files\n       open browser",
                 "open <app_name>\n  Opens a desktop application.\n  Apps: files, settings, notepad, browser, image, music, video, taskmgr, calc, paint, cmd, pkgmgr, panel\n  Example: open files\n       open browser",
             ),
+            "uname" => crate::gui::ui_text(
+                "uname [-a]\n  İşletim sistemi bilgisini gösterir.\n  Örnek: uname\n       uname -a        (ayrıntılı sürüm ve mimari)",
+                "uname [-a]\n  Prints operating system information.\n  Example: uname\n       uname -a        (detailed version and architecture)",
+            ),
+            "whoami" => crate::gui::ui_text(
+                "whoami\n  Geçerli oturum kullanıcı adını gösterir.",
+                "whoami\n  Prints the current session user name.",
+            ),
+            "theme" => crate::gui::ui_text(
+                "theme [next | list | <1-9>]\n  Arayüz temasını yönetir.\n  Örnek: theme          (etkin temayı göster)\n       theme next     (sonraki temaya geç)\n       theme list     (temaları listele)\n       theme 3        (3. temayı uygula)",
+                "theme [next | list | <1-9>]\n  Manages the interface theme.\n  Example: theme          (show active theme)\n       theme next     (switch to next theme)\n       theme list     (list themes)\n       theme 3        (apply the 3rd theme)",
+            ),
+            "env" => crate::gui::ui_text(
+                "env\n  Ortam değişkenlerini listeler (salt okunur).",
+                "env\n  Lists environment variables (read-only).",
+            ),
+            "free" => crate::gui::ui_text(
+                "free [-w]\n  RAM kullanım özetini gösterir.\n  Örnek: free\n       free -w        (geniş bellek raporu)",
+                "free [-w]\n  Prints a RAM usage summary.\n  Example: free\n       free -w        (wide memory report)",
+            ),
             _ => crate::gui::ui_text(no_help_tr.as_str(), no_help_en.as_str()),
         };
         for line in help_text.lines() {
@@ -1501,6 +1523,8 @@ impl TerminalApp {
                         Color::TEXT_MAIN,
                     );
                     self.push_line("  mem / meminfo     - Bellek bilgisi", Color::TEXT_MAIN);
+                    self.push_line("  free [-w]         - RAM kullanım özeti", Color::TEXT_MAIN);
+                    self.push_line("  env               - Ortam değişkenleri", Color::TEXT_MAIN);
                     self.push_line(
                         "  ps                - Çalışan süreçleri listele",
                         Color::TEXT_MAIN,
@@ -2968,7 +2992,99 @@ impl TerminalApp {
                     Color::ACCENT_GREEN,
                 );
             }
+            "uname" => {
+                // `uname` tek başına işletim sistemi adını, `-a` ile ayrıntılı
+                // sürüm/mimari bilgisini döndürür (Unix alışkanlığı).
+                let verbose = arg.split_whitespace().any(|a| a == "-a" || a == "--all");
+                let mut b = TextBuf::new();
+                if verbose {
+                    b.push_str("minOs ");
+                    b.push_str(env!("CARGO_PKG_VERSION"));
+                    b.push_str(" x86_64 ");
+                    b.push_str(crate::gui::ui_text(
+                        "Rust no_std · MinShell 2.0",
+                        "Rust no_std · MinShell 2.0",
+                    ));
+                } else {
+                    b.push_str("minOs");
+                }
+                self.push_line(b.as_str(), Color::ACCENT_BLUE);
+            }
+            "whoami" => {
+                // minOs tek kullanıcılı bir masaüstü ortamıdır; oturum
+                // adı sabittir.
+                self.push_line("minos", Color::ACCENT_BLUE);
+            }
+            "theme" => {
+                let sub = arg.trim();
+                match sub {
+                    "" => {
+                        let mut b = TextBuf::new();
+                        b.push_str(crate::gui::ui_text("Etkin tema: ", "Active theme: "));
+                        b.push_str(crate::gui::theme::current().name());
+                        self.push_line(b.as_str(), Color::ACCENT_PINK);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Kullanım: theme next | theme list | theme <1-9>",
+                                "Usage: theme next | theme list | theme <1-9>",
+                            ),
+                            Color::TEXT_MUTED,
+                        );
+                    }
+                    "next" | "n" => {
+                        let applied = crate::gui::theme::cycle();
+                        let mut b = TextBuf::new();
+                        b.push_str(crate::gui::ui_text(
+                            "Tema değiştirildi: ",
+                            "Theme changed: ",
+                        ));
+                        b.push_str(applied.name());
+                        self.push_line(b.as_str(), Color::ACCENT_PINK);
+                    }
+                    "list" | "l" => {
+                        let current = crate::gui::theme::current();
+                        for (i, id) in crate::gui::theme::ThemeId::ALL.iter().enumerate() {
+                            let mut b = TextBuf::new();
+                            b.push_str(if *id == current { "* " } else { "  " });
+                            b.push_usize(i + 1);
+                            b.push_str(". ");
+                            b.push_str(id.name());
+                            self.push_line(b.as_str(), Color::TEXT_MAIN);
+                        }
+                    }
+                    _ => {
+                        // `theme 3` -> listedeki 3. tema
+                        match sub.parse::<usize>() {
+                            Ok(n) if n >= 1 && n <= crate::gui::theme::ThemeId::ALL.len() => {
+                                let id = crate::gui::theme::ThemeId::ALL[n - 1];
+                                crate::gui::theme::set_theme(id);
+                                let mut b = TextBuf::new();
+                                b.push_str(crate::gui::ui_text(
+                                    "Tema değiştirildi: ",
+                                    "Theme changed: ",
+                                ));
+                                b.push_str(id.name());
+                                self.push_line(b.as_str(), Color::ACCENT_PINK);
+                            }
+                            _ => {
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Geçersiz tema. Kullanım: theme next | theme list | theme <1-9>",
+                                        "Invalid theme. Usage: theme next | theme list | theme <1-9>",
+                                    ),
+                                    Color::ACCENT_YELLOW,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             "set" => self.run_set(arg),
+            "env" => {
+                // `env` Unix'te ortam değişkenlerini listeler; minOs'ta ortam
+                // yalnızca okunur, bu yüzden `set` ile aynı çıktıyı verir.
+                self.run_set(if arg.is_empty() { "" } else { arg });
+            }
             "exit" => {
                 self.push_line(
                     crate::gui::ui_text(
@@ -2997,6 +3113,48 @@ impl TerminalApp {
                     b.push_str("% bos)");
                 }
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
+            }
+            "free" => {
+                // `free`: RAM kullanımının Unix benzeri özeti.
+                // `-w` geniş bellek raporunu (meminfo) açar.
+                if arg.split_whitespace().any(|a| a == "-w" || a == "--wide") {
+                    let report = crate::mm::memory::render_report();
+                    for line in report.lines() {
+                        self.push_line(line, Color::TEXT_MAIN);
+                    }
+                } else {
+                    let total_mb = (pmm.total_memory_bytes / 1024 / 1024) as usize;
+                    let used_mb = (pmm.used_memory_bytes / 1024 / 1024) as usize;
+                    let free_mb = (pmm.free_memory_bytes / 1024 / 1024) as usize;
+                    let free_pct = pmm.free_percent() as usize;
+                    let used_pct = 100usize.saturating_sub(free_pct);
+
+                    let mut head = TextBuf::new();
+                    head.push_str(crate::gui::ui_text("Bellek (RAM)", "Memory (RAM)"));
+                    self.push_line(head.as_str(), Color::ACCENT_GREEN);
+
+                    let mut total = TextBuf::new();
+                    total.push_str(crate::gui::ui_text("  Toplam:      ", "  Total:      "));
+                    total.push_usize(total_mb);
+                    total.push_str(" MB");
+                    self.push_line(total.as_str(), Color::TEXT_MAIN);
+
+                    let mut used = TextBuf::new();
+                    used.push_str(crate::gui::ui_text("  Kullanılan:  ", "  Used:       "));
+                    used.push_usize(used_mb);
+                    used.push_str(" MB (");
+                    used.push_usize(used_pct);
+                    used.push_str("%)");
+                    self.push_line(used.as_str(), Color::ACCENT_YELLOW);
+
+                    let mut free = TextBuf::new();
+                    free.push_str(crate::gui::ui_text("  Boş:         ", "  Free:       "));
+                    free.push_usize(free_mb);
+                    free.push_str(" MB (");
+                    free.push_usize(free_pct);
+                    free.push_str("%)");
+                    self.push_line(free.as_str(), Color::ACCENT_GREEN);
+                }
             }
             "meminfo" => {
                 // Genişletilmiş bellek istatistikleri: PMM profili, kernel heap,

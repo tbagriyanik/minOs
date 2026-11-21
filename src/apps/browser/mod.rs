@@ -43,7 +43,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::fmt::Write;
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use heapless::String as HeaplessString;
 
 use crate::drivers::http::header_value;
@@ -608,6 +608,10 @@ static HISTORY: [[AtomicU32; HISTORY_URL_CAP]; HISTORY_MAX] =
 static HISTORY_LEN: [AtomicUsize; HISTORY_MAX] = [const { AtomicUsize::new(0) }; HISTORY_MAX];
 static HISTORY_COUNT: AtomicUsize = AtomicUsize::new(0);
 static HISTORY_POS: AtomicUsize = AtomicUsize::new(0);
+/// Geçmiş, VFS'e yazılması gerektiğinde `true` olur. Ana döngü
+/// (`poll_network`) bu bayrağı izleyip `/browser/history.txt` dosyasını
+/// günceller; böylece geçmiş yeniden başlatma sonrasında da korunur.
+static HISTORY_DIRTY: AtomicBool = AtomicBool::new(false);
 
 // ── Ertelenmiş hata günlüğü ───────────────────────────────────────────────
 // Ağ döngüsü, yanıt tamponlarına ödünç verdiği `self` alanlarını tutarken
@@ -689,6 +693,7 @@ fn history_push(url: &str) {
     count += 1;
     HISTORY_COUNT.store(count, Ordering::Release);
     HISTORY_POS.store(count - 1, Ordering::Release);
+    HISTORY_DIRTY.store(true, Ordering::Release);
 }
 
 /// Mevcut geçmiş girdisini (replaceState) yeni adresle değiştirir.
@@ -750,6 +755,7 @@ pub fn history_clear() {
     for slot in HISTORY_LEN.iter() {
         slot.store(0, Ordering::Release);
     }
+    HISTORY_DIRTY.store(true, Ordering::Release);
 }
 
 /// Belirtilen indeksteki geçmiş kaydını siler ve kalanları kaydırır.
@@ -773,6 +779,7 @@ pub fn history_remove(index: usize) -> bool {
     } else if new_count == 0 {
         HISTORY_POS.store(0, Ordering::Release);
     }
+    HISTORY_DIRTY.store(true, Ordering::Release);
     true
 }
 
@@ -897,6 +904,8 @@ pub struct BrowserApp {
     pub is_post: bool,
     pub post_body: Vec<u8>,
     cookies_vfs_loaded: bool,
+    /// Geçmiş `/browser/history.txt` dosyasından bir kez yüklendi mi?
+    history_vfs_loaded: bool,
     revocation_checked: bool,
     pub response_data: Vec<u8>,
     pub response_len: usize,
@@ -1246,6 +1255,7 @@ impl BrowserApp {
             is_post: false,
             post_body: Vec::new(),
             cookies_vfs_loaded: false,
+            history_vfs_loaded: false,
             revocation_checked: false,
             response_data: Vec::new(),
             response_len: 0,
@@ -1365,6 +1375,46 @@ impl BrowserApp {
                     });
             }
         }
+        true
+    }
+
+    /// Tarayıcı geçmişini `/browser/history.txt` dosyasına yazar.
+    ///
+    /// Her satır bir URL'dir (en eski giriş ilk satır). Dosya, çerezler ve
+    /// yer imleri gibi VFS'de kalıcıdır; bir sonraki açılışta
+    /// [`Self::load_history_from_vfs`] ile geri yüklenir.
+    pub fn save_history_to_vfs(&self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
+        if !vfs.is_dir("/browser") {
+            let _ = vfs.create_dir("/browser");
+        }
+        let mut lines: Vec<u8> = Vec::new();
+        for i in 0..history_count() {
+            if let Some(url) = history_copy(i) {
+                lines.extend_from_slice(url.as_bytes());
+                lines.push(b'\n');
+            }
+        }
+        vfs.create_file("/browser/history.txt", &lines)
+    }
+
+    /// Geçmişi `/browser/history.txt` dosyasından okur.
+    ///
+    /// Dosya yoksa `false` döner ve mevcut geçmiş korunur.
+    pub fn load_history_from_vfs(&self, vfs: &crate::fs::vfs::VirtualFileSystem) -> bool {
+        let data = match vfs.read_file("/browser/history.txt") {
+            Some(d) => d,
+            None => return false,
+        };
+        let text = core::str::from_utf8(data).unwrap_or("");
+        history_clear();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                history_push(trimmed);
+            }
+        }
+        // Yükleme sonrası kayıt gerekmez; bayrağı sıfırla.
+        HISTORY_DIRTY.store(false, Ordering::Release);
         true
     }
 
@@ -4433,6 +4483,18 @@ impl BrowserApp {
                 let data = data.to_vec();
                 unsafe { &*crate::drivers::cookie::cookie_jar() }.load(&data);
             }
+        }
+
+        // Geçmişi ilk ağ turunda VFS'ten bir kez yükle; böylece yeniden
+        // başlatma sonrasında gezilen adresler korunur.
+        if !self.history_vfs_loaded {
+            self.history_vfs_loaded = true;
+            self.load_history_from_vfs(vfs);
+        }
+
+        // Geçmiş değiştiyse `/browser/history.txt` dosyasını güncelle.
+        if HISTORY_DIRTY.swap(false, Ordering::AcqRel) {
+            self.save_history_to_vfs(vfs);
         }
 
         // Ana istek yokken sıradaki harici kaynağı (img/CSS) başlat.

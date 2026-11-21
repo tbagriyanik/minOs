@@ -585,6 +585,24 @@ impl NotepadApp {
         app
     }
 
+    /// Metindeki kelime sayısı (boşlukla ayrılmış, boş olmayan parçalar).
+    ///
+    /// Durum çubuğunda "N kelime" göstergesi için kullanılır; metin
+    /// değiştikçe yeniden hesaplanır.
+    pub fn word_count(&self) -> usize {
+        let mut words = 0usize;
+        let mut in_word = false;
+        for &c in &self.buffer[..self.len] {
+            if c.is_whitespace() {
+                in_word = false;
+            } else if !in_word {
+                in_word = true;
+                words += 1;
+            }
+        }
+        words
+    }
+
     /// Değişiklikten önce mevcut durumu geri al yığınına iter ve
     /// ileri al (redo) yığınını temizler.
     fn push_history(&mut self) {
@@ -2065,6 +2083,9 @@ impl NotepadApp {
         status.push_str("  |  ");
         status.push_u2(self.len.min(99) as u32);
         status.push_str(crate::gui::ui_text(" karakter", " chars"));
+        status.push_str("  |  ");
+        status.push_u2(self.word_count().min(9999) as u32);
+        status.push_str(crate::gui::ui_text(" kelime", " words"));
         MinGuiCompositor::draw_string(
             fb,
             win_x + 12,

@@ -7690,61 +7690,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     w.y = my.saturating_sub(drag_offset_y).min(max_y);
 
-                    // Aero Snap kenar/köşe algılama & önizleme kutusu
+                    // Aero Snap kenar/köşe algılama & önizleme kutusu.
+                    // Bölge mantığı `gui::snap` modülündedir; bırakma yolu da
+                    // aynı fonksiyonu kullandığı için önizleme ile sonuç
+                    // birebir aynıdır.
 
                     let old_snap = active_snap_preview;
 
                     let usable_h = height.saturating_sub(gui::taskbar_h());
 
-                    let half_w = width / 2;
-                    let half_h = usable_h / 2;
-
-                    if my <= 4 {
-                        active_snap_preview = Some((0, 0, width, usable_h));
-                    } else if my >= usable_h.saturating_sub(5) {
-                        if mx <= 4 {
-                            active_snap_preview =
-                                Some((0, half_h, half_w, usable_h.saturating_sub(half_h)));
-                        } else if mx >= width.saturating_sub(5) {
-                            active_snap_preview = Some((
-                                half_w,
-                                half_h,
-                                width.saturating_sub(half_w),
-                                usable_h.saturating_sub(half_h),
-                            ));
-                        } else if mx < half_w {
-                            active_snap_preview =
-                                Some((0, half_h, half_w, usable_h.saturating_sub(half_h)));
-                        } else {
-                            active_snap_preview = Some((
-                                half_w,
-                                half_h,
-                                width.saturating_sub(half_w),
-                                usable_h.saturating_sub(half_h),
-                            ));
-                        }
-                    } else if mx <= 4 {
-                        if my < half_h {
-                            active_snap_preview = Some((0, 0, half_w, half_h));
-                        } else {
-                            active_snap_preview =
-                                Some((0, half_h, half_w, usable_h.saturating_sub(half_h)));
-                        }
-                    } else if mx >= width.saturating_sub(5) {
-                        if my < half_h {
-                            active_snap_preview =
-                                Some((half_w, 0, width.saturating_sub(half_w), half_h));
-                        } else {
-                            active_snap_preview = Some((
-                                half_w,
-                                half_h,
-                                width.saturating_sub(half_w),
-                                usable_h.saturating_sub(half_h),
-                            ));
-                        }
-                    } else {
-                        active_snap_preview = None;
-                    }
+                    active_snap_preview = gui::snap::snap_zone(mx, my, width, usable_h)
+                        .map(|zone| gui::snap::snap_rect(zone, width, usable_h));
 
                     let new_box = (
                         w.x.saturating_sub(4),
@@ -8120,33 +8076,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             if let Some(idx) = dragging_win {
                 compositor.focus_window(idx);
                 let usable_h = height.saturating_sub(gui::taskbar_h());
-                let half_w = width / 2;
-                let half_h = usable_h / 2;
 
-                if my <= 4 {
-                    compositor.snap_window(idx, gui::SnapPosition::Top, width, height);
-                } else if my >= usable_h.saturating_sub(5) {
-                    if mx <= 4 {
-                        compositor.snap_window(idx, gui::SnapPosition::BottomLeft, width, height);
-                    } else if mx >= width.saturating_sub(5) {
-                        compositor.snap_window(idx, gui::SnapPosition::BottomRight, width, height);
-                    } else if mx < half_w {
-                        compositor.snap_window(idx, gui::SnapPosition::BottomLeft, width, height);
-                    } else {
-                        compositor.snap_window(idx, gui::SnapPosition::BottomRight, width, height);
-                    }
-                } else if mx <= 4 {
-                    if my < half_h {
-                        compositor.snap_window(idx, gui::SnapPosition::TopLeft, width, height);
-                    } else {
-                        compositor.snap_window(idx, gui::SnapPosition::BottomLeft, width, height);
-                    }
-                } else if mx >= width.saturating_sub(5) {
-                    if my < half_h {
-                        compositor.snap_window(idx, gui::SnapPosition::TopRight, width, height);
-                    } else {
-                        compositor.snap_window(idx, gui::SnapPosition::BottomRight, width, height);
-                    }
+                // Bölge mantığı önizleme ile aynı kaynaktan gelir.
+                if let Some(zone) = gui::snap::snap_zone(mx, my, width, usable_h) {
+                    compositor.snap_window(idx, zone, width, height);
                 }
             }
 

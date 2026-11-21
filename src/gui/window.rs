@@ -495,25 +495,9 @@ impl Window {
 
 /// Aero Snap window positioning targets.
 ///
-/// Defines the standard snap positions for window tiling operations
-/// (Windows 10/11 style Aero Snap).
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum SnapPosition {
-    /// Left half of screen
-    Left,
-    /// Right half of screen
-    Right,
-    /// Full screen (maximize)
-    Top,
-    /// Top-left quarter
-    TopLeft,
-    /// Top-right quarter
-    TopRight,
-    /// Bottom-left quarter
-    BottomLeft,
-    /// Bottom-right quarter
-    BottomRight,
-}
+/// Tanım `snap` modülündedir (saf, host testlerinde sınanır); buradan yeniden
+/// dışa aktarılır.
+pub use super::snap::SnapPosition;
 
 /// Taskbar layout coordinates (single source of truth for rendering and hit-testing).
 ///

@@ -83,6 +83,14 @@ pub mod timefmt;
 #[path = "../src/gui/theme.rs"]
 pub mod theme;
 
+// Aero Snap bölge algılama ve hedef geometrisi (saf, cizimden bagimsiz).
+#[path = "../src/gui/snap.rs"]
+pub mod snap;
+
+// Ekran okuyucu bildirim kuyrugu (erisilebilirlik katmani, saf).
+#[path = "../src/gui/a11y.rs"]
+pub mod a11y;
+
 // Ekran geometrisi: `super::theme` yolu crate kokundeki theme modulunu bulur.
 #[path = "../src/gui/screen_layout.rs"]
 pub mod screen_layout;

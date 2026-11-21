@@ -574,6 +574,9 @@ impl MinGuiCompositor {
         // Görev Çubuğu Üzerinde Toast Bildirimleri (Hafif Gölgeli Modern Kartlar)
         self.render_toasts(fb, tb_y, mx, my);
 
+        // Ekran Okuyucu Bildirim Bandı (toast'ların üstünde, ipucundan altta)
+        self.render_announcement_overlay(fb, tb_y);
+
         // Hover ipuçları (imleçten önce, en üst katman)
         self.draw_tooltip(fb);
 

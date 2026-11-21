@@ -1,3 +1,4 @@
+pub mod a11y;
 pub mod anim;
 pub mod clipboard;
 pub mod context;
@@ -13,6 +14,7 @@ pub mod screen_layout;
 pub mod screens;
 pub mod scrollbar;
 pub mod setup;
+pub mod snap;
 pub mod startmenu;
 pub mod taskbar;
 pub mod textbuf;
@@ -207,6 +209,8 @@ pub struct MinGuiCompositor {
     pub confirm_shutdown: bool,
     pub confirm_restart: bool,
     pub toasts: [Option<ToastNotification>; MAX_TOASTS],
+    /// Ekran okuyucu bildirim kuyruğu (erişilebilirlik katmanı).
+    pub announcer: a11y::Announcer,
     pub installed_apps: [[u8; 24]; 8],
     pub installed_apps_len: [u8; 8],
     pub installed_apps_count: usize,
@@ -259,6 +263,7 @@ impl MinGuiCompositor {
             confirm_shutdown: false,
             confirm_restart: false,
             toasts: [None, None, None, None],
+            announcer: a11y::Announcer::new(),
             dirty_tracker: crate::gui::dirty_rect::GlobalDirtyTracker::new(),
             active_workspace: 0,
             installed_apps: [[0; 24]; 8],
@@ -270,6 +275,19 @@ impl MinGuiCompositor {
             alt_tab_selection: 0,
             z_counter: 0,
         }
+    }
+
+    /// Ekran okuyucuya bir durum bildirimi ekler.
+    ///
+    /// Metin ekranda kısa bir süre bir bant olarak gösterilir (bkz.
+    /// `gui::overlay::render_announcement_overlay`).
+    pub fn announce_status(&mut self, text: &str) -> bool {
+        self.announcer.announce_status(text, crate::monotonic_ms())
+    }
+
+    /// Ekran okuyucuya bir uyarı bildirimi ekler.
+    pub fn announce_alert(&mut self, text: &str) -> bool {
+        self.announcer.announce_alert(text, crate::monotonic_ms())
     }
 
     pub fn add_window(&mut self, mut win: Window) -> bool {
@@ -648,59 +666,14 @@ impl MinGuiCompositor {
             if !win.is_maximized && win.restore.is_none() {
                 win.restore = Some((win.x, win.y, win.width, win.height));
             }
-            let half_w = screen_w / 2;
-            let half_h = usable_h / 2;
-            match snap {
-                SnapPosition::Top => {
-                    win.x = 0;
-                    win.y = 0;
-                    win.width = screen_w;
-                    win.height = usable_h;
-                    win.is_maximized = true;
-                }
-                SnapPosition::Left => {
-                    win.x = 0;
-                    win.y = 0;
-                    win.width = half_w;
-                    win.height = usable_h;
-                    win.is_maximized = false;
-                }
-                SnapPosition::Right => {
-                    win.x = half_w;
-                    win.y = 0;
-                    win.width = screen_w.saturating_sub(half_w);
-                    win.height = usable_h;
-                    win.is_maximized = false;
-                }
-                SnapPosition::TopLeft => {
-                    win.x = 0;
-                    win.y = 0;
-                    win.width = half_w;
-                    win.height = half_h;
-                    win.is_maximized = false;
-                }
-                SnapPosition::TopRight => {
-                    win.x = half_w;
-                    win.y = 0;
-                    win.width = screen_w.saturating_sub(half_w);
-                    win.height = half_h;
-                    win.is_maximized = false;
-                }
-                SnapPosition::BottomLeft => {
-                    win.x = 0;
-                    win.y = half_h;
-                    win.width = half_w;
-                    win.height = usable_h.saturating_sub(half_h);
-                    win.is_maximized = false;
-                }
-                SnapPosition::BottomRight => {
-                    win.x = half_w;
-                    win.y = half_h;
-                    win.width = screen_w.saturating_sub(half_w);
-                    win.height = usable_h.saturating_sub(half_h);
-                    win.is_maximized = false;
-                }
-            }
+            // Geometri tek kaynaktan (`snap::snap_rect`) gelir; sürükleme
+            // önizlemesi ile bırakma sonucu birebir aynıdır.
+            let (x, y, width, height) = snap::snap_rect(snap, screen_w, usable_h);
+            win.x = x;
+            win.y = y;
+            win.width = width;
+            win.height = height;
+            win.is_maximized = matches!(snap, SnapPosition::Top);
         }
     }
 

@@ -359,32 +359,39 @@ pub fn terminate_app(
         .any(|slot| slot.is_some_and(|window| window.app_id as usize == app_id && window.is_open));
     if !another_instance_open {
         match app_id {
-            0 => apps.filemanager_app = apps::filemanager::FileManagerApp::new(),
+            // Kabuk uygulamaları (0, 1, 3, 5, 7, 14) yüklü kalır; sadece geçici durum sıfırlanır.
+            0 => {
+                // Dosya Yöneticisi: bellekte kalır, yeniden oluşturulmaz.
+            }
             1 => apps.settings_app.active_tab = 0,
-            // Kullanıcı uygulamaları son pencere kapanınca bellekten düşürülür.
-            2 => apps.notepad_app = None,
-            3 => apps.browser_app = apps::browser::BrowserApp::new(),
-            4 => apps.imageviewer_app = None,
+            // Kullanıcı uygulamaları son pencere kapanınca `unload` ile bellekten düşürülür.
+            2 => apps.unload(2),
+            3 => {
+                // Tarayıcı: bellekte kalır, yeniden oluşturulmaz.
+            }
+            4 => apps.unload(4),
             5 => {
-                apps.musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
+                // Müzik Çalar: bellekte kalır, oynatma durdurulur.
                 drivers::hda::silence();
                 // PC speaker çıkışını da kapat.
                 let mut audio = drivers::audio::AudioDevice::new();
                 audio.set_pc_speaker_tone(0);
             }
-            6 => apps.videoplayer_app = None,
-            7 => apps.taskmgr_app = apps::taskmgr::TaskManagerApp::new(),
-            8 => apps.calculator_app = None,
+            6 => apps.unload(6),
+            7 => {
+                // Görev Yöneticisi: bellekte kalır, yeniden oluşturulmaz.
+            }
+            8 => apps.unload(8),
             9 => apps.paint_apps[idx] = None,
-            10 => apps.terminal_app = None,
-            11 => apps.installer_app = None,
-            12 => apps.viewer3d_app = None,
-            13 => apps.pkgmgr_app = None,
+            10 => apps.unload(10),
+            11 => apps.unload(11),
+            12 => apps.unload(12),
+            13 => apps.unload(13),
             14 => apps::controlpanel::reset(),
-            15 => apps.fps_game_app = None,
-            16 => apps.fps_3d_app = None,
+            15 => apps.unload(15),
+            16 => apps.unload(16),
             17 => {
-                apps.city_drive_app = None;
+                apps.unload(17);
                 // Motor sesi kalsin diye PC speaker susturulur.
                 let mut audio = drivers::audio::AudioDevice::new();
                 audio.set_pc_speaker_tone(0);

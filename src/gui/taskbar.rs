@@ -92,6 +92,78 @@ impl MinGuiCompositor {
     // -----------------------------------------------------------------------
     // 3. Görev Çubuğu, Sistem Tepsisi (saat/ses/tema) ve Kaplamalar
     // -----------------------------------------------------------------------
+    /// Görev çubuğunda imlecin üzerinde olduğu öğeyi tek bir anahtara indirger.
+    ///
+    /// Anahtar, çizimde hover durumuna göre görünümü değişen öğeler için
+    /// benzersizdir: başlat düğmesi, tepsi öğeleri, çalışma alanı rozeti,
+    /// uygulama sekmeleri ve "masaüstünü göster" şeridi. Olay döngüsü bu
+    /// anahtar değişmediği sürece görev çubuğunu kirli işaretlemez; böylece
+    /// imleç aynı düğme üzerinde gezinirken tam genişlikte görev çubuğu her
+    /// fare olayında yeniden çizilmez.
+    ///
+    /// Dönüş değerleri: `0` görev çubuğu dışı, `9` şerit zemini, diğerleri
+    /// hover edilebilir bir öğe.
+    pub fn taskbar_hover_key(&self, width: usize, height: usize, mx: usize, my: usize) -> u32 {
+        let l = Self::tray_layout(width, height);
+        let tb_y = l.tb_y;
+        if my < tb_y || my >= tb_y.saturating_add(scaled_taskbar_h()) {
+            return 0;
+        }
+
+        // Tepsi ve başlat düğmesi: çizim sırasından bağımsız benzersiz kimlik.
+        for (i, rect) in [
+            l.start,
+            l.kbd,
+            l.network,
+            l.volume,
+            l.minimize_all,
+            l.clock,
+            l.desktop,
+        ]
+        .iter()
+        .enumerate()
+        {
+            if rect.2 > 0 && in_rect(mx, my, *rect) {
+                return 1 + i as u32;
+            }
+        }
+
+        if let Some((bx, by, bw, bh)) = self.workspace_badge_rect(width, height) {
+            if in_rect(mx, my, (bx, by, bw, bh)) {
+                return 8;
+            }
+        }
+
+        // Uygulama sekmeleri: çizimle aynı sıra ve geometri.
+        let open_count = self
+            .windows
+            .iter()
+            .filter(|slot| {
+                slot.is_some_and(|win| win.is_open && win.workspace == self.active_workspace)
+            })
+            .count();
+        let (tab_start, tab_width, tab_step, shown_tabs, _) =
+            Self::taskbar_tabs_layout(width, height, open_count);
+        let mut slot = 0usize;
+        for win in self.windows.iter().flatten() {
+            if win.is_open && win.workspace == self.active_workspace {
+                if slot >= shown_tabs {
+                    break;
+                }
+                let tab_x = tab_start + slot * tab_step;
+                let (_, _, tw, th) = Self::taskbar_tab_rect_at(tab_x, tb_y);
+                let rect = (tab_x, tb_y + 5, tw.min(tab_width), th);
+                if in_rect(mx, my, rect) {
+                    return 20 + slot as u32;
+                }
+                slot += 1;
+            }
+        }
+
+        // Şerit zemini: görünüm değişmez, yalnızca çıkışta temizlik gerekir.
+        9
+    }
+
     pub fn render_taskbar_and_overlays(
         &self,
         fb: &mut Framebuffer,

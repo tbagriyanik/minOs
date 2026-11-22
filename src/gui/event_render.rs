@@ -291,6 +291,7 @@ pub fn render_frame(
             || compositor.is_alt_tab_open
             || compositor.active_workspace != state.last_workspace
             || state.run_dialog_open
+            || state.properties_open
             || night_light_active
         {
             None
@@ -419,7 +420,11 @@ pub fn render_frame(
         state.cpu_sample_active_cycles = state.cpu_sample_active_cycles.saturating_add(elapsed);
     } else {
         let active_wait_start = read_cpu_cycles();
-        let active_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(100);
+        // Girdi geldikten sonra uzun spin-wait fare raporlarını biriktirip
+        // imleci geciktiriyordu. Bir sonraki USB/PS2 raporunu beklemek için
+        // yalnızca kısa bir pencere bırak; render döngüsü geri kalan zamanı
+        // doğrudan yeni girdiyi toplamaya ayırsın.
+        let active_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(20);
         while read_cpu_cycles().wrapping_sub(active_wait_start) < active_wait_cycles {
             core::hint::spin_loop();
         }

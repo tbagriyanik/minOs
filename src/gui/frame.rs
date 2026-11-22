@@ -17,7 +17,11 @@ pub const FRAME_IDLE_INTERVAL_MS: u64 = 33;
 
 /// VSync (donanim paneli) takip modu etkin mi?
 pub fn vsync_enabled() -> bool {
-    crate::drivers::gpu::caps().vga_present
+    let caps = crate::drivers::gpu::caps();
+    // VirtIO-GPU framebuffer aktarımı VGA'nın 0x3DA dikey-blank portunu
+    // kullanmaz. Bu portta beklemek QEMU'da her kareyi gereksiz yere
+    // spin-wait'e sokarak fare/klavye gecikmesine neden olur.
+    caps.vga_present && !caps.virtio_gpu_present
 }
 
 /// Aktif kare pazarlama aralığını hesaplar.
@@ -601,7 +605,10 @@ pub fn render_full_frame(
         }
     }
 
-    fb.reset_clip();
+    // Pencere cizimi kirli bolgeyle kismiydi; artik ust katmanlar (gorev
+    // cubugu, popup'lar, modaller) tam ekranda cizilmesi icin kiralma
+    // tamamen kaldirilir. Kirli bolge sadece flush aninda uygulanir.
+    fb.clear_frame_clip();
 
     // Aero Snap onizleme cercevesi (Pencere ekrana yaslanirken yari saydam/kesikli gosterim)
 
@@ -947,6 +954,12 @@ pub fn render_full_frame(
         0
     };
 
+    // Kirli bolge varsa cikis oncesi kiralmayi o bolgeye kısıtla: overlay'ler
+    // tam ekranda cizildi ama VRAM'e sadece degisen bolge aktarilacak.
+    if let Some((dx, dy, dw, dh)) = dirty_rect {
+        fb.set_frame_clip(Some((dx, dy, dw, dh)));
+    }
+
     let region = fb.base_clip();
 
     if dirty_rect.is_some() {
@@ -991,5 +1004,7 @@ pub fn render_full_frame(
     // modunda kare vblank uyumunda ~60 Hz kare pazarlanir. Desteklenmeyen
     // olayda mevcut donanim yolu devre disi kalir, kisa spin ust siniri de.
 
-    crate::drivers::gpu::vsync_wait();
+    if vsync_enabled() {
+        crate::drivers::gpu::vsync_wait();
+    }
 }

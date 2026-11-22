@@ -1,8 +1,8 @@
-﻿# minOs QEMU Entegrasyon Test Raporu
+# minOs QEMU Entegrasyon Test Raporu
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-22 14:49:39 UTC |
+| Zaman | 2026-11-22 15:58:02 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Depolama profili | ata |

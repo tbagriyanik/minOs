@@ -62,6 +62,13 @@ pub fn handle_gui_syscall(
                 let _ = enqueue_gui_reply(window_id, GuiSyscallReply::DestroyWindow { ok: false });
                 return;
             };
+            // Pencereye bağlı süreci sonlandır (kaynak sızdırmaması için).
+            unsafe {
+                let mgr = &mut *core::ptr::addr_of_mut!(crate::MEMORY_MGR);
+                let _ = mgr
+                    .proc_mgr
+                    .terminate_by_window(compositor_idx, &mut mgr.pmm);
+            }
             // Pencereyi kapat (is_open = false) ve kirli bölge olarak işaretle.
             if let Some(win) = compositor.windows.get_mut(compositor_idx) {
                 let win = win.as_mut().unwrap();

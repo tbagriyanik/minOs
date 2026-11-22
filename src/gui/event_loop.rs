@@ -23,11 +23,16 @@ use crate::{alloc_pmm_frame_global, MEMORY_MGR};
 /// yapılır; masaüstü arka planı ve diğer pencereler yeniden rasterize
 /// edilmez.
 fn track_app_window_dirty(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
-    let Some(win) = compositor
+    let Some((idx, win)) = compositor
         .windows
         .iter()
-        .flatten()
-        .find(|w| w.app_id as usize == app_id && w.is_open && !w.is_minimized)
+        .enumerate()
+        .find(|(_, w)| {
+            w.as_ref().is_some_and(|win| {
+                win.app_id as usize == app_id && win.is_open && !win.is_minimized
+            })
+        })
+        .map(|(idx, w)| (idx, w.as_ref().unwrap()))
     else {
         return;
     };
@@ -36,7 +41,7 @@ fn track_app_window_dirty(compositor: &mut gui::MinGuiCompositor, app_id: usize)
     let x1 = win.x.saturating_add(win.width).saturating_add(8);
     let y1 = win.y.saturating_add(win.height).saturating_add(8);
     compositor.dirty_tracker.track(
-        0,
+        idx,
         gui::dirty_rect::DirtyRect::new(x, y, x1.saturating_sub(x), y1.saturating_sub(y)),
     );
 }
@@ -1255,11 +1260,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         } else {
                             hit_window = Some((idx, gui::ContextKind::Window));
                         }
-                    } else if idx == 2 {
+                    } else if win.app_id == 2 {
                         compositor.focus_window(idx);
 
                         hit_window = Some((idx, gui::ContextKind::Notepad));
-                    } else if idx == 0 {
+                    } else if win.app_id == 0 {
                         if let Some(i) = apps.filemanager_app.hit_test(
                             win.x,
                             win.y,
@@ -1277,7 +1282,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         compositor.focus_window(idx);
 
                         hit_window = Some((idx, gui::ContextKind::FileManager));
-                    } else if idx == 7 {
+                    } else if win.app_id == 7 {
                         if apps.taskmgr_app.active_tab == 0 {
                             // Görev yöneticisi içeriği kaydırılabildiği için
                             // isabet testi çizimle aynı ötelenmiş orijini kullanır.
@@ -1413,8 +1418,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 compositor.is_calendar_open = false;
             }
 
+            // Görev Yöneticisi penceresi her zaman 7. yuvada değildir;
+            // uygulama kimliğine göre bulunmalıdır.
+            let tm_win = focused_window_for_app(&compositor, 7).map(|(_, w)| w);
+
             if apps.taskmgr_app.launch_menu_open {
-                let in_menu = compositor.windows[7].is_some_and(|w| {
+                let in_menu = tm_win.is_some_and(|w| {
                     gui::in_rect(
                         mx,
                         my,
@@ -1424,7 +1433,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     )
                 });
 
-                let in_button = compositor.windows[7].is_some_and(|w| {
+                let in_button = tm_win.is_some_and(|w| {
                     gui::in_rect(
                         mx,
                         my,
@@ -1438,7 +1447,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
 
             if apps.taskmgr_app.actions_menu_open {
-                let in_menu = compositor.windows[7].is_some_and(|w| {
+                let in_menu = tm_win.is_some_and(|w| {
                     gui::in_rect(
                         mx,
                         my,
@@ -1447,7 +1456,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         ),
                     )
                 });
-                let in_button = compositor.windows[7].is_some_and(|w| {
+                let in_button = tm_win.is_some_and(|w| {
                     gui::in_rect(
                         mx,
                         my,
@@ -8235,7 +8244,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 state.image_drag_last = None;
             }
 
-            if let Some(w) = compositor.windows[1] {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 1) {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     // Ayarlar içeriği kaydırılabilir; çizimle aynı orijini kullan.
                     let ox = w.x.saturating_sub(w.scroll.x);
@@ -8322,33 +8331,32 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
             }
 
-            if state.notepad_dragging && apps.notepad_app.as_mut().unwrap().menu == 0 {
-                if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
-                    let at = apps.notepad_app.as_mut().unwrap().index_at_scrolled(
-                        mx - w.x,
-                        my - w.y,
-                        w.width,
-                        w.scroll.y,
-                    );
+            if state.notepad_dragging {
+                // Uygulama tembel yüklenir; sürükleme sırasında pencere
+                // kapanmış/uygulama düşürülmüş olabilir. Bu durumda sürükleme
+                // durumunu temizle, unwrap ile panik üretme.
+                match apps.notepad_app.as_mut() {
+                    None => state.notepad_dragging = false,
+                    Some(np) if np.menu == 0 => {
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
+                            let at = np.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
 
-                    apps.notepad_app.as_mut().unwrap().cursor = at;
+                            np.cursor = at;
 
-                    let anchor = apps
-                        .notepad_app
-                        .as_mut()
-                        .unwrap()
-                        .selection_anchor
-                        .unwrap_or(at);
+                            let anchor = np.selection_anchor.unwrap_or(at);
 
-                    if anchor == at {
-                        apps.notepad_app.as_mut().unwrap().selection_start = None;
+                            if anchor == at {
+                                np.selection_start = None;
 
-                        apps.notepad_app.as_mut().unwrap().selection_end = None;
-                    } else {
-                        apps.notepad_app.as_mut().unwrap().selection_start = Some(anchor.min(at));
+                                np.selection_end = None;
+                            } else {
+                                np.selection_start = Some(anchor.min(at));
 
-                        apps.notepad_app.as_mut().unwrap().selection_end = Some(anchor.max(at));
+                                np.selection_end = Some(anchor.max(at));
+                            }
+                        }
                     }
+                    Some(_) => {}
                 }
             }
 
@@ -9104,16 +9112,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 apps.taskmgr_app.actions_menu_open = false;
             } else if ch == '\x1b' && apps.taskmgr_app.launch_menu_open {
                 apps.taskmgr_app.launch_menu_open = false;
-            } else if ch == '\x1b'
-                && app_is_focused(&compositor, 2)
-                && apps.notepad_app.as_mut().unwrap().find_active
-            {
-                apps.notepad_app.as_mut().unwrap().close_find();
-            } else if ch == '\x1b'
-                && app_is_focused(&compositor, 2)
-                && apps.notepad_app.as_mut().unwrap().menu != 0
-            {
-                apps.notepad_app.as_mut().unwrap().menu = 0;
+            } else if ch == '\x1b' && app_is_focused(&compositor, 2) {
+                // Notepad lazy yüklenir; pencere/odak kaydı uygulama None
+                // olduktan sonra bir tur gecikebilir. Escape bu durumda
+                // kernel panic üretmeden yok sayılmalıdır.
+                if let Some(notepad) = apps.notepad_app.as_mut() {
+                    if notepad.find_active {
+                        notepad.close_find();
+                    } else if notepad.menu != 0 {
+                        notepad.menu = 0;
+                    }
+                }
             } else if ch == '\x1b'
                 && app_is_focused(&compositor, 3)
                 && apps.browser_app.toolbar_menu_open
@@ -9770,15 +9779,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
-        // Görev çubuğu hover geri bildirimi: imleç şerit üzerinde hareket
-        // ederken veya şeritten çıkarken şeridi kirli işaretle. Aksi halde
-        // düğme/tepsi vurguları bir sonraki tesadüfi kareye kadar güncellenmez
-        // (düz imleç hareketi yalnızca imleç dikdörtgenini yeniden çizer).
+        // Görev çubuğu hover geri bildirimi: yalnızca hover edilen öğe
+        // değiştiğinde şeridi kirli işaretle. İmleç aynı düğme/sekme üzerinde
+        // gezinirken tam genişlikte görev çubuğunu her fare olayında yeniden
+        // çizmek belirgin takılmaya yol açıyordu.
         if mouse_moved {
             let strip_top = height.saturating_sub(gui::scaled_taskbar_h());
-            let was_in_strip = (state.last_mouse_y as usize) >= strip_top;
-            let in_strip = (mouse.y as usize) >= strip_top;
-            if was_in_strip || in_strip {
+            let hover_key = compositor.taskbar_hover_key(width, height, mx, my);
+            if hover_key != state.last_taskbar_hover_key {
+                state.last_taskbar_hover_key = hover_key;
                 compositor.dirty_tracker.track(
                     0,
                     crate::gui::dirty_rect::DirtyRect::new(
@@ -9790,12 +9799,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 );
             }
 
-            // Başlık çubuğu hover'i: imleç en üst pencerede başlık
-            // şeridindeyken (veya şeritten çıkarken) yalnızca o şeridi kirli
-            // işaretle. `frame::render_full_frame` kirli bölge içerikle
-            // kesişmediğinde uygulama render'ını atlar; böylece hover
-            // geri bildirimi içeriği yeniden çizdirmeden çalışır.
+            // Başlık çubuğu hover'i: pencere düğmeleri (kapat/büyüt/küçült)
+            // dışında başlık çubuğunun görünümü hover'a bağlı değildir. Bu
+            // yüzden yalnızca hover edilen düğme değiştiğinde eski ve yeni
+            // pencerenin başlık şeridini kirli işaretle.
             let (order, order_count) = compositor.draw_order();
+            let mut title_hover = None;
             for k in (0..order_count).rev() {
                 let idx = order[k];
                 let Some(w) = compositor.windows[idx] else {
@@ -9808,20 +9817,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 {
                     continue;
                 }
-                let tb_rect = (w.x, w.y, w.width, gui::scaled_titlebar_h());
-                let was_in_tb = gui::in_rect(
-                    state.last_mouse_x as usize,
-                    state.last_mouse_y as usize,
-                    tb_rect,
-                );
-                let in_tb = gui::in_rect(mx, my, tb_rect);
-                if was_in_tb || in_tb {
-                    compositor.dirty_tracker.track(
-                        idx,
-                        crate::gui::dirty_rect::DirtyRect::new(
-                            tb_rect.0, tb_rect.1, tb_rect.2, tb_rect.3,
-                        ),
-                    );
+                let button = if gui::in_rect(mx, my, w.close_hit_rect()) {
+                    1
+                } else if gui::in_rect(mx, my, w.max_hit_rect()) {
+                    2
+                } else if gui::in_rect(mx, my, w.min_hit_rect()) {
+                    3
+                } else {
+                    0
+                };
+                if button != 0 {
+                    title_hover = Some((idx, button));
                 }
 
                 // Kaydırma çubuğu hover'i: imleç içerik alanının kenar
@@ -9883,13 +9889,32 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         gutter,
                     );
                     let in_sb = gui::in_rect(mx, my, gutter);
-                    if was_in_sb || in_sb {
+                    if was_in_sb != in_sb {
                         compositor
                             .dirty_tracker
                             .track(idx, crate::gui::dirty_rect::DirtyRect::new(gx, gy, gw, gh));
                     }
                 }
                 break;
+            }
+
+            if title_hover != state.last_titlebar_hover {
+                // Eski ve yeni pencerenin başlık çubuğunu kirli işaretle;
+                // aksi halde eski düğme vurgusu ekranda kalır.
+                for (idx, _) in state.last_titlebar_hover.iter().copied().chain(title_hover) {
+                    if let Some(w) = compositor.windows.get(idx).and_then(|slot| *slot) {
+                        compositor.dirty_tracker.track(
+                            idx,
+                            crate::gui::dirty_rect::DirtyRect::new(
+                                w.x,
+                                w.y,
+                                w.width,
+                                gui::scaled_titlebar_h(),
+                            ),
+                        );
+                    }
+                }
+                state.last_titlebar_hover = title_hover;
             }
         }
 

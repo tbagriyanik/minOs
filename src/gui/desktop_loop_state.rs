@@ -82,6 +82,12 @@ pub struct DesktopLoopState {
     pub ram_warn_shown: bool,
     pub last_title_idx: Option<usize>,
     pub last_title_click_ms: u64,
+    /// Son karede görev çubuğunda hover edilen öğe anahtarı. Aynı öğe
+    /// üzerinde sürekli hareket etmek görev çubuğunu yeniden çizdirmemeli.
+    pub last_taskbar_hover_key: u32,
+    /// Son karede hover edilen pencere başlık çubuğu düğmesi: (pencere
+    /// indeksi, düğme). Yalnızca düğme değişiminde başlık çubuğu yenilenir.
+    pub last_titlebar_hover: Option<(usize, u8)>,
 
     // --- Şu anki zaman ---
     pub now: crate::drivers::rtc::DateTime,
@@ -150,6 +156,8 @@ impl DesktopLoopState {
             ram_warn_shown: false,
             last_title_idx: None,
             last_title_click_ms: 0,
+            last_taskbar_hover_key: u32::MAX,
+            last_titlebar_hover: None,
             now,
         }
     }

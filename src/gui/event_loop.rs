@@ -1211,8 +1211,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     if my < win.y + gui::scaled_titlebar_h() {
                         hit_window = Some((idx, gui::ContextKind::Window));
-                    } else if idx == 15 {
+                    } else if win.app_id == 15 {
                         // Oyunlar: Mayın Tarlası'nda sağ tık bayrak koyar.
+                        // Dikkat: `idx` pencere yuvası indeksidir; uygulama
+                        // kimliğiyle karıştırılırsa başka bir uygulamanın
+                        // penceresi oyun sanılır ve `fps_game_app` `None`
+                        // iken unwrap panik üretir.
                         compositor.focus_window(idx);
                         let (ax, ay, aw, ah) = app_layout_rect(15, &win);
                         if apps.fps_game_app.as_mut().unwrap().right_click(
@@ -1226,7 +1230,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             break;
                         }
                         hit_window = Some((idx, gui::ContextKind::Window));
-                    } else if idx == 10 {
+                    } else if win.app_id == 10 {
                         // Terminal / CMD: Sağ tık seçimi panoya kopyalar veya panoyu yapıştırır
                         compositor.focus_window(idx);
                         if apps.terminal_app.as_mut().unwrap().has_selection() {
@@ -1241,7 +1245,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         } else {
                             hit_window = Some((idx, gui::ContextKind::Window));
                         }
-                    } else if idx == 3 {
+                    } else if win.app_id == 3 {
                         // Tarayıcı: Seçili metin varsa sağ tık panoya kopyalar
                         compositor.focus_window(idx);
                         if apps.browser_app.has_page_selection() {

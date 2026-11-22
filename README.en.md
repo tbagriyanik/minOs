@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-200%2C141%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-543%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-547%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
@@ -29,7 +29,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - File Manager can open WAV files directly in Music Player, and Image Viewer can set an image as a tiled desktop wallpaper.
 - Settings includes three additional desktop images.
 - `munmap` now performs real page teardown: realized frames are dropped from the resource ledger and returned to the PMM, and emptied page-table frames (PT/PD/PDPT) are reclaimed; middle splits are rejected without removing any mapping when the region table is full. A shared-frame reference leak on process exit and fork-failure paths was also fixed.
-- Keyboard and mouse now work in default QEMU runs: `run.ps1` now attaches `qemu-xhci + usb-kbd + usb-mouse` (USB HID) by default. QEMU 11's default `pc` machine had the i8042 controller but no PS/2 keyboard/mouse device attached, so previous releases never received desktop input events; this is fixed.
+- Keyboard and mouse now work in default QEMU runs: `run.ps1` now attaches `qemu-xhci + usb-kbd + usb-tablet` (USB HID) by default. `usb-tablet` uses absolute coordinates and QEMU syncs the mouse position directly with the host cursor, so the mouse moves smoothly without lag in QEMU. QEMU 11's default `pc` machine had the i8042 controller but no PS/2 keyboard/mouse device attached, so previous releases never received desktop input events; this is fixed. 
 - The desktop UI was polished and accelerated end-to-end: smooth mouse-wheel scrolling in every app; short open animations for windows, the start menu, context menus, the Alt+Tab switcher and the calendar/volume popups; tooltip balloons on the taskbar and tray; slide animations for toast notifications; and a glyph cache for text rendering. System Settings > Display gained **Interface animations** (disables all motion, including smooth scrolling) and **Transparent windows** toggles.
 - Accessibility improvements: title bar shows unsaved-changes indicator (●) and long-title ellipsis truncation (…); buttons distinguish selected (green border), focused (yellow focus ring) and disabled (dimmed) states; all windows get correct app ID (app_id) for title and icon.
 - The host suite reached 543 tests; all pass (543 passed, 0 failed).

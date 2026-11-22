@@ -45,7 +45,7 @@ minOs (Sarman Edition) v2.6.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **Tarayıcı Motoru:** Progresif (SOF2) JPEG çözme, `@font-face` kural ayrıştırma ve `@keyframes` renk/opaklık animasyonu.
 - **minJs JavaScript Çalışma Zamanı:** Yerleşik `no_std` JavaScript motoru **closure** (fonksiyon ifadeleri, ok fonksiyonları, kapsam yakalama), **`setTimeout`/`setInterval`** zamanlayıcılarının `clearTimeout`/`clearInterval` ile iptali, **`Object.keys()`/`Object.values()`/`Object.entries()`** ve dizi geri çağırmalı metotları (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`) ile genişletildi. Fonksiyon değerleri değişkene/nesne özelliğine atanıp `obj.method()` biçiminde çağrılabilir.
 - **Dinamik Tema:** 5 tema (Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal, Gün Batımı) canlı geçiş.
-- **xHCI USB HID:** Yerel USB klavye/fare desteği, PS/2 fallback ile. `run.ps1` varsayılan olarak `qemu-xhci + usb-kbd + usb-mouse` bağlar (QEMU 11'de varsayılan `pc` makinesine PS/2 klavye/fare aygıtı bağlı gelmediği için önceki sürümlerde masaüstü girişı çalışmıyordu; düzeltildi).
+- **xHCI USB HID:** Yerel USB klavye/fare desteği, PS/2 fallback ile. `run.ps1` varsayılan olarak `qemu-xhci + usb-kbd + usb-tablet` bağlar (QEMU 11'de varsayılan `pc` makinesine PS/2 klavye/fare aygıtı bağlı gelmediği için önceki sürümlerde masaüstü girişı çalışmıyordu; düzeltildi).
 - **Ağ:** Intel PRO/1000, RTL8139, AMD PCnet algılama, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net ve VMware VMXNET3.
 - **Depolama:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **Dosya Sistemleri:** FAT32, Ext2, Ext4, exFAT (okuma/yazma/biçimlendirme).
@@ -57,4 +57,4 @@ minOs (Sarman Edition) v2.6.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **FPS 3D Performans Metrikleri:** FPS 3D Oyun tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` ölçer (`[FPS3D-METRICS]`); bütçe aşımında kısmi kare geri yüklenir. `test_qemu.ps1 -FpsStressTest` ile 10/30/60 dk stres doğrulaması.
 - **FPS Oyunu Menüsü ve Klavye Erişimi:** FPS Oyunu başlangıç/sonuç menülerini sunar; Hoş Geldin ekranı ve desteklenen form kontrollerinde Tab gezinme, Enter onaylama ve Esc vazgeçme kısayolları kullanılabilir.
 - **3D Oyun Nesneleri:** FPS Oyunu düşmanları ve Şehir Sürüş trafik araçları ile toplanabilir ödülleri artık düz billboard yerine ön/üst/yan yüzeyli 3D kutu olarak render eder; z-buffer testiyle duvarların arkasından sızdırılmazlar.
-- **QEMU Klavye/Fare:** Varsayılan çalıştırmada girdi çalışmıyordu (QEMU 11 varsayılan `pc` makinesine PS/2 aygıtı bağlı gelmez); `run.ps1` artık `qemu-xhci + usb-kbd + usb-mouse` (USB HID) bağlar.
+- **QEMU Klavye/Fare:** Varsayılan çalıştırmada girdi çalışmıyordu (QEMU 11 varsayılan `pc` makinesine PS/2 aygıtı bağlı gelmez); `run.ps1` artık `qemu-xhci + usb-kbd + usb-tablet` (USB HID) bağlar.

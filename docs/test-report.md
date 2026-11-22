@@ -48,7 +48,7 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
-| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi |
+| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-tablet numaralandirildi |
 | USB HID Etkin Girdi Yolu | ✅ GEÇTİ | Masaustu girdisi USB HID surucusune baglandi |
 | PS/2 Devre Disi (i8042 yok) | ✅ GEÇTİ | Girdi yalnizca USB HID uzerinden geliyor |
 | USB Klavye Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP 'a' tusu xHCI HID raporu olarak islendi |

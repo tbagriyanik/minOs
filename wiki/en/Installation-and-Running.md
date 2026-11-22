@@ -35,10 +35,10 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-DiskImage dosya.qcow2` | Virtual disk image path (default `.\disk.qcow2`) |
 | `-UsbDisks` | Mount USB disks read-only |
 | `-UsbDiskReadWrite` | Mount USB disks with write permission |
-| `-UsbHid` | Add `usb-kbd` and `usb-mouse` to QEMU |
+| `-UsbHid` | Add `usb-kbd` and `usb-tablet` to QEMU |
 | `-NoPs2` | Disable PS/2 controller; `-UsbHid` auto-enabled |
 | `-Display <sdl\|gtk\|default>` | QEMU graphics backend |
-| `-CpuCount N` | Virtual CPU count (default 2, max 8) |
+| `-CpuCount N` | Virtual CPU count (default 1; the kernel currently uses one core) |
 | `-Memory 1G` | Guest RAM amount (default 512M) |
 
 ---
@@ -86,14 +86,14 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 **Linux (PulseAudio + Intel HDA + e1000):**
 ```bash
-qemu-system-x86_64 -cdrom minos.iso -m 512M -smp 2 -vga std -global VGA.vgamem_mb=64 \
+qemu-system-x86_64 -cdrom minos.iso -m 512M -smp 1 -vga std -global VGA.vgamem_mb=64 \
   -audiodev pa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 
 **Windows (SDL + Intel HDA Output + e1000):**
 ```powershell
-qemu-system-x86_64.exe -cdrom .\minos.iso -m 512M -smp 2 -vga std -global VGA.vgamem_mb=64 `
+qemu-system-x86_64.exe -accel whpx,kernel-irqchip=on -cdrom .\minos.iso -m 512M -smp 1 -vga std -global VGA.vgamem_mb=64 `
   -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```

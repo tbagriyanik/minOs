@@ -2924,7 +2924,11 @@ unsafe fn handle_transfer_event(
                         } else {
                             let mut mouse_dev = crate::drivers::usb_mouse::UsbMouseDevice {
                                 active: device.active,
-                                mode: crate::drivers::usb_mouse::UsbPointerMode::Relative,
+                                mode: if device.layout.x_absolute && device.layout.y_absolute {
+                                    crate::drivers::usb_mouse::UsbPointerMode::Absolute
+                                } else {
+                                    crate::drivers::usb_mouse::UsbPointerMode::Relative
+                                },
                                 last_buttons: 0,
                             };
                             crate::drivers::usb_mouse::process_mouse_report(

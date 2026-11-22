@@ -90,7 +90,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-DiskImage dosya.qcow2` | Bağlanacak sanal disk imajının yolu (varsayılan `.\disk.qcow2`). |
 | `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
 | `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
-| `-UsbHid` | Yerel xHCI HID sürücüsünü test etmek için QEMU'ya `qemu-xhci` denetleyicisi ile `usb-kbd` ve `usb-mouse` ekler. |
+| `-UsbHid` | Yerel xHCI HID sürücüsünü test etmek için QEMU'ya `qemu-xhci` denetleyicisi ile `usb-kbd` ve `usb-tablet` ekler. |
 | `-NoPs2` | PS/2 (i8042) denetleyicisini tamamen kapatır (`-machine pc,i8042=off`) ve `-UsbHid`'i otomatik açar. Girdi yalnızca USB klavye/fare üzerinden gelir; USB HID sürücüsünü PS/2 yedeği olmadan test etmek için kullanın. |
 | `-Display <sdl\|gtk\|default>` | QEMU grafik arayüz arka ucunu belirler. `-Display sdl` seçildiğinde Windows GTK pixbuf/tema uyarıları engellenir ve daha düşük fare gecikmesi elde edilir. |
 | `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`, çekirdek üst sınırı 8). |

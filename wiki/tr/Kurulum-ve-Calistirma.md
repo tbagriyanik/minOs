@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-DiskImage dosya.qcow2` | Sanal disk imajı yolu (varsayılan `.\disk.qcow2`) |
 | `-UsbDisks` | USB diskleri salt okunur olarak bağlar |
 | `-UsbDiskReadWrite` | USB diskleri yazma izniyle bağlar |
-| `-UsbHid` | QEMU'ya `usb-kbd` ve `usb-mouse` ekler |
+| `-UsbHid` | QEMU'ya `usb-kbd` ve `usb-tablet` ekler |
 | `-NoPs2` | PS/2 denetleyicisini kapatır, `-UsbHid` otomatik açar |
 | `-Display <sdl\|gtk\|default>` | QEMU grafik arka ucu |
 | `-CpuCount N` | Sanal CPU sayısı (varsayılan 2, max 8) |

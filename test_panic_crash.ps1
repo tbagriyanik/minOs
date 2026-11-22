@@ -83,7 +83,7 @@ $qemuArgs = @(
     "-device", "e1000,netdev=n0",
     "-device", "qemu-xhci,id=xhci",
     "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-mouse,bus=xhci.0"
+        "-device", "usb-tablet,bus=xhci.0"
 )
 
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo

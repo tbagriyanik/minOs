@@ -5,7 +5,7 @@
     [switch]$UsbDiskReadWrite,
     [switch]$UsbHid,
     [switch]$NoPs2,
-    [ValidateRange(1, 64)][int]$CpuCount = 2,
+    [ValidateRange(1, 64)][int]$CpuCount = 1,
     [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
     [string]$DiskImage = ".\disk.qcow2",
     [switch]$Live,
@@ -13,7 +13,7 @@
     [switch]$ReprepareDisk,
     [switch]$Minimal,
     [switch]$HighEnd,
-    [ValidateSet("default", "sdl", "gtk")][string]$Display = "default"
+    [ValidateSet("default", "sdl", "gtk")][string]$Display = "sdl"
 )
 
 # --- Donanım profilleri -------------------------------------------------
@@ -110,6 +110,11 @@ Write-Host "=========================================" -ForegroundColor Cyan
 
 $vgamem = if ($Minimal) { 16 } elseif ($HighEnd) { 256 } else { 64 }
 $qemuArgs = @(
+    # Windows'ta WHPX, QEMU'nun TCG emülasyonuna göre belirgin biçimde daha
+    # düşük gecikme ve daha yüksek kare hızına sahiptir. Özellikle xHCI/USB
+    # tablet olaylarının TCG altında kuyruklanmasını ve farenin takılmasını
+    # önler.
+    "-accel", "whpx,kernel-irqchip=on",
     "-m", $Memory,
     "-smp", "$CpuCount",
     # TLS için RDRAND/RDSEED özelliklerini konuğa sun.
@@ -251,17 +256,20 @@ if ($NoPs2) {
 # modeli mevcut değil). Dolayısıyla klavye/fare girişini garanti etmek için
 # varsayılan olarak USB HID (xHCI + usb-kbd + usb-mouse) eklenir; bu yöntem
 # çekirdeğin `usb_hid` sürücüsü ile eventi döngüsünde işlenir.
-# usb-mouse relative pointing device olarak çalışır ve fare olarak algılanır.
+# usb-tablet mutlak (absolute) işaretçidir: QEMU fare konumunu doğrudan host
+# imleciyle senkronize eder, bu sayede QEMU'da fare takılmadan, pürüzsüz
+# hareket eder. usb-mouse (göreceli) kontrastla konuk tarafında delta biriktirme
+# gerektirir ve QEMU'da belirgin gecikme/takılma yaratır.
 if ($UsbHid -or (-not $NoPs2)) {
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-mouse,bus=xhci.0"
+        "-device", "usb-tablet,bus=xhci.0"
     )
     if ($UsbHid) {
-        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+        Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-tablet" -ForegroundColor Yellow
     } else {
-        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+        Write-Host "Varsayılan girdi eklendi: qemu-xhci + usb-kbd + usb-tablet" -ForegroundColor Yellow
     }
 }
 

@@ -24,7 +24,7 @@ Remove-Item -LiteralPath $Log -ErrorAction SilentlyContinue
 $args = @(
     '-m','512M','-smp','2','-cdrom','minos.iso','-boot','d','-display','none',
     "-serial","file:$Log",'-no-reboot',
-    '-device','qemu-xhci','-device','usb-kbd','-device','usb-mouse',
+    '-device','qemu-xhci','-device','usb-kbd','-device','usb-tablet',
     '-netdev','user,id=n0','-device','e1000,netdev=n0',
     '-device','intel-hda','-device','hda-duplex',
     '-rtc','base=localtime'

@@ -197,7 +197,6 @@ static mut PORT_COUNT: u32 = 0;
 static mut PORT_BASE: u64 = 0;
 static mut DMA_PHYS: u64 = 0; // Command List + Command Table + FIS alanı (fiziksel)
 static mut INITIALIZED: bool = false;
-static mut INIT_ERROR_REPORTED: bool = false; // Hata sadece bir kez raporlanır
 
 /// DMA bölgesi yerleşimi (tek bitişik 8 KiB, 2 frame):
 ///   +0x000 Command List (32 × 32B başlık; yalnızca slot 0 kullanılır)
@@ -526,22 +525,20 @@ pub fn port_count() -> u32 {
 
 /// Sektör okuma (512 bayt, LBA48 + DMA PRDT)
 pub fn read_sector(lba: u64, buffer: &mut [u8]) -> bool {
-    unsafe {
-        if !ready() || buffer.len() < ATA_SECTOR_SIZE {
-            return false;
-        }
-        // Önceki SERR hatasını temizle; aksi halde sürekli hata raporlanır.
-        port_write32(PORT_SERR, 0xFFFF_FFFF);
-        issue_sector_command(
-            ATA_CMD_READ_DMA_EXT,
-            lba,
-            buffer.as_mut_ptr(),
-            ATA_SECTOR_SIZE,
-            false,
-            0x40,
-            1,
-        )
+    if !ready() || buffer.len() < ATA_SECTOR_SIZE {
+        return false;
     }
+    // Önceki SERR hatasını temizle; aksi halde sürekli hata raporlanır.
+    port_write32(PORT_SERR, 0xFFFF_FFFF);
+    issue_sector_command(
+        ATA_CMD_READ_DMA_EXT,
+        lba,
+        buffer.as_mut_ptr(),
+        ATA_SECTOR_SIZE,
+        false,
+        0x40,
+        1,
+    )
 }
 
 /// ATA IDENTIFY DEVICE (0xEC) ile 512 baytlık tanımlama bloğunu okur.
@@ -577,22 +574,20 @@ pub fn capacity_sectors() -> u64 {
 
 /// Sektör yazma (512 bayt, LBA48 + DMA PRDT)
 pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
-    unsafe {
-        if !ready() || buffer.len() < ATA_SECTOR_SIZE {
-            return false;
-        }
-        // Önceki SERR hatasını temizle; aksi halde sürekli hata raporlanır.
-        port_write32(PORT_SERR, 0xFFFF_FFFF);
-        issue_sector_command(
-            ATA_CMD_WRITE_DMA_EXT,
-            lba,
-            buffer.as_ptr() as *mut u8,
-            ATA_SECTOR_SIZE,
-            true,
-            0x40,
-            1,
-        )
+    if !ready() || buffer.len() < ATA_SECTOR_SIZE {
+        return false;
     }
+    // Önceki SERR hatasını temizle; aksi halde sürekli hata raporlanır.
+    port_write32(PORT_SERR, 0xFFFF_FFFF);
+    issue_sector_command(
+        ATA_CMD_WRITE_DMA_EXT,
+        lba,
+        buffer.as_ptr() as *mut u8,
+        ATA_SECTOR_SIZE,
+        true,
+        0x40,
+        1,
+    )
 }
 
 // ---------------------------------------------------------------------------

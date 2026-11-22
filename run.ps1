@@ -110,15 +110,8 @@ Write-Host "=========================================" -ForegroundColor Cyan
 
 $vgamem = if ($Minimal) { 16 } elseif ($HighEnd) { 256 } else { 64 }
 $qemuArgs = @(
-    # Windows'ta WHPX, QEMU'nun TCG emülasyonuna göre belirgin biçimde daha
-    # düşük gecikme ve daha yüksek kare hızına sahiptir. Özellikle xHCI/USB
-    # tablet olaylarının TCG altında kuyruklanmasını ve farenin takılmasını
-    # önler.
-    "-accel", "whpx,kernel-irqchip=on",
     "-m", $Memory,
     "-smp", "$CpuCount",
-    # TLS için RDRAND/RDSEED özelliklerini konuğa sun.
-    "-cpu", "max",
     "-serial", "stdio",
     "-vga", "std",
     "-global", "VGA.vgamem_mb=$vgamem"

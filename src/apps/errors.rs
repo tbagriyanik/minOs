@@ -35,6 +35,8 @@ pub enum AppErrorKind {
     NetworkUnavailable,
     /// İşlem zaman aşımına uğradı.
     Timeout,
+    /// Depolama aygıtı yok veya bağlantısı kesildi.
+    StorageUnavailable,
     /// Heap ayırma başarısız veya bellek kotası doldu.
     OutOfMemory,
     /// Kullanıcı girdisi/geçersiz argüman.
@@ -47,13 +49,14 @@ pub enum AppErrorKind {
 
 impl AppErrorKind {
     /// Tüm hata sınıfları (test ve kapsam denetimleri için).
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::FileNotFound,
         Self::PermissionDenied,
         Self::DiskFull,
         Self::InvalidFormat,
         Self::NetworkUnavailable,
         Self::Timeout,
+        Self::StorageUnavailable,
         Self::OutOfMemory,
         Self::InvalidInput,
         Self::Unsupported,
@@ -69,6 +72,7 @@ impl AppErrorKind {
             Self::InvalidFormat => "APP-E04",
             Self::NetworkUnavailable => "APP-E05",
             Self::Timeout => "APP-E06",
+            Self::StorageUnavailable => "APP-E11",
             Self::OutOfMemory => "APP-E07",
             Self::InvalidInput => "APP-E08",
             Self::Unsupported => "APP-E09",
@@ -91,6 +95,8 @@ impl AppErrorKind {
             (Self::NetworkUnavailable, true) => "Network unavailable",
             (Self::Timeout, false) => "İşlem zaman aşımına uğradı",
             (Self::Timeout, true) => "Operation timed out",
+            (Self::StorageUnavailable, false) => "Disk bağlantısı kesildi",
+            (Self::StorageUnavailable, true) => "Disk disconnected",
             (Self::OutOfMemory, false) => "Yetersiz bellek",
             (Self::OutOfMemory, true) => "Out of memory",
             (Self::InvalidInput, false) => "Geçersiz girdi",
@@ -134,6 +140,12 @@ impl AppErrorKind {
             (Self::Timeout, false) => "İşlem beklenen sürede tamamlanmadı ve güvenle iptal edildi.",
             (Self::Timeout, true) => {
                 "The operation did not finish in time and was safely cancelled."
+            }
+            (Self::StorageUnavailable, false) => {
+                "Disk bağlantısı kesildi veya aygıt yanıt vermiyor; işlem iptal edildi."
+            }
+            (Self::StorageUnavailable, true) => {
+                "The disk was disconnected or is not responding; the operation was cancelled."
             }
             (Self::OutOfMemory, false) => "Bellek kotası doldu; büyük veri yüklenemedi.",
             (Self::OutOfMemory, true) => {
@@ -183,6 +195,12 @@ impl AppErrorKind {
             }
             (Self::Timeout, false) => "Kurtarma: işlemi yeniden deneyin; yarım kalan veri atıldı.",
             (Self::Timeout, true) => "Recovery: retry the operation; partial data was discarded.",
+            (Self::StorageUnavailable, false) => {
+                "Kurtarma: diski yeniden bağlayıp Dosya Yöneticisi'nde F5'e basın veya Installer'ı yenileyin."
+            }
+            (Self::StorageUnavailable, true) => {
+                "Recovery: reconnect the disk, press F5 in File Manager, or refresh Installer."
+            }
             (Self::OutOfMemory, false) => {
                 "Kurtarma: açık sekmeleri/pencereleri kapatıp işlemi yeniden deneyin."
             }
@@ -210,7 +228,7 @@ impl AppErrorKind {
     pub fn retryable(self) -> bool {
         matches!(
             self,
-            Self::NetworkUnavailable | Self::Timeout | Self::OutOfMemory
+            Self::NetworkUnavailable | Self::Timeout | Self::StorageUnavailable | Self::OutOfMemory
         )
     }
 
@@ -235,6 +253,14 @@ impl AppErrorKind {
             || s.contains("invalid argument")
         {
             Self::InvalidInput
+        } else if s.contains("disk disconnected")
+            || s.contains("disk connection lost")
+            || s.contains("disk bağlantısı kesildi")
+            || s.contains("disk baglantisi kesildi")
+            || s.contains("disk yanıt vermiyor")
+            || s.contains("disk yanit vermiyor")
+        {
+            Self::StorageUnavailable
         } else if s.contains("not found")
             || s.contains("bulunamad")
             || s.contains("missing")
@@ -349,7 +375,7 @@ mod tests {
             assert!(!codes.contains(&code), "{code}: yinelenen hata kodu");
             codes.push(code);
         }
-        assert_eq!(codes.len(), 10);
+        assert_eq!(codes.len(), AppErrorKind::ALL.len());
     }
 
     #[test]
@@ -400,6 +426,7 @@ mod tests {
                 kind,
                 AppErrorKind::NetworkUnavailable
                     | AppErrorKind::Timeout
+                    | AppErrorKind::StorageUnavailable
                     | AppErrorKind::OutOfMemory
             );
             assert_eq!(

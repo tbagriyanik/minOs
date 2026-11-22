@@ -171,10 +171,14 @@ pub fn draw_busy_overlay(
     fb.flush_rect((x, y, w, h));
 }
 
-/// Dolgulu kum saati işlem imleci. İmlecin altındaki arka planı saklar;
-/// böylece bir sonraki karede `restore_cursor_background` ile temizlenebilir.
+/// Dolgulu kum saati işlem imleci. Yalnızca imleç desenini çizer.
+///
+/// Arka planı saklamak ve ekrana aktarmak çağırının sorumluluğundadır
+/// (`Framebuffer::save_cursor_background` + `flush_rect`). Böylece aynı
+/// yardımcı hem gövde çiziminde hem de önyükleme ilerleme göstergesinde
+/// kullanılabilir; çizim sırasında ekrana yazmak, henüz uygulanmamış gece
+/// ışığı filtresini atlayan pikseller bırakır.
 pub fn draw_busy_hourglass(fb: &mut Framebuffer, mx: usize, my: usize) {
-    fb.save_cursor_background(mx, my);
     // 8x9 kum saati deseni (bit 7 = sol sütun).
     const HOURGLASS: [u8; 8] = [
         0b11111110, 0b01111100, 0b00111000, 0b00010000, 0b00111000, 0b01111100, 0b11111110,
@@ -187,7 +191,6 @@ pub fn draw_busy_hourglass(fb: &mut Framebuffer, mx: usize, my: usize) {
             }
         }
     }
-    fb.flush_rect((mx, my, 10, 10));
 }
 
 /// Önyükleme hatası ekranı. Kernel `installed` modunda başlatılmak istendiğinde

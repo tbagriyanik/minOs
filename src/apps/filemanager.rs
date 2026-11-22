@@ -1380,10 +1380,13 @@ impl FileManagerApp {
         // Sürücü mevcut mu kontrol et
         let usb_available = crate::fs::diskfs::usb_available();
         let cd_available = crate::fs::diskfs::cd_available();
-        let hdd_available =
-            crate::drivers::usb::hdd_available() || crate::fs::diskfs::usb_available();
+        let hdd_available = crate::drivers::ata::drive_available(0);
 
-        let items = vfs.list_dir(&path);
+        let items = if is_hdd && !hdd_available {
+            Vec::new()
+        } else {
+            vfs.list_dir(&path)
+        };
 
         self.file_count = 0;
         self.selected_idx = 0;
@@ -1418,12 +1421,8 @@ impl FileManagerApp {
                 "⚠ No disc in CD-ROM drive. Please insert a disc.",
             );
         } else if is_hdd && !hdd_available {
-            self.status = crate::gui::ui_text(
-                "⚠ Sabit disk bulunamadı. Bağlantıları kontrol edin.",
-                "⚠ Hard disk not found. Check connections.",
-            );
-        } else {
-            // Disk bilgisini göster (sürücü tespiti henüz uygulanmadı)
+            self.status = crate::apps::errors::AppErrorKind::StorageUnavailable
+                .message(crate::gui::ui_english());
         }
         if is_boot && items.is_empty() {
             self.status = crate::gui::ui_text(
@@ -1814,6 +1813,13 @@ impl FileManagerApp {
         self.refresh_from_vfs(vfs);
         self.finish_progress();
         if let Some(failed_path) = failed {
+            if (dest == "/media/hdd0" || dest.starts_with("/media/hdd0/"))
+                && !crate::drivers::ata::drive_available(0)
+            {
+                self.status = crate::apps::errors::AppErrorKind::StorageUnavailable
+                    .message(crate::gui::ui_english());
+                return done;
+            }
             let name = failed_path
                 .rsplit('/')
                 .next()
@@ -1952,6 +1958,9 @@ impl FileManagerApp {
         self.refresh_from_vfs(vfs);
         self.status = if saved {
             crate::gui::ui_text("Yeni öğe oluşturuldu.", "New item created.")
+        } else if full_path.starts_with("/media/hdd0/") && !crate::drivers::ata::drive_available(0)
+        {
+            crate::apps::errors::AppErrorKind::StorageUnavailable.message(crate::gui::ui_english())
         } else {
             crate::gui::ui_text(
                 "Dosya oluşturuldu; diske kaydedilemedi.",
@@ -2011,6 +2020,9 @@ impl FileManagerApp {
         self.refresh_from_vfs(vfs);
         self.status = if saved {
             crate::gui::ui_text("Yeni dosya oluşturuldu.", "New file created.")
+        } else if full_path.starts_with("/media/hdd0/") && !crate::drivers::ata::drive_available(0)
+        {
+            crate::apps::errors::AppErrorKind::StorageUnavailable.message(crate::gui::ui_english())
         } else {
             crate::gui::ui_text(
                 "Dosya oluşturuldu; diske kaydedilemedi.",
@@ -3101,7 +3113,10 @@ impl FileManagerApp {
                     Color::TEXT_MUTED
                 }
             } else if i == 7 {
-                if crate::drivers::usb::hdd_available() || diskfs::usb_available() {
+                if crate::drivers::ata::device(0)
+                    .map(|dev| dev.kind == crate::drivers::ata::DeviceKind::Ata)
+                    .unwrap_or(false)
+                {
                     Color::ACCENT_YELLOW
                 } else {
                     Color::TEXT_MUTED

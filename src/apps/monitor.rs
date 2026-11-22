@@ -357,6 +357,9 @@ pub fn pressure_message(level: PressureLevel, english: bool) -> (&'static str, &
 
 /// Dosya yazımı için en az serbest alan oranı (%).
 pub const DISK_FULL_RESERVE_PCT: usize = 3;
+pub const DISK_WARN_80_PCT: u8 = 80;
+pub const DISK_WARN_90_PCT: u8 = 90;
+pub const DISK_WARN_95_PCT: u8 = 95;
 /// Küçük yazımlarda kesin dolu eşiği (bayt).
 // Küçük yazımlarda korunacak tampon. 4 KiB altındaki yazımlar (ör. tek
 // sektörlük metadata güncellemesi) düşük alan uyarısına rağmen denenebilir;
@@ -367,6 +370,9 @@ pub const DISK_FULL_SLACK_BYTES: u64 = 4 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DiskSpace {
     Ok,
+    Warn80,
+    Warn90,
+    Warn95,
     /// Yazım yapılabilir ama %3'ün altında alan kaldı (güvenli biçimde
     /// gereken yerden fazlası yazılmamalı).
     Low,
@@ -381,6 +387,27 @@ impl DiskSpace {
                     "Sufficient space"
                 } else {
                     "Yeterli alan"
+                }
+            }
+            DiskSpace::Warn80 => {
+                if english {
+                    "Disk space warning: 80% used"
+                } else {
+                    "Disk kullanım uyarısı: %80 dolu"
+                }
+            }
+            DiskSpace::Warn90 => {
+                if english {
+                    "Disk space warning: 90% used"
+                } else {
+                    "Disk kullanım uyarısı: %90 dolu"
+                }
+            }
+            DiskSpace::Warn95 => {
+                if english {
+                    "Critical disk space warning: 95% used"
+                } else {
+                    "Kritik disk kullanım uyarısı: %95 dolu"
                 }
             }
             DiskSpace::Low => {
@@ -401,7 +428,7 @@ impl DiskSpace {
     }
 }
 
-/// Kapasite ve serbest sektörden disk alanı durumunu hesaplar.
+/// Kapasite ve serbest sektörden disk alanı uyarı seviyesini hesaplar.
 pub fn disk_space(total_sectors: u64, free_sectors: u64) -> DiskSpace {
     if total_sectors == 0 {
         return DiskSpace::Full;
@@ -414,7 +441,17 @@ pub fn disk_space(total_sectors: u64, free_sectors: u64) -> DiskSpace {
     if free <= reserve.max(1) {
         DiskSpace::Low
     } else {
-        DiskSpace::Ok
+        let used_pct =
+            ((total_sectors.saturating_sub(free) as u128 * 100) / total_sectors as u128) as u8;
+        if used_pct >= DISK_WARN_95_PCT {
+            DiskSpace::Warn95
+        } else if used_pct >= DISK_WARN_90_PCT {
+            DiskSpace::Warn90
+        } else if used_pct >= DISK_WARN_80_PCT {
+            DiskSpace::Warn80
+        } else {
+            DiskSpace::Ok
+        }
     }
 }
 
@@ -439,11 +476,9 @@ pub fn check_write(
                 Ok(())
             }
         }
-        DiskSpace::Ok => {
-            // `write_bytes` için çağıranların kullandığı sektör üst sınırını
-            // ayrıca kontrol et. Böylece yeterli rezerv varken kapasiteyi
-            // aşan büyük istekler Full olarak reddedilir.
-            if write_bytes > free_sectors {
+        DiskSpace::Ok | DiskSpace::Warn80 | DiskSpace::Warn90 | DiskSpace::Warn95 => {
+            // `write_bytes` bayt, `free_sectors` ise sektör sayısıdır.
+            if write_bytes > free_sectors.saturating_mul(512) {
                 Err(DiskSpace::Full)
             } else {
                 Ok(())
@@ -597,10 +632,12 @@ pub struct MonitorRow {
     pub severity: u8,
 }
 
-/// Uyarı öncelik sırası: 0 normal, 1 uyarı, 2 hata.
+/// Uyarı öncelik sırası: 0 normal, 1 uyarı, 2 yüksek, 3 kritik, 4 hata.
 pub const SEV_NORMAL: u8 = 0;
 pub const SEV_WARN: u8 = 1;
-pub const SEV_FAIL: u8 = 2;
+pub const SEV_HIGH: u8 = 2;
+pub const SEV_CRITICAL: u8 = 3;
+pub const SEV_FAIL: u8 = 4;
 
 /// Bellek baskısı ve disk durumundan kullanım ekranı uyarı bandını döndürür.
 pub fn banner(
@@ -608,8 +645,7 @@ pub fn banner(
     disk: DiskSpace,
     english: bool,
 ) -> Option<(&'static str, u8)> {
-    let critical = pressure == PressureLevel::Critical || disk == DiskSpace::Full;
-    if critical {
+    if pressure == PressureLevel::Critical || disk == DiskSpace::Full {
         return Some((
             if english {
                 "Warning: memory or disk is critically low"
@@ -618,6 +654,15 @@ pub fn banner(
             },
             SEV_FAIL,
         ));
+    }
+    if disk == DiskSpace::Warn95 {
+        return Some((disk.label(english), SEV_CRITICAL));
+    }
+    if disk == DiskSpace::Warn90 {
+        return Some((disk.label(english), SEV_HIGH));
+    }
+    if disk == DiskSpace::Warn80 {
+        return Some((disk.label(english), SEV_WARN));
     }
     if pressure.is_pressured() || disk == DiskSpace::Low {
         return Some((
@@ -744,6 +789,9 @@ mod tests {
     fn disk_space_and_write_precheck() {
         let total = 100_000u64;
         assert_eq!(disk_space(total, total / 2), DiskSpace::Ok);
+        assert_eq!(disk_space(total, 20_000), DiskSpace::Warn80);
+        assert_eq!(disk_space(total, 10_000), DiskSpace::Warn90);
+        assert_eq!(disk_space(total, 5_000), DiskSpace::Warn95);
         assert_eq!(disk_space(total, 100), DiskSpace::Low);
         assert_eq!(disk_space(total, 0), DiskSpace::Full);
         assert_eq!(disk_space(0, 0), DiskSpace::Full);
@@ -754,10 +802,32 @@ mod tests {
         assert_eq!(check_write(total, 100, 8 * 1024), Err(DiskSpace::Low));
         // Hiç yer yok.
         assert_eq!(check_write(total, 0, 1), Err(DiskSpace::Full));
-        // Yazım serbest alandan büyük.
-        assert_eq!(check_write(total, 10_000, 100 * 1024), Err(DiskSpace::Full));
+        // Yazım serbest alandan büyük (serbest alan sektör, istek bayttır).
+        assert_eq!(
+            check_write(total, 10_000, 6 * 1024 * 1024),
+            Err(DiskSpace::Full)
+        );
         // %3..%100 arasındaki serbest alanda büyük yazım kabul edilir.
         assert_eq!(check_write(total, 10_000, 8 * 1024), Ok(()));
+        // Uyarı eşikleri yazma izinlerini değiştirmez.
+        assert_eq!(check_write(total, 5_000, 8 * 1024), Ok(()));
+    }
+
+    #[test]
+    fn disk_warning_levels_have_distinct_localized_banners() {
+        let levels = [
+            (DiskSpace::Warn80, SEV_WARN),
+            (DiskSpace::Warn90, SEV_HIGH),
+            (DiskSpace::Warn95, SEV_CRITICAL),
+        ];
+        let mut previous = "";
+        for (disk, severity) in levels {
+            let (message, actual_severity) = banner(PressureLevel::Normal, disk, false).unwrap();
+            assert_ne!(message, previous);
+            assert_eq!(actual_severity, severity);
+            assert!(!disk.label(true).is_empty());
+            previous = message;
+        }
     }
 
     #[test]
@@ -826,6 +896,8 @@ mod tests {
         assert_eq!(sev, SEV_FAIL);
         let (_, sev) = banner(PressureLevel::Normal, DiskSpace::Full, true).unwrap();
         assert_eq!(sev, SEV_FAIL);
+        let (_, sev) = banner(PressureLevel::Normal, DiskSpace::Warn95, true).unwrap();
+        assert_eq!(sev, SEV_CRITICAL);
     }
 
     #[test]

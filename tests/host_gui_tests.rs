@@ -145,6 +145,7 @@ fn error_classifier_covers_file_network_memory_and_crash_classes() {
         ("hedef klasor bulunamadi", AppErrorKind::FileNotFound),
         ("permission denied", AppErrorKind::PermissionDenied),
         ("disk dolu", AppErrorKind::DiskFull),
+        ("disk connection lost", AppErrorKind::StorageUnavailable),
         ("geçersiz biçim", AppErrorKind::InvalidFormat),
         ("DNS çözümlenemedi", AppErrorKind::NetworkUnavailable),
         ("network timeout", AppErrorKind::Timeout),
@@ -164,7 +165,10 @@ fn error_classifier_covers_file_network_memory_and_crash_classes() {
     for kind in AppErrorKind::ALL {
         let expected = matches!(
             kind,
-            AppErrorKind::NetworkUnavailable | AppErrorKind::Timeout | AppErrorKind::OutOfMemory
+            AppErrorKind::NetworkUnavailable
+                | AppErrorKind::Timeout
+                | AppErrorKind::StorageUnavailable
+                | AppErrorKind::OutOfMemory
         );
         assert_eq!(
             kind.retryable(),
@@ -172,6 +176,14 @@ fn error_classifier_covers_file_network_memory_and_crash_classes() {
             "{kind:?}: yanlış yeniden deneme sınıfı"
         );
     }
+}
+
+#[test]
+fn disconnected_storage_error_guides_file_manager_and_installer_recovery() {
+    let recovery = AppErrorKind::StorageUnavailable.recovery(false);
+    assert!(recovery.contains("Dosya Yöneticisi"));
+    assert!(recovery.contains("Installer"));
+    assert!(AppErrorKind::StorageUnavailable.retryable());
 }
 
 // ---------------------------------------------------------------------------

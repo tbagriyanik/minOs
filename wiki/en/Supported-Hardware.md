@@ -63,6 +63,10 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | USB Mass Storage (Flash Drive) | `usb_mass_storage.rs` | 🟢 Full | Storage over the SCSI BOT transfer protocol |
 | SD / MMC Card | `sdmmc.rs` | 🟡 Partial | SDHCI PIO sector read + CSD v1/v2 capacity parsing; writes deliberately rejected (explicit error) |
 
+Disk-usage warnings have distinct 80%, 90%, and 95% thresholds; the 3% free-space write reserve is independent of these notifications. File Manager and Installer probe the target disk before operations and refuse writes when the device is disconnected.
+
+Select QEMU storage profiles with `test_qemu.ps1 -StorageProfile ata|ahci|nvme`. IDE/ATA and AHCI devices cannot be hot-removed in this QEMU setup. For NVMe, `test_qemu.ps1 -StorageProfile nvme -DisconnectDisk` sends a QMP `device_del` request, but in the latest run QEMU accepted it without emitting `DEVICE_DELETED` within 10 seconds; removal therefore did not complete, and guest behavior after disk loss is not verified. The NVMe profile tests controller detection only; NVMe block I/O is not yet supported.
+
 ---
 
 ## Power & Sensors

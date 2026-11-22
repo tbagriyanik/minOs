@@ -64,6 +64,9 @@ pub fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     gui::draw_busy_overlay(fb, state.mx, state.my, state.message, percent);
 
     // 4. Kum saati imlecini yeni konuma çiz ve ekranı güncelle.
+    // Arka plan önce saklanır, sonra imleç çizilir; aksi halde imleç pikselleri
+    // yedeğe karışır ve sonraki temizlikte ekranda hayalet imleç kalır.
+    fb.save_cursor_background(state.mx, state.my);
     gui::draw_busy_hourglass(fb, state.mx, state.my);
     if let Some(rect) = fb.cursor_rect() {
         fb.flush_rect(rect);
@@ -83,7 +86,11 @@ pub fn with_busy_progress<T>(
         fb.flush_rect(rect);
     }
     gui::draw_busy_overlay(fb, mx, my, message, 5);
+    fb.save_cursor_background(mx, my);
     gui::draw_busy_hourglass(fb, mx, my);
+    if let Some(rect) = fb.cursor_rect() {
+        fb.flush_rect(rect);
+    }
 
     // `fb` işaretçisi bağlama devredilir; bundan sonraki çizimler üzerinden yapılır.
     let mut state = BusyProgressContext {

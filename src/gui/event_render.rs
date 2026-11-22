@@ -354,7 +354,14 @@ pub fn render_frame(
 
         state.drag_dirty_rect = None;
     } else if mouse_moved {
-        // Imlec hareketinde sadece imlec alanlarını güncelle.
+        // Imleç hareketinde sadece imleç alanları güncellenir.
+        //
+        // `restore_cursor_background`, imleç çizilmeden *önce* saklanan temiz
+        // arka planı geri yükler (eski imleç ekrandan silinir). Ardından yeni
+        // imleç çizilir ve yeni konumun temiz arka planı saklanır. Bu iki
+        // adım tek karede yalnızca bir kez çalışmalıdır; imleç iki kez
+        // çizilirse arka plan yedeğine imleç pikselleri karışır ve ekranda
+        // hayalet (ghost) imleç izleri oluşur.
         let old_rect = fb.restore_cursor_background();
 
         compositor.draw_mouse_cursor(fb, mx, my, mouse.left_button);

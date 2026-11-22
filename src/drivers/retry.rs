@@ -222,4 +222,63 @@ mod tests {
         assert!(ok);
         assert_eq!(calls, 3);
     }
+
+    #[test]
+    fn poll_with_retries_budget_exhausted_before_timeout() {
+        // max_attempts=1: tek deneme hakkı var, cond hiç sağlanmaz ve
+        // zaman budget'i geniş olduğundan "bütçe doldu" nedeniyle false
+        // dönmeli; delay_fn asla çağrılmamalı.
+        let policy = RetryPolicy::new(1, 1, 50);
+        let mut calls = 0u32;
+        let mut delays = 0u64;
+        let ok = poll_with_retries(
+            || 0,
+            &policy,
+            1_000_000,
+            || {
+                calls += 1;
+                false
+            },
+            |d| {
+                delays += d;
+            },
+        );
+        assert!(!ok);
+        assert_eq!(calls, 1);
+        assert_eq!(delays, 0, "bütçe tükenince gecikme beklemesi olmaz");
+    }
+
+    #[test]
+    fn poll_with_retries_succeeds_after_retries() {
+        // max_attempts=3: ilk iki deneme başarısız, üçüncü denemede koşul
+        // sağlanır; toplam süre zaman budget'i içinde kalmalı.
+        let policy = RetryPolicy::new(3, 1, 50);
+        let mut calls = 0u32;
+        let mut delays = 0u64;
+        let start = 10_000u64;
+        let now = Cell::new(start);
+        let ok = poll_with_retries(
+            || {
+                let t = now.get();
+                now.set(t + 5);
+                t
+            },
+            &policy,
+            100,
+            || {
+                calls += 1;
+                calls >= 3
+            },
+            |d| {
+                delays += d;
+            },
+        );
+        assert!(ok);
+        assert_eq!(calls, 3);
+        assert!(delays > 0, "yeniden denemeler arasında gecikme uygulanmalı");
+        assert!(
+            now.get() - start < 100,
+            "toplam süre zaman budget'i içinde kalmalı"
+        );
+    }
 }

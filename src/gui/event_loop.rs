@@ -675,7 +675,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     state.last_workspace = compositor.active_workspace;
 
     // Oyun bütçesi sabitleri
-    const GAME_UPDATE_BUDGET_MS: u64 = 30;
+    const GAME_UPDATE_BUDGET_MS: u64 = 50;
     const GAME_BUDGET_MAX_STRIKES: u32 = 2;
     const GAME_FPS_LIMIT_MS: u64 = 33;
     const FPS3D_FPS_LIMIT_MS: u64 = 16;
@@ -1932,6 +1932,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 if tag == "TXT" || tag == "LOG" || tag == "CFG" {
                                                     if let Some(data) = fs_mgr.vfs.read_file(&path)
                                                     {
+                                                        apps.load(2, &fs_mgr.vfs);
                                                         apps.notepad_app
                                                             .as_mut()
                                                             .unwrap()
@@ -1980,6 +1981,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 } else if tag == "3D" {
                                                     if let Some(data) = fs_mgr.vfs.read_file(&path)
                                                     {
+                                                        apps.load(12, &fs_mgr.vfs);
                                                         apps.viewer3d_app
                                                             .as_mut()
                                                             .unwrap()
@@ -2003,6 +2005,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 apps.desktop_files.files[i].display_name(),
                                             );
                                             if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                apps.load(2, &fs_mgr.vfs);
                                                 apps.notepad_app
                                                     .as_mut()
                                                     .unwrap()
@@ -2093,6 +2096,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                     );
 
                                                     if let Some(data) = data {
+                                                        apps.load(2, &fs_mgr.vfs);
                                                         apps.notepad_app
                                                             .as_mut()
                                                             .unwrap()
@@ -2164,6 +2168,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                     );
 
                                                     if let Some(data) = data {
+                                                        apps.load(12, &fs_mgr.vfs);
                                                         apps.viewer3d_app
                                                             .as_mut()
                                                             .unwrap()
@@ -2201,6 +2206,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             );
 
                                             if let Some(data) = data {
+                                                apps.load(2, &fs_mgr.vfs);
                                                 apps.notepad_app
                                                     .as_mut()
                                                     .unwrap()
@@ -2905,6 +2911,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 );
 
                                 if let Some(data) = data {
+                                    // Uygulama tembel yuklenir; open_app'ten once
+                                    // bellekte olmasi gerekir.
+                                    apps.load(2, &fs_mgr.vfs);
                                     apps.notepad_app.as_mut().unwrap().open_file(&p, data);
                                 }
 
@@ -2942,6 +2951,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 );
 
                                 if let Some(data) = data {
+                                    apps.load(12, &fs_mgr.vfs);
                                     apps.viewer3d_app.as_mut().unwrap().load_file(&p, data);
                                 }
 
@@ -3288,6 +3298,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             );
 
                                             if let Some(data) = data {
+                                                apps.load(2, &fs_mgr.vfs);
                                                 apps.notepad_app
                                                     .as_mut()
                                                     .unwrap()
@@ -3334,6 +3345,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             );
 
                                             if let Some(data) = data {
+                                                apps.load(12, &fs_mgr.vfs);
                                                 apps.viewer3d_app
                                                     .as_mut()
                                                     .unwrap()
@@ -3472,6 +3484,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                         );
 
                                                         if let Some(data) = data {
+                                                            apps.load(2, &fs_mgr.vfs);
                                                             apps.notepad_app
                                                                 .as_mut()
                                                                 .unwrap()
@@ -3580,6 +3593,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                         );
 
                                                         if let Some(data) = data {
+                                                            apps.load(12, &fs_mgr.vfs);
                                                             apps.viewer3d_app
                                                                 .as_mut()
                                                                 .unwrap()
@@ -6818,6 +6832,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         );
 
                                         if let Some(data) = data {
+                                            apps.load(2, &fs_mgr.vfs);
                                             apps.notepad_app
                                                 .as_mut()
                                                 .unwrap()
@@ -6861,6 +6876,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         );
 
                                         if let Some(data) = data {
+                                            apps.load(12, &fs_mgr.vfs);
                                             apps.viewer3d_app
                                                 .as_mut()
                                                 .unwrap()
@@ -7829,13 +7845,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     if bmp_data.try_reserve_exact(file_size).is_err() {
                         serial_print("[SCREENSHOT] HATA: Yetersiz bellek!\n");
 
-                        apps.terminal_app.as_mut().unwrap().push_line(
-                            gui::ui_text(
-                                "Ekran görüntüsü alınamadı: Yetersiz bellek",
-                                "Screenshot failed: Out of memory",
-                            ),
-                            gui::Color::ACCENT_RED,
-                        );
+                        if let Some(term) = apps.terminal_app.as_mut() {
+                            term.push_line(
+                                gui::ui_text(
+                                    "Ekran görüntüsü alınamadı: Yetersiz bellek",
+                                    "Screenshot failed: Out of memory",
+                                ),
+                                gui::Color::ACCENT_RED,
+                            );
+                        }
                     } else {
                         // BMP Header (14 bytes)
 
@@ -7914,13 +7932,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             apps.filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
-                            apps.terminal_app.as_mut().unwrap().push_line(
-                                gui::ui_text(
-                                    "Ekran görüntüsü kaydedildi: /desktop/",
-                                    "Screenshot saved to: /desktop/",
-                                ),
-                                gui::Color::ACCENT_GREEN,
-                            );
+                            if let Some(term) = apps.terminal_app.as_mut() {
+                                term.push_line(
+                                    gui::ui_text(
+                                        "Ekran görüntüsü kaydedildi: /desktop/",
+                                        "Screenshot saved to: /desktop/",
+                                    ),
+                                    gui::Color::ACCENT_GREEN,
+                                );
+                            }
 
                             compositor.push_toast(
                                 gui::ToastKind::Success,
@@ -9081,11 +9101,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             } else if ch == '\x1b' && apps.taskmgr_app.launch_menu_open {
                 apps.taskmgr_app.launch_menu_open = false;
             } else if ch == '\x1b'
-                && apps.notepad_app.as_mut().unwrap().find_active
                 && app_is_focused(&compositor, 2)
+                && apps.notepad_app.as_mut().unwrap().find_active
             {
                 apps.notepad_app.as_mut().unwrap().close_find();
-            } else if ch == '\x1b' && apps.notepad_app.as_mut().unwrap().menu != 0 {
+            } else if ch == '\x1b'
+                && app_is_focused(&compositor, 2)
+                && apps.notepad_app.as_mut().unwrap().menu != 0
+            {
                 apps.notepad_app.as_mut().unwrap().menu = 0;
             } else if ch == '\x1b'
                 && app_is_focused(&compositor, 3)
@@ -9562,41 +9585,50 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
 
                 if term_focused {
-                    if ch == '\x08' {
-                        apps.terminal_app.as_mut().unwrap().clear_selection();
-                        apps.terminal_app.as_mut().unwrap().backspace();
-                    } else if ch == '\n' {
-                        if apps.terminal_app.as_mut().unwrap().has_selection() {
-                            apps.terminal_app.as_mut().unwrap().copy_selection();
-                            apps.terminal_app.as_mut().unwrap().clear_selection();
-                        } else {
-                            apps.terminal_app.as_mut().unwrap().submit();
+                    // Odak kaydı, lazy uygulama kapatılırken bir kare gecikmeli
+                    // kalabilir. Bu durumda pencere görünür olsa bile uygulama
+                    // `None` olabilir; klavye olayı kernel panic üretmemeli.
+                    if let Some(term) = apps.terminal_app.as_mut() {
+                        if ch == '\x08' {
+                            term.clear_selection();
+                            term.backspace();
+                        } else if ch == '\n' {
+                            if term.has_selection() {
+                                term.copy_selection();
+                                term.clear_selection();
+                            } else {
+                                term.submit();
+                            }
+                        } else if ch >= ' ' {
+                            term.clear_selection();
+                            term.insert(ch);
                         }
-                    } else if ch >= ' ' {
-                        apps.terminal_app.as_mut().unwrap().clear_selection();
-                        apps.terminal_app.as_mut().unwrap().insert(ch);
                     }
                 }
 
                 // Terminalde Enter'a basildiysa bekleyen komutu VFS/PMM baglaminda yurut.
+                // `terminal_app` tembel yuklenir: uygulama kapaliysa (None) klavye
+                // olaylari cekirdek paniki uretmemeli.
 
-                if let Some(cmd) = apps.terminal_app.as_mut().unwrap().take_pending() {
-                    let n = apps.terminal_app.as_mut().unwrap().pending_len();
+                if term_focused {
+                    let pending = apps.terminal_app.as_mut().and_then(|term| {
+                        term.take_pending().map(|cmd| {
+                            let n = term.pending_len().min(cmd.len());
+                            (cmd, n)
+                        })
+                    });
+                    if let Some((cmd, n)) = pending {
+                        let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
+                        let app_idx = apps.terminal_app.as_mut().and_then(|term| {
+                            term.execute(line, &mut fs_mgr.vfs, &mut memory_mgr.pmm, &now)
+                        });
+                        if let Some(app_idx) = app_idx {
+                            open_app(&mut compositor, &mut apps, &fs_mgr.vfs, app_idx);
+                        }
 
-                    let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
-
-                    if let Some(app_idx) = apps.terminal_app.as_mut().unwrap().execute(
-                        line,
-                        &mut fs_mgr.vfs,
-                        &mut memory_mgr.pmm,
-                        &now,
-                    ) {
-                        open_app(&mut compositor, &mut apps, &fs_mgr.vfs, app_idx);
+                        handle_terminal_open_request(&mut apps, &mut fs_mgr.vfs, &mut compositor);
+                        apps.filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                     }
-
-                    handle_terminal_open_request(&mut apps, &mut fs_mgr.vfs, &mut compositor);
-
-                    apps.filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                 }
 
                 if let Some((paint_idx, _)) = focused_window_for_app(&compositor, 9) {

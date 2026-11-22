@@ -118,6 +118,38 @@ pub fn render_full_frame(
 
     // aksi halde tum ekran yeniden cizilir.
 
+    // Onceki karenin yazilim imlecini backbuffer'dan temizle: imlec pikselleri
+    // kalici degildir, her kare temiz arka plan uzerine cizilir. Eski ve yeni
+    // imlec alanlari kirli bolgeye eklenir; aksi halde kismi kare guncellemesinde
+    // eski imlec ekranda hayalet (ghost) olarak kalir veya imlec kaybolur.
+    let cursor_old = fb.restore_cursor_background();
+    let mut dirty_rect = match dirty_rect {
+        Some(d) => {
+            let mut region = d;
+            if let Some((cx, cy, cw, ch)) = cursor_old {
+                region = drivers::video::rect_union(region, (cx, cy, cw, ch));
+            }
+            let mx = mouse.x.max(0) as usize;
+            let my = mouse.y.max(0) as usize;
+            let nx = mx.saturating_sub(3).min(fb.width);
+            let ny = my.saturating_sub(3).min(fb.height);
+            let nw = 32usize.min(fb.width.saturating_sub(nx));
+            let nh = 32usize.min(fb.height.saturating_sub(ny));
+            Some(drivers::video::rect_union(region, (nx, ny, nw, nh)))
+        }
+        // Tam kare her seyi kapsar; eski imlec yine de backbuffer'dan silindi.
+        None => None,
+    };
+
+    // Duvar kağıdı önbelleği yenilenecekse tüm ekran yeniden çizilir. Önbellek
+    // yenilemesi arka planı kırpma bölgesi temizlenerek tüm ekrana çizer ve
+    // backbuffer'ın kirli bölge dışındaki kısmını ezer; kısmi çizimde bu,
+    // backbuffer ile ekran içeriğini ayırır ve sonraki kısmi blit'lerde
+    // ekranda bozulma bırakır.
+    if crate::gui::wallpaper::needs_refresh(fb) {
+        dirty_rect = None;
+    }
+
     fb.set_frame_clip(dirty_rect);
 
     // 1. Masaustu Arka Plani
@@ -933,6 +965,27 @@ pub fn render_full_frame(
     }
 
     fb.clear_frame_clip();
+
+    // Fare imleci kare başına **tek yerde** ve en son çizilir: kırpma bölgesi
+    // temizlendikten ve gece ışığı filtresi uygulandıktan sonra. Böylece
+    // imleç ne kırpma bölgesine takılır ne de filtreli/filtersiz iki kez
+    // ekrana basılır.
+    //
+    // Tam/kirli kare çizimi eski yazılım imlecini geri yükler. İmleci burada
+    // yeniden çizmeden çıkılırsa imleç bir sonraki fare olayına kadar kaybolur;
+    // daha kötüsü, sonraki kısmi kare eski arka plan kaydını yanlış bölgeye
+    // uygulayarak iz ve ekran bozulması üretebilir. İçeriği flush ettikten
+    // sonra imleci ekranın mevcut backbuffer'ı üzerine kaydet ve yalnızca
+    // imleç alanını aktar.
+    compositor.draw_mouse_cursor(
+        fb,
+        mouse.x.max(0) as usize,
+        mouse.y.max(0) as usize,
+        mouse.left_button,
+    );
+    if let Some(cursor_rect) = fb.cursor_rect() {
+        fb.flush_rect(cursor_rect);
+    }
 
     // Frame pacing: donanim VSync bayragini bekle (vsync_wait); VSync takip
     // modunda kare vblank uyumunda ~60 Hz kare pazarlanir. Desteklenmeyen

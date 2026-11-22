@@ -21,6 +21,8 @@ param(
     [switch]$Minimal,
     [switch]$HighEnd,
     [switch]$Vmware,
+    [ValidateSet("ata", "ahci", "nvme")][string]$StorageProfile = "ata",
+    [switch]$DisconnectDisk,
     [ValidateSet("virtio", "std", "vmware", "qxl")][string]$Vga = "virtio",
     [switch]$BootShutdownCycle,
     [int]$BootShutdownCycles = 3,
@@ -59,6 +61,11 @@ if ($HighEnd) {
 }
 
 if ($NoPs2) { $UsbHid = $true }
+if ($DisconnectDisk -and $StorageProfile -ne "nvme") {
+    Write-Host "[HATA] QEMU'da bu depolama yolunda sicak cikarma desteklenmiyor. -DisconnectDisk icin -StorageProfile nvme kullanin." -ForegroundColor Red
+    exit 1
+}
+$machineType = if ($StorageProfile -eq "nvme") { "q35" } else { "pc" }
 
 # VMware profili: VMware hipervizöründe daha iyi uyum ve performans için
 # VGA ayarları ve USB HID girişi yapılandırılır.
@@ -161,6 +168,20 @@ if (Test-Path $audioWavPath) {
     Remove-Item -Force $audioWavPath -ErrorAction SilentlyContinue
 }
 
+$storageImagePath = Join-Path $targetDir "qemu_storage_$StorageProfile.img"
+$storageImageSize = 64MB
+if (-not (Test-Path -LiteralPath $storageImagePath)) {
+    $storageImage = [System.IO.File]::Open(
+        $storageImagePath,
+        [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write
+    )
+    try { $storageImage.SetLength($storageImageSize) } finally { $storageImage.Close() }
+} elseif ((Get-Item -LiteralPath $storageImagePath).Length -ne $storageImageSize) {
+    Write-Host "[HATA] Test diski boyutu beklenen 64 MiB degil: $storageImagePath" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "[2/3] QEMU headless ortaminda baslatiliyor (Zaman Asimi: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
 
 # QMP icin bos bir yerel port sec; sabit 4444 portu baska bir QEMU ile carpisabilir.
@@ -179,6 +200,7 @@ $serialPort = ([System.Net.IPEndPoint]$serialProbe.LocalEndpoint).Port
 $serialProbe.Stop()
 
 $qemuArgs = @(
+    "-machine", $machineType,
     "-m", "$($memMb)M",
     "-smp", "$smpCpus",
     # TLS testleri için RDRAND/RDSEED özelliklerini konuğa sun.
@@ -192,6 +214,32 @@ $qemuArgs = @(
     "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait",
     "-accel", "tcg,thread=multi"
 )
+
+switch ($StorageProfile) {
+    "ata" {
+        $storageDisconnectDeviceId = "storage_disk"
+        $qemuArgs += @(
+            "-drive", "file=$storageImagePath,format=raw,if=none,id=storage_drive",
+            "-device", "ide-hd,drive=storage_drive,bus=ide.0,id=storage_disk"
+        )
+    }
+    "ahci" {
+        $storageDisconnectDeviceId = "storage_ahci"
+        $qemuArgs += @(
+            "-drive", "file=$storageImagePath,format=raw,if=none,id=storage_drive",
+            "-device", "ahci,id=storage_ahci",
+            "-device", "ide-hd,drive=storage_drive,bus=storage_ahci.0,id=storage_disk"
+        )
+    }
+    "nvme" {
+        $storageDisconnectDeviceId = "storage_disk"
+        $qemuArgs += @(
+            "-drive", "file=$storageImagePath,format=raw,if=none,id=storage_drive",
+            "-device", "pcie-root-port,id=storage_port,chassis=1,slot=1",
+            "-device", "nvme,drive=storage_drive,bus=storage_port,id=storage_disk,serial=MINOSNVME"
+        )
+    }
+}
 
 if (-not $Minimal) {
     # Çok düşük donanım profilinde ses ve ağ aygıtları eklenmez; diğer
@@ -222,7 +270,7 @@ if ($UsbHid) {
 }
 
 if ($NoPs2) {
-    $qemuArgs += @("-machine", "pc,i8042=off")
+    $qemuArgs += @("-machine", "$machineType,i8042=off")
 }
 
 if ($Minimal) {
@@ -308,7 +356,7 @@ function Connect-Qmp([int]$port = 4444) {
         $tcp = New-Object System.Net.Sockets.TcpClient
         $tcp.Connect("127.0.0.1", $port)
         $stream = $tcp.GetStream()
-        $stream.ReadTimeout = 3000
+        $stream.ReadTimeout = 10000
         $reader = New-Object System.IO.StreamReader($stream)
         $writer = New-Object System.IO.StreamWriter($stream)
         $writer.NewLine = "`n"
@@ -320,6 +368,58 @@ function Connect-Qmp([int]$port = 4444) {
     } catch {
         return $null
     }
+}
+
+function Remove-QemuDevice($qmp, [string]$deviceId) {
+    if (-not $qmp) { return $false }
+    try {
+        $requestId = "storage_disconnect"
+        $qmp.Writer.WriteLine(
+            '{"execute":"device_del","arguments":{"id":"' + $deviceId + '"},"id":"' + $requestId + '"}'
+        )
+        $accepted = $false
+        $removed = $false
+        $requestPattern = '"id"\s*:\s*"' + [regex]::Escape($requestId) + '"'
+        $devicePattern = '"device"\s*:\s*"' + [regex]::Escape($deviceId) + '"'
+        $deadline = [System.DateTime]::UtcNow.AddSeconds(10)
+        $previousReadTimeout = $qmp.Reader.BaseStream.ReadTimeout
+        $qmp.Reader.BaseStream.ReadTimeout = 500
+        try {
+            while ([System.DateTime]::UtcNow -lt $deadline) {
+                try {
+                    $line = $qmp.Reader.ReadLine()
+                } catch [System.IO.IOException] {
+                    continue
+                }
+                Write-Host "[QMP] $line" -ForegroundColor DarkGray
+                if ($line -match '"event"\s*:\s*"DEVICE_DELETED"' -and $line -match $devicePattern) {
+                    $removed = $true
+                }
+                if ($line -match $requestPattern) {
+                    if ($line -match '"error"') {
+                        Write-Host "[HATA] QMP aygit cikarma istegi reddedildi: $line" -ForegroundColor Red
+                        return $false
+                    }
+                    if ($line -match '"return"') {
+                        $accepted = $true
+                    }
+                }
+                if ($accepted -and $removed) {
+                    return $true
+                }
+            }
+        } finally {
+            $qmp.Reader.BaseStream.ReadTimeout = $previousReadTimeout
+        }
+        if ($accepted) {
+            Write-Host "[HATA] QMP istegi kabul etti, ancak 10 saniye icinde DEVICE_DELETED olayi gelmedi; aygit cikarma tamamlanmadi." -ForegroundColor Red
+        } else {
+            Write-Host "[HATA] QMP device_del istegine 10 saniye icinde yanit vermedi." -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "[HATA] Disk baglantisi kesme istegi tamamlanamadi: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    return $false
 }
 
 function Send-InputEvents($qmp, [string]$eventsJson) {
@@ -341,7 +441,7 @@ function Send-KeyTap($qmp, [string]$qcode, [int]$holdMs = 70) {
 }
 
 $qmp = $null
-if ($UsbHid -or $FpsStressTest) {
+if ($UsbHid -or $FpsStressTest -or $DisconnectDisk) {
     $qmpDeadline = [System.DateTime]::UtcNow.AddSeconds(5)
     while (-not $qmp -and [System.DateTime]::UtcNow -lt $qmpDeadline) {
         $qmp = Connect-Qmp $qmpPort
@@ -379,6 +479,19 @@ while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds
             Start-Sleep -Milliseconds 250
         }
         break
+    }
+}
+
+if ($DisconnectDisk) {
+    $storageDisconnectOk = Remove-QemuDevice $qmp $storageDisconnectDeviceId
+    if ($storageDisconnectOk) {
+        Start-Sleep -Milliseconds 750
+        $storageDisconnectOk = -not $proc.HasExited
+    }
+    if ($storageDisconnectOk) {
+        Write-Host "[OK] $StorageProfile test diski ayrildi; isletim sistemi calismaya devam ediyor." -ForegroundColor Green
+    } else {
+        Write-Host "[FAIL] $StorageProfile test diski ayirilamadi veya isletim sistemi durdu." -ForegroundColor Red
     }
 }
 
@@ -855,6 +968,43 @@ if (-not $Minimal) {
     )
 }
 
+switch ($StorageProfile) {
+    "ata" {
+        $checks += @{
+            Name = "ATA QEMU Depolama Profili"
+            Pattern = "\[ATA\] Surucu \d+: ATA"
+            Description = "QEMU IDE/ATA veri diski tanimlandi"
+        }
+    }
+    "ahci" {
+        $checks += @{
+            Name = "AHCI QEMU Depolama Profili"
+            Pattern = "\[DRIVER-STATUS\] ahci phase=ready"
+            Description = "QEMU AHCI/SATA denetleyicisi baslatildi"
+        }
+    }
+    "nvme" {
+        $checks += @{
+            Name = "NVMe QEMU Denetleyici Profili"
+            Pattern = "\[DRIVER-STATUS\] nvme phase=ready"
+            Description = "NVMe denetleyicisi algilandi; blok I/O yolu bu profilde desteklenmiyor"
+        }
+    }
+}
+
+if ($DisconnectDisk) {
+    $checks += @{
+        Name = "Disk Baglantisi Kesilme Senaryosu"
+        Pattern = ""
+        Description = if ($storageDisconnectOk) {
+            "$StorageProfile aygiti QMP ile cikarildi; isletim sistemi calismaya devam etti"
+        } else {
+            "QMP istegi kabul edildi ancak DEVICE_DELETED olayi alinmadi; disk kesintisi dogrulanmadi"
+        }
+        Passed = $storageDisconnectOk
+    }
+}
+
 if ($UsbHid) {
     $checks += @(
         @{
@@ -912,11 +1062,20 @@ $allPassed = $true
 Write-Host "`n--- ENTEGRASYON TESTI RAPORU ---" -ForegroundColor Cyan
 
 foreach ($check in $checks) {
-    if ($logOutput -match $check.Pattern) {
+    $checkPassed = if ($check.ContainsKey("Passed")) {
+        [bool]$check.Passed
+    } else {
+        $logOutput -match $check.Pattern
+    }
+    if ($checkPassed) {
         Write-Host "  [OK] $($check.Name)" -ForegroundColor Green
     } else {
         Write-Host "  [FAIL] $($check.Name)" -ForegroundColor Red
-        Write-Host "         Beklenen pozitif kalip: '$($check.Pattern)'" -ForegroundColor DarkGray
+        if ($check.ContainsKey("Passed")) {
+            Write-Host "         $($check.Description)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "         Beklenen pozitif kalip: '$($check.Pattern)'" -ForegroundColor DarkGray
+        }
         $allPassed = $false
     }
 }
@@ -955,6 +1114,8 @@ $report = [System.Text.StringBuilder]::new()
 [void]$report.AppendLine("| Zaman | $stamp |")
 [void]$report.AppendLine("| ISO | ``$isoPath`` |")
 [void]$report.AppendLine("| QEMU profili | $profileName |")
+[void]$report.AppendLine("| Depolama profili | $StorageProfile |")
+[void]$report.AppendLine("| Disk bağlantı kesme testi | $(if ($DisconnectDisk) { if ($storageDisconnectOk) { 'başarılı' } else { 'başarısız' } } else { 'çalıştırılmadı' }) |")
 [void]$report.AppendLine("| Bellek / vCPU | ${memMb} MB / $smpCpus |")
 [void]$report.AppendLine("| VGA | $Vga |")
 [void]$report.AppendLine("| USB HID / PS/2 | $(if ($UsbHid) { 'açık' } else { 'kapalı' }) / $(if ($NoPs2) { 'devre dışı' } else { 'açık' }) |")
@@ -964,7 +1125,12 @@ $report = [System.Text.StringBuilder]::new()
 [void]$report.AppendLine("| Kontrol | Durum | Açıklama |")
 [void]$report.AppendLine("| :--- | :---: | :--- |")
 foreach ($check in $checks) {
-    $st = if ($logOutput -match $check.Pattern) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
+    $checkPassed = if ($check.ContainsKey("Passed")) {
+        [bool]$check.Passed
+    } else {
+        $logOutput -match $check.Pattern
+    }
+    $st = if ($checkPassed) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
     [void]$report.AppendLine("| $($check.Name) | $st | $($check.Description) |")
 }
 $desktopStatus = if ($desktopReady) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }

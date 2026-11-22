@@ -230,52 +230,9 @@ pub fn detect() -> bool {
 // ---------------------------------------------------------------------------
 
 pub fn init() -> bool {
-    unsafe {
-        if !DETECTED {
-            return false;
-        }
-
-        // Controller'ı durdur
-        let mut cc = mmio_read32(NVME_CC);
-        cc &= !CC_EN;
-        mmio_write32(NVME_CC, cc);
-
-        // Hazır olana kadar bekle
-        for _ in 0..100000 {
-            let csts = mmio_read32(NVME_CSTS);
-            if csts & CSTS_RDY == 0 {
-                break;
-            }
-        }
-
-        // Admin queue ayarları
-        let aqa = (QUEUE_SIZE - 1) as u32 | (((QUEUE_SIZE - 1) as u32) << 16);
-        mmio_write32(NVME_AQA, aqa);
-
-        // TODO: Admin queue bellek tahsisi
-        // ASQ ve ACQ adreslerini ayarla
-
-        // Controller'ı başlat
-        let mut cc = mmio_read32(NVME_CC);
-        cc |= CC_EN;
-        cc |= 0 << CC_CSS_SHIFT; // NVM Command Set
-        cc |= 0 << CC_MPS_SHIFT; // 4KB pages
-        mmio_write32(NVME_CC, cc);
-
-        // Hazır olana kadar bekle
-        for _ in 0..1000000 {
-            let csts = mmio_read32(NVME_CSTS);
-            if csts & CSTS_RDY != 0 {
-                break;
-            }
-        }
-
-        SQ_HEAD = 0;
-        SQ_TAIL = 0;
-        CQ_HEAD = 0;
-
-        true
-    }
+    // Detection is supported, but admin/I/O queues are not implemented yet.
+    // Do not touch controller registers until valid queue memory is available.
+    unsafe { DETECTED }
 }
 
 // ---------------------------------------------------------------------------

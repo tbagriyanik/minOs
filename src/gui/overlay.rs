@@ -156,7 +156,39 @@ impl MinGuiCompositor {
             (box_x + 18, footer_y + 21, box_w.saturating_sub(36), 20),
         );
     }
+    /// Fare imlecini çizer.
+    ///
+    /// İmleç, kirli dikdörtgen kırpma bölgesinden bağımsız olarak (her zaman
+    /// tam ekran üzerinde) çizilir. Kırpma aktifken çizilen imleç kesilir ve
+    /// ekranda yarım imleç ya da hayalet kalır. Çizim bittikten sonra kırpma
+    /// eski hâline döndürülür.
+    ///
+    /// Donanım imleci etkinse yazılım imleci çizilmez.
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
+        if fb.hw_cursor_active() {
+            // Donanım imleci konumu kendisi izler; yazılım yedeği tutulmaz.
+            fb.save_cursor_background(mx, my);
+            return;
+        }
+
+        let clip = fb.base_clip();
+        fb.clear_frame_clip();
+        self.draw_mouse_cursor_pixels(fb, mx, my, pressed);
+        fb.set_frame_clip(Some((
+            clip.x0,
+            clip.y0,
+            clip.x1.saturating_sub(clip.x0),
+            clip.y1.saturating_sub(clip.y0),
+        )));
+    }
+
+    /// İmleç desenini backbuffer'a çizer (kırpma bölgesi zaten temizlenmiş
+    /// olmalıdır).
+    fn draw_mouse_cursor_pixels(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
+        // İmlecin altındaki arka planı çizimden *önce* sakla. Bu yedek, sonraki
+        // karede `restore_cursor_background` ile geri yüklenerek önceki imleci
+        // temizler; imleç pikselleri yedeğe karışırsa ekranda hayalet (ghost)
+        // imleç izleri kalır.
         fb.save_cursor_background(mx, my);
         // Meşgul (kum saati) imleci: uzun işlem sırasında fare takılı gibi görünmez.
         if crate::gui::screens::is_cursor_busy() {

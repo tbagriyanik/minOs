@@ -63,6 +63,10 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | USB Mass Storage (Flash Disk) | `usb_mass_storage.rs` | 🟢 Tam | SCSI BOT transfer protokolü ile depolama |
 | SD / MMC Kart | `sdmmc.rs` | 🟡 Kısmi | SDHCI PIO sektör okuma + CSD v1/v2 kapasite ayrıştırma; yazma bilinçli olarak reddedilir (açık hata döner) |
 
+Disk kullanım uyarıları %80, %90 ve %95 eşiklerinde ayrı seviyelerde gösterilir; yazma korumasının %3 boş alan rezervi bu bildirimlerden bağımsızdır. File Manager ve Installer, işlem öncesinde hedef diskin sektörünü okuyarak bağlantısı kesilmiş aygıta yazmayı reddeder.
+
+QEMU depolama profilleri `test_qemu.ps1 -StorageProfile ata|ahci|nvme` ile seçilir. IDE/ATA ve AHCI aygıtları bu QEMU yapılandırmasında sıcak çıkarılamaz. NVMe için `test_qemu.ps1 -StorageProfile nvme -DisconnectDisk` QMP `device_del` isteğini gönderir, ancak son denemede QEMU isteği kabul ettikten sonra 10 saniye içinde `DEVICE_DELETED` olayı üretmedi; bu nedenle çıkarma tamamlanmadı ve işletim sisteminin disk kesintisi davranışı doğrulanmış değildir. NVMe profili yalnızca denetleyici algılamasını sınar; NVMe blok I/O'su henüz desteklenmez.
+
 ---
 
 ## Güç & Sensör

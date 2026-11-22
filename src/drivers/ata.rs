@@ -441,27 +441,37 @@ pub fn init() {
         // yönlendirilir; IDENTIFY PIO'su bu yolda kullanılmaz.
         AHCI_SLOT = -1;
         if crate::drivers::ahci::detect() && crate::drivers::ahci::init() {
-            for (slot, dev) in DEVICES.iter_mut().enumerate() {
-                if dev.kind == DeviceKind::None {
-                    let sectors = crate::drivers::ahci::capacity_sectors();
-                    *dev = Device {
-                        kind: DeviceKind::Ata,
-                        role: DriveRole::HardDisk,
-                        sectors,
-                        model: {
-                            let mut m = [0u8; 40];
-                            m[..16].copy_from_slice(b"AHCI SATA (DMA)");
-                            m
-                        },
-                        model_len: 16,
-                    };
-                    AHCI_SLOT = slot as i8;
-                    serial("[ATA] AHCI/SATA aygiti surucuye kaydedildi (DMA yol).");
-                    serial("  Kapasite: ");
-                    print_num(sectors * 512 / (1024 * 1024));
-                    serial(" MB\n");
-                    break;
-                }
+            register_ahci_device();
+        }
+    }
+}
+
+fn register_ahci_device() {
+    if !crate::drivers::ahci::ready() || unsafe { AHCI_SLOT >= 0 } {
+        return;
+    }
+    let sectors = crate::drivers::ahci::capacity_sectors();
+    if sectors == 0 {
+        return;
+    }
+    unsafe {
+        for (slot, dev) in DEVICES.iter_mut().enumerate() {
+            if dev.kind == DeviceKind::None {
+                let mut model = [0u8; 40];
+                model[..16].copy_from_slice(b"AHCI SATA (DMA)");
+                *dev = Device {
+                    kind: DeviceKind::Ata,
+                    role: DriveRole::HardDisk,
+                    sectors,
+                    model,
+                    model_len: 16,
+                };
+                AHCI_SLOT = slot as i8;
+                serial("[ATA] AHCI/SATA aygiti surucuye kaydedildi (DMA yol).");
+                serial("  Kapasite: ");
+                print_num(sectors * 512 / (1024 * 1024));
+                serial(" MB\n");
+                break;
             }
         }
     }
@@ -504,6 +514,7 @@ pub fn rescan() {
             DEVICES[idx] = dev;
         }
     }
+    register_ahci_device();
 }
 
 pub fn master_kind() -> DeviceKind {
@@ -546,6 +557,18 @@ pub fn drive_capacity_sectors(drive: u8) -> u64 {
             0
         }
     }
+}
+
+/// Confirms a known ATA/AHCI disk is still reachable by reading its first sector.
+pub fn drive_available(drive: u8) -> bool {
+    if !device(drive)
+        .map(|dev| dev.kind == DeviceKind::Ata)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let mut sector = [0u8; SECTOR_SIZE];
+    read_sector(drive, 0, &mut sector)
 }
 
 pub fn flush_cache(drive: u8) {

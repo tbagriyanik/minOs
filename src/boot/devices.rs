@@ -101,6 +101,11 @@ fn scan(refresh: bool) {
         "sata portu hazir; LBA48 DMA okuma/yazma aktif",
         refresh,
     );
+    if drivers::ahci::ready() {
+        // ATA's early scan can run before DMA memory is available; retry AHCI
+        // device registration now that the controller has initialized.
+        drivers::ata::rescan();
+    }
     // AHCI kendinden testi: yalnizca acilista (rescan'de tekrarlanmaz).
     // self_test son sektore yedek-GPT korumasi uygular; sistem disklerinde
     // test guvenle atlanir, scratch/QEMU disklerinde yaz+oku dogrulanir.

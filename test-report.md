@@ -1,10 +1,12 @@
-# minOs QEMU Entegrasyon Test Raporu
+﻿# minOs QEMU Entegrasyon Test Raporu
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-21 19:49:51 UTC |
+| Zaman | 2026-11-22 14:49:39 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
+| Depolama profili | ata |
+| Disk bağlantı kesme testi | çalıştırılmadı |
 | Bellek / vCPU | 512 MB / 2 |
 | VGA | virtio |
 | USB HID / PS/2 | kapalı / açık |
@@ -46,6 +48,7 @@
 | ICMP (Ping) Testi | ✅ GEÇTİ | Gateway'e ICMP Echo Request gonderildi |
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
+| ATA QEMU Depolama Profili | ✅ GEÇTİ | QEMU IDE/ATA veri diski tanimlandi |
 | Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç

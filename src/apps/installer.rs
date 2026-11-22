@@ -309,26 +309,28 @@ impl InstallerApp {
     pub fn refresh_drives(&mut self) {
         let mut count = 0;
         for i in 0..4 {
-            if let Some(dev) = ata::device(i) {
-                if dev.kind == ata::DeviceKind::Ata {
-                    count += 1;
-                }
+            if ata::drive_available(i) {
+                count += 1;
             }
         }
         self.drive_count = count;
-        // Eger secili surucu ATA degilse ilk gecerli ATA surucuye gec
-        let cur_valid = ata::device(self.selected_drive)
-            .map(|d| d.kind == ata::DeviceKind::Ata)
-            .unwrap_or(false);
+        // Aygıt tablosunda kayıtlı olsa bile yanıt vermeyen disk çıkarılmış sayılır.
+        let cur_valid = ata::drive_available(self.selected_drive);
         if !cur_valid {
             for i in 0..4 {
-                if let Some(dev) = ata::device(i) {
-                    if dev.kind == ata::DeviceKind::Ata {
-                        self.selected_drive = i;
-                        break;
-                    }
+                if ata::drive_available(i) {
+                    self.selected_drive = i;
+                    break;
                 }
             }
+        }
+        if count == 0 {
+            self.disk_formatted = false;
+            self.state = InstallState::Selecting;
+            self.progress_pct = 0;
+            let error = crate::apps::errors::AppErrorKind::StorageUnavailable;
+            self.status_msg = (error.message(false), error.message(true));
+            return;
         }
         self.disk_formatted = diskfs::fat32_mounted_on(self.selected_drive);
         if self.disk_formatted && diskfs::is_installed() {
@@ -358,11 +360,9 @@ impl InstallerApp {
     pub fn select_next_drive(&mut self) {
         for step in 1..=4 {
             let next = (self.selected_drive + step) % 4;
-            if let Some(dev) = ata::device(next) {
-                if dev.kind == ata::DeviceKind::Ata {
-                    self.selected_drive = next;
-                    break;
-                }
+            if ata::drive_available(next) {
+                self.selected_drive = next;
+                break;
             }
         }
         // Disk degisti: biçimlendirme ve kurulum durumu sifirlanir.
@@ -383,6 +383,14 @@ impl InstallerApp {
     /// ve seçili dosya sistemini hazırlar.
     pub fn format_selected_drive(&mut self) -> bool {
         let english = crate::gui::ui_english();
+        let drive = self.selected_drive;
+        if !ata::drive_available(drive) {
+            self.state = InstallState::Failed;
+            let error = crate::apps::errors::AppErrorKind::StorageUnavailable;
+            self.status_msg = (error.message(false), error.message(true));
+            return false;
+        }
+
         // Disk seçeneği için ikinci onay:Henüz 'Tek Tıkla Kur' yapılmadıysa biçimlendirme uyarısı
         if !self.confirm_install && !self.disk_formatted {
             let mut confirm = TextBuf::new();
@@ -410,16 +418,10 @@ impl InstallerApp {
             "Partitioning disk and installing MBR bootloader...",
         );
 
-        let drive = self.selected_drive;
-        if !ata::device(drive)
-            .map(|d| d.kind == ata::DeviceKind::Ata)
-            .unwrap_or(false)
-        {
+        if !ata::drive_available(drive) {
             self.state = InstallState::Failed;
-            self.status_msg = (
-                "HATA: Seçili sürücüde hedef disk yok!",
-                "ERROR: No target disk on selected drive!",
-            );
+            let error = crate::apps::errors::AppErrorKind::StorageUnavailable;
+            self.status_msg = (error.message(false), error.message(true));
             return false;
         }
 
@@ -566,15 +568,10 @@ impl InstallerApp {
         // Kurulum dosya kopyalama içerir; imleç kum saati olsun.
         let _busy = crate::gui::screens::BusyScope::new();
         let drive = self.selected_drive;
-        if !ata::device(drive)
-            .map(|d| d.kind == ata::DeviceKind::Ata)
-            .unwrap_or(false)
-        {
+        if !ata::drive_available(drive) {
             self.state = InstallState::Failed;
-            self.status_msg = (
-                "HATA: Seçili sürücüde hedef disk yok!",
-                "ERROR: No target disk on selected drive!",
-            );
+            let error = crate::apps::errors::AppErrorKind::StorageUnavailable;
+            self.status_msg = (error.message(false), error.message(true));
             return false;
         }
 

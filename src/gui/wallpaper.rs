@@ -159,6 +159,27 @@ fn hash(mut x: u32) -> u32 {
     x
 }
 
+/// Duvar kağıdı önbelleğinin yenilenmesi gerekiyor mu?
+///
+/// Önbellek yenilendiğinde arka plan kırpma bölgesi temizlenerek **tüm
+/// ekrana** çizilir. Kirli bölge (partial frame) çiziminde bu, backbuffer'ın
+/// kirli bölge dışındaki kısmını duvar kağıdıyla ezer ve backbuffer ile
+/// ekran içeriği ayrışır; sonraki kısmi blit'ler ekranda bozulma bırakır.
+/// Bu yüzden çağıran, yenileme gerektiğinde tüm ekranı yeniden çizmelidir.
+pub fn needs_refresh(fb: &Framebuffer) -> bool {
+    let cur_id = get();
+    let cur_solid = solid_color();
+    let cur_theme = crate::gui::theme::current().index();
+    unsafe {
+        !CACHE_VALID
+            || CACHED_ID != cur_id
+            || CACHED_SOLID != cur_solid
+            || CACHED_THEME != cur_theme
+            || CACHED_W != fb.width
+            || CACHED_H != fb.height
+    }
+}
+
 #[allow(static_mut_refs)]
 pub fn draw(fb: &mut Framebuffer) {
     let (w, h) = (fb.width, fb.height);
@@ -166,14 +187,7 @@ pub fn draw(fb: &mut Framebuffer) {
     let cur_solid = solid_color();
     let cur_theme = crate::gui::theme::current().index();
 
-    let needs_render = unsafe {
-        !CACHE_VALID
-            || CACHED_ID != cur_id
-            || CACHED_SOLID != cur_solid
-            || CACHED_THEME != cur_theme
-            || CACHED_W != w
-            || CACHED_H != h
-    };
+    let needs_render = needs_refresh(fb);
 
     if needs_render {
         // Önbellek yenilemesi tüm ekranı kaplar; kirli bölge kırpmasını geçici

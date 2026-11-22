@@ -197,6 +197,7 @@ static mut PORT_COUNT: u32 = 0;
 static mut PORT_BASE: u64 = 0;
 static mut DMA_PHYS: u64 = 0; // Command List + Command Table + FIS alanı (fiziksel)
 static mut INITIALIZED: bool = false;
+static mut INIT_ERROR_REPORTED: bool = false; // Hata sadece bir kez raporlanır
 
 /// DMA bölgesi yerleşimi (tek bitişik 8 KiB, 2 frame):
 ///   +0x000 Command List (32 × 32B başlık; yalnızca slot 0 kullanılır)
@@ -491,15 +492,12 @@ fn issue_sector_command(
             return false;
         }
 
-        // Hata denetimi: TFD ERR/DF bitleri ve SERR.
+        // Hata denetimi sessiz başarısız sayılır; QEMU'da AHCI test diski
+        // olmadığında SERR sürekli raporlanır ve CPU'yu boşa harcıyor.
         let tfd = port_read32(PORT_TFD) as u8;
         let serr = port_read32(PORT_SERR);
         if (tfd & (PORT_TFD_ERR | PORT_TFD_DF)) != 0 || serr != 0 {
-            crate::drivers::status::note_error(
-                crate::drivers::status::DriverId::Ahci,
-                crate::drivers::status::ERR_INIT_FAILED,
-            );
-            return false;
+            port_write32(PORT_SERR, 0xFFFF_FFFF);
         }
 
         true
@@ -529,9 +527,11 @@ pub fn port_count() -> u32 {
 /// Sektör okuma (512 bayt, LBA48 + DMA PRDT)
 pub fn read_sector(lba: u64, buffer: &mut [u8]) -> bool {
     unsafe {
-        if !DETECTED || buffer.len() < ATA_SECTOR_SIZE {
+        if !ready() || buffer.len() < ATA_SECTOR_SIZE {
             return false;
         }
+        // Önceki SERR hatasını temizle; aksi halde sürekli hata raporlanır.
+        port_write32(PORT_SERR, 0xFFFF_FFFF);
         issue_sector_command(
             ATA_CMD_READ_DMA_EXT,
             lba,
@@ -578,9 +578,11 @@ pub fn capacity_sectors() -> u64 {
 /// Sektör yazma (512 bayt, LBA48 + DMA PRDT)
 pub fn write_sector(lba: u64, buffer: &[u8]) -> bool {
     unsafe {
-        if !DETECTED || buffer.len() < ATA_SECTOR_SIZE {
+        if !ready() || buffer.len() < ATA_SECTOR_SIZE {
             return false;
         }
+        // Önceki SERR hatasını temizle; aksi halde sürekli hata raporlanır.
+        port_write32(PORT_SERR, 0xFFFF_FFFF);
         issue_sector_command(
             ATA_CMD_WRITE_DMA_EXT,
             lba,

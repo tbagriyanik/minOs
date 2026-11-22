@@ -202,6 +202,12 @@ impl Framebuffer {
         }
     }
 
+    /// Donanım imleci etkin mi? Etkinse yazılım imleci çizilmez.
+    #[inline(always)]
+    pub fn hw_cursor_active(&self) -> bool {
+        self.hw_cursor
+    }
+
     /// BGA/VESA mod değişimi sonrası geometriyi günceller.
     /// Adres aynı kalır (BGA LFB sabittir); backbuffer sınırları korunur.
     pub fn resize(&mut self, width: usize, height: usize, pitch: usize) -> bool {
@@ -378,6 +384,12 @@ impl Framebuffer {
     pub fn save_cursor_background(&mut self, x: usize, y: usize) {
         // Konumu her durumda GPU'ya bildir (VMware/VGA HW hazır olunca kullanılır).
         crate::drivers::gpu::hw_cursor_move(x.min(32767) as u16, y.min(32767) as u16);
+        // Donanım imleci etkinken yazılım imleci çizilmez; arka plan yedeği
+        // tutulmaz (geri yükleme, ekranda olmayan bir alanı bozardı).
+        if self.hw_cursor {
+            self.cursor_saved = false;
+            return;
+        }
         // Yeniden boyutlandırma imleci fare noktasının 3 piksel üst/soluna taşar.
         self.cursor_x = x.saturating_sub(3).min(self.width);
         self.cursor_y = y.saturating_sub(3).min(self.height);
@@ -403,6 +415,11 @@ impl Framebuffer {
         if !self.cursor_saved {
             return None;
         }
+        // Donanım imleci etkinken yazılım imleç yedeği yoktur.
+        if self.hw_cursor {
+            self.cursor_saved = false;
+            return None;
+        }
         for row in 0..self.cursor_h {
             for col in 0..self.cursor_w {
                 let offset = (self.cursor_y + row) * self.width + self.cursor_x + col;
@@ -423,6 +440,14 @@ impl Framebuffer {
         } else {
             None
         }
+    }
+
+    /// Tam kare yeniden çiziminin ardından eski imleç arka plan kaydını
+    /// geçersiz kılar. Aksi halde `restore_cursor_background` sonraki fare
+    /// hareketinde eski (artık güncel olmayan) arka planı geri yazar ve
+    /// ekranda bozulma yapar.
+    pub fn invalidate_cursor_save(&mut self) {
+        self.cursor_saved = false;
     }
 
     /// Yalnızca verilen dikdörtgeni framebuffer'a kopyalar (Donanım 2D Hızlandırmalı Bit Blit).

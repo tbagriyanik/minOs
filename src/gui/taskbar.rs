@@ -618,7 +618,10 @@ impl MinGuiCompositor {
         // Hover ipuçları (imleçten önce, en üst katman)
         self.draw_tooltip(fb);
 
-        // Donanım Fare İmleci
-        self.draw_mouse_cursor(fb, mx, my, mouse.left_button);
+        // Fare imleci burada çizilmez. İmleç, gece ışığı filtresi uygulanıp
+        // kirli dikdörtgen kırpması kaldırıldıktan sonra `gui::frame` içinde
+        // tek seferde çizilir. Burada çizilirse imleç kırpma bölgesine takılır,
+        // filtreli/filtersiz iki kez ekrana basılır ve altındaki arka plan
+        // kaydedildiği için hayalet (ghost) imleç izleri oluşur.
     }
 }

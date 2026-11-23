@@ -1045,7 +1045,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         // USB depolama (ATA köprülü bellek) sıcak takma taraması.
         // IDENTIFY port I/O'su ağır olduğu için ~2 sn'de bir çalışır.
-        drivers::usb::poll_storage_hotplug(2_000);
+        //drivers::usb::poll_storage_hotplug(2_000);
         while let Some(ev) = drivers::usb::pop_storage_hotplug_event() {
             state.force_render = true;
             // Disk envanteri değişti: dosya yöneticisi ve masaüstü

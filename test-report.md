@@ -1,15 +1,15 @@
-# minOs QEMU Entegrasyon Test Raporu
+﻿# minOs QEMU Entegrasyon Test Raporu
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-22 15:58:02 UTC |
+| Zaman | 2026-11-23 17:09:28 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Depolama profili | ata |
 | Disk bağlantı kesme testi | çalıştırılmadı |
 | Bellek / vCPU | 512 MB / 2 |
 | VGA | virtio |
-| USB HID / PS/2 | kapalı / açık |
+| USB HID / PS/2 | açık / açık |
 
 ## Kontroller
 
@@ -49,6 +49,10 @@
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
 | ATA QEMU Depolama Profili | ✅ GEÇTİ | QEMU IDE/ATA veri diski tanimlandi |
+| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-tablet numaralandirildi |
+| USB HID Etkin Girdi Yolu | ✅ GEÇTİ | Masaustu girdisi USB HID surucusune baglandi |
+| USB Klavye Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP 'a' tusu xHCI HID raporu olarak islendi |
+| USB Fare Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP fare hareketi/tiki xHCI HID raporu olarak islendi |
 | Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç

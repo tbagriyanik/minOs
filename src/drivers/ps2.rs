@@ -1,6 +1,7 @@
 use crate::drivers::input_queue::{InputEvent, INPUT_QUEUE};
 use crate::drivers::keyboard::KeyboardState;
 use crate::drivers::mouse::MouseState;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Copy, Clone, Default)]
 pub struct InputUpdate {
@@ -51,6 +52,14 @@ fn wait_read() -> bool {
 static mut MOUSE_CYCLE: u8 = 0;
 static mut MOUSE_BYTE: [u8; 4] = [0; 4];
 static mut HAS_WHEEL: bool = false;
+// PS/2 fare yolu devre dışı mı?
+//
+// BIOS "legacy USB emülasyonu" açık olan sistemlerde USB fare, 8042 fare
+// portu üzerinden de gelir. OS aynı fareyi xHCI üzerinden de sürüyorsa aynı
+// hareket iki kez işlenir: imleç "takılır", sıçrar ve gecikme hissedilir.
+// Bu bayrak, USB HID fare birincil kaynak olduğunda PS/2 fare paketlerinin
+// tüketilip yok sayılmasını sağlar (klavye yolu etkilenmez).
+static MOUSE_DISABLED: AtomicBool = AtomicBool::new(false);
 // 8042 denetleyicisinin varlığı. QEMU `-machine ...,i8042=off` gibi
 // yapılandırmalarda 0x64 portu boşta 0xFF okur; bu durumda yoklama
 // döngüsü sonsuza kadar dönmemelidir.
@@ -78,6 +87,25 @@ pub fn present() -> bool {
         PRESENT = Some(present);
         present
     }
+}
+
+/// PS/2 fare yolunu devre dışı bırakır (klavye etkilenmez).
+///
+/// USB HID fare bulunduğunda ve BIOS'un legacy USB emülasyonu devrede kaldığında
+/// aynı fare iki ayrı yoldan (8042 emülasyonu + xHCI) gelir; iki kaynak da
+/// işlenirse imleç "takılır". Bu durumda PS/2 fare paketleri tüketilir ama
+/// uygulanmaz; birincil kaynak USB HID olur.
+pub fn disable_mouse() {
+    if !MOUSE_DISABLED.swap(true, Ordering::SeqCst) {
+        crate::serial::print(
+            "[PS/2] Fare yolu devre disi (USB HID fare birincil kaynak); klavyle etkin.\n",
+        );
+    }
+}
+
+/// PS/2 fare yolu devre dışı mı?
+pub fn mouse_disabled() -> bool {
+    MOUSE_DISABLED.load(Ordering::Relaxed)
 }
 
 pub fn mouse_wheel_enabled() -> bool {
@@ -264,6 +292,12 @@ pub fn poll_input(
 
             if status & 0x20 != 0 {
                 // PS/2 Fare / Touchpad / Emüle USB Fare Baytı
+                if MOUSE_DISABLED.load(Ordering::Relaxed) {
+                    // Fare yolu devre dışı: baytı tüket ama uygulama.
+                    // (8042 çıkış tamponunun tıkanmaması için okumaya devam.)
+                    MOUSE_CYCLE = 0;
+                    continue;
+                }
                 match MOUSE_CYCLE {
                     0 => {
                         // PS/2 standart fare ve touchpad paketlerinde 1. baytın 3. biti daima 1'dir.
@@ -486,6 +520,11 @@ unsafe fn handle_irq_bytes() {
 /// # Safety
 /// Yalnızca kesme bağlamında çağrılmalıdır.
 unsafe fn handle_mouse_byte_irq(data: u8) {
+    if MOUSE_DISABLED.load(Ordering::Relaxed) {
+        // Fare yolu devre dışı: baytı tüket ama uygulama (bkz. `disable_mouse`).
+        MOUSE_CYCLE = 0;
+        return;
+    }
     match MOUSE_CYCLE {
         0 => {
             // PS/2 paket ilk baytının 3. biti daima 1'dir.

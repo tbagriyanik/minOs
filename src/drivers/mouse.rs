@@ -57,10 +57,12 @@ impl MouseState {
 
         let mut speed = self.speed.clamp(1, 10) as i32;
 
-        // USB HID fareleri daha sık ve daha büyük delta raporu gönderebilir;
-        // hızını %40 oranında indirerek kontrol edilebilir kılın.
+        // USB HID fareleri PS/2'ye göre daha büyük delta raporu gönderebilir.
+        // Aşırı kısma (0.6x) imleci gerçek donanımda "çok yavaş" hissettiriyordu;
+        // bu yüzden ölçek hafifletildi (0.8x) ve kullanıcının Ayarlar'daki
+        // fare hızı esas alınıyor.
         if self.usb_hid_speed_reduce {
-            speed = speed * 3 / 5; // ~0.6x
+            speed = speed * 4 / 5; // ~0.8x
             if speed < 1 {
                 speed = 1;
             }
@@ -80,15 +82,23 @@ impl MouseState {
                 return 0;
             }
             let abs_d = delta.abs();
-            // Hafif, dengeli ivmelenme (uçuşa geçmeden rahat kontrol):
-            let accel = if abs_d > 12 { 2 } else { 1 };
-
-            let scaled = (delta * speed * num * accel) / (den * 5);
-            if scaled == 0 {
-                delta.signum()
+            // Balistik ivmelenme yalnızca PS/2 (8-bit, küçük delta) için
+            // geçerlidir. USB HID'de büyük deltalar ivmelenmeyle birleşince
+            // imleç "takılıyor"/aşıyordu; HID yolunda ivmelenme kapalıdır.
+            let accel = if abs_d > 12 && !self.usb_hid_speed_reduce {
+                2
             } else {
-                scaled
+                1
+            };
+
+            let mut scaled = (delta * speed * num * accel) / (den * 5);
+            if scaled == 0 {
+                scaled = delta.signum();
             }
+            // Tek olayda aşırı sıçramayı sınırla (yüksek DPI farelerde
+            // imleç ekranın dışına fırlıyordu).
+            const MAX_STEP: i32 = 220;
+            scaled.clamp(-MAX_STEP, MAX_STEP)
         };
 
         self.x += scale(dx);

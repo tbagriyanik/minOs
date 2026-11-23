@@ -372,6 +372,12 @@ pub fn render_frame(
         match (old_rect, new_rect) {
             (Some(o), Some(n)) => {
                 let u = drivers::video::rect_union(o, n);
+                // LFB'ye yazmadan önce dikey-blank'ı bekle: yalnızca fare
+                // hareket ederken de yazma taranan ekranın ortasına
+                // düşerse ekran yırtılması oluşur.
+                if crate::gui::frame::vsync_enabled() {
+                    crate::drivers::gpu::vsync_wait();
+                }
                 fb.flush_rect(u);
             }
             (Some(o), None) => fb.flush_rect(o),

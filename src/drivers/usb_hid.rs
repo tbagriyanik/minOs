@@ -1125,6 +1125,10 @@ impl XhciController {
                         crate::serial::print(
                             "[USB-HID] UYARI: BIOS USB legacy devri zaman aşımı; SMM kapatılıyor.\n",
                         );
+                        // Devir tamamlanamadı: BIOS 8042 emülasyonu çalışmaya devam
+                        // ediyor olabilir. Bu durumda aynı fare hem xHCI'den hem
+                        // PS/2 emülasyonundan gelir (çift girdi → takılma).
+                        LEGACY_HANDOFF_FAILED.store(true, Ordering::Relaxed);
                         break;
                     }
                     core::hint::spin_loop();
@@ -1146,6 +1150,14 @@ static mut CONTROLLERS: [XhciController; MAX_CONTROLLERS] =
     [XhciController::empty(); MAX_CONTROLLERS];
 static mut CONTROLLER_COUNT: usize = 0;
 static mut INITIALIZED: bool = false;
+
+/// BIOS legacy USB devri (8042 emülasyonu) tamamlanabildi mi?
+///
+/// `false` ise BIOS'un fare emülasyonu çalışmaya devam ediyor demektir; bu
+/// durumda USB fare hem xHCI hem 8042 üzerinden gelir. Çift girdiyi önlemek
+/// için PS/2 fare yolu kapatılır (`drivers::ps2::disable_mouse`).
+static LEGACY_HANDOFF_FAILED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // HID aygıtı ve rapor çözümleme
@@ -2556,10 +2568,17 @@ unsafe fn enumerate_device(
         HID_DEVICES[index] = device;
         queue_hid_transfer(&mut HID_DEVICES[index]);
 
-        // USB HID fareleri için fare hızını düşür (daha kontrollü hareket).
+        // USB HID fareleri için fare hızını bir miktar düşür (daha kontrollü
+        // hareket); ölçek `drivers::mouse` içinde 0.8x olarak uygulanır.
         if kind == HidKind::Mouse {
             unsafe {
                 (*core::ptr::addr_of_mut!(GLOBAL_MOUSE)).usb_hid_speed_reduce = true;
+            }
+            // BIOS legacy devri tamamlanamadıysa aynı fare 8042 emülasyonundan
+            // da gelir; çift girdi imleci "takılıyor" yapar. PS/2 fare yolunu
+            // kapatıp USB HID'i tek kaynak bırakıyoruz.
+            if LEGACY_HANDOFF_FAILED.load(Ordering::Relaxed) {
+                crate::drivers::ps2::disable_mouse();
             }
         }
 

@@ -31,6 +31,12 @@ pub fn init_subsystems(
     // Açılış süresi profili: her aşamanın süresi seri konsola yazılır.
     let mut timer = crate::boot::timing::PhaseTimer::new();
 
+    // Önyükleme komut satırı (profil belirteçleri için).
+    let cmdline = limine_boot_cmdline().unwrap_or("");
+    // "fast" profili: ağır kendi kendine test bataryası atlanır. Sanal
+    // makinede ve gerçek donanımda açılış süresini belirgin şekilde kısaltır.
+    let fast_boot = cmdline_has_token(cmdline, "fast");
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
     kinfo!("boot", "[BOOT] Starting virtual file system...\n");
     let mut fs_mgr = fs::FileSystemManager::new();
@@ -242,78 +248,89 @@ pub fn init_subsystems(
     // tek seferlik kaynağı süreç testi ölçümlerine "sızıntı" olarak yansımasın.
     mm::user_mem::ensure_zero_page(&mut memory_mgr.pmm);
 
-    kdebug!("boot", "[BOOT] Running memory tests...\n");
-    mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
-    mm::allocator::test_allocator_subsystem();
-    kdebug!(
-        "boot",
-        "[BOOT] Running large-page and compression tests...\n"
-    );
-    mm::memory::run_boot_tests(&mut memory_mgr.pmm);
-    crate::kernel::heap::test_heap_growth();
-    crate::kernel::heap::test_tiered_alloc();
-    mm::memory::profile::report_boot_summary();
-    timer.mark("bellek-testleri");
-
-    kdebug!("boot", "[BOOT] Running process tests...\n");
-    mm::process::test_process_lifecycle_and_fault_recovery(
-        &mut memory_mgr.proc_mgr,
-        &mut memory_mgr.pmm,
-    );
-    timer.mark("surec-testleri");
-
-    kdebug!(
-        "boot",
-        "[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Syscall kullanıcı işaretçi doğrulama testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_syscall_pointer_validation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Seccomp syscall izin maskesi testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_syscall_filter(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Kullanıcı heap/mmap/ASLR/COW testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_user_memory(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Dosya tanıtıcısı yaşam döngüsü testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_file_descriptor_lifecycle(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Süreç kaynak limitleri testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_resource_limits(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] kill/SIGSTOP/SIGCONT/SIGTERM testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_kill_suspend_resume(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Süreç grubu/oturum/affinity/sinyal testleri çalıştırılıyor...\n"
-    );
-    mm::process::test_process_groups_and_signals(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
-    kdebug!(
-        "boot",
-        "[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n"
-    );
-    let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
-    if !ring3_demo_ok {
-        kerror!(
+    if fast_boot {
+        kinfo!(
             "boot",
-            "[RING3-TEST] Syscall/register dönüş doğrulaması: BAŞARISIZ\n"
+            "[BOOT] Hizli acilis profili: kendi kendine test bataryasi atlandi.\n"
         );
+        mm::memory::profile::report_boot_summary();
+        timer.mark("bellek-testleri");
+        timer.mark("surec-testleri");
+        timer.mark("ring3-testleri");
+    } else {
+        kdebug!("boot", "[BOOT] Running memory tests...\n");
+        mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
+        mm::allocator::test_allocator_subsystem();
+        kdebug!(
+            "boot",
+            "[BOOT] Running large-page and compression tests...\n"
+        );
+        mm::memory::run_boot_tests(&mut memory_mgr.pmm);
+        crate::kernel::heap::test_heap_growth();
+        crate::kernel::heap::test_tiered_alloc();
+        mm::memory::profile::report_boot_summary();
+        timer.mark("bellek-testleri");
+
+        kdebug!("boot", "[BOOT] Running process tests...\n");
+        mm::process::test_process_lifecycle_and_fault_recovery(
+            &mut memory_mgr.proc_mgr,
+            &mut memory_mgr.pmm,
+        );
+        timer.mark("surec-testleri");
+
+        kdebug!(
+            "boot",
+            "[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Syscall kullanıcı işaretçi doğrulama testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_syscall_pointer_validation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Seccomp syscall izin maskesi testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_syscall_filter(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Kullanıcı heap/mmap/ASLR/COW testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_user_memory(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Dosya tanıtıcısı yaşam döngüsü testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_file_descriptor_lifecycle(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Süreç kaynak limitleri testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_resource_limits(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] kill/SIGSTOP/SIGCONT/SIGTERM testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_kill_suspend_resume(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Süreç grubu/oturum/affinity/sinyal testleri çalıştırılıyor...\n"
+        );
+        mm::process::test_process_groups_and_signals(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+        kdebug!(
+            "boot",
+            "[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n"
+        );
+        let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
+        if !ring3_demo_ok {
+            kerror!(
+                "boot",
+                "[RING3-TEST] Syscall/register dönüş doğrulaması: BAŞARISIZ\n"
+            );
+        }
+        timer.mark("ring3-testleri");
     }
-    timer.mark("ring3-testleri");
 
     kinfo!("boot", "[BOOT] Starting SMP...\n");
     kdebug!("boot", "[SMP] Loading BSP GDT...\n");
@@ -402,7 +419,7 @@ pub fn init_subsystems(
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
     timer.mark("smp");
     kinfo!("boot", "[BOOT] Starting hardware drivers...\n");
-    let cmdline = limine_boot_cmdline().unwrap_or("");
+    // "fast" profili tüm sürücüleri açar; yalnızca test bataryasını atlar.
     let driver_profile = if cmdline_has_token(cmdline, "full") {
         "full"
     } else if cmdline_has_token(cmdline, "hardware") {
@@ -415,6 +432,9 @@ pub fn init_subsystems(
         "full"
     };
     kinfo!("boot", "[DRIVERS] Profil: {}\n", driver_profile);
+    if fast_boot {
+        kinfo!("boot", "[DRIVERS] Hizli acilis: test bataryasi atlandi.\n");
+    }
     let mut profile_line = HeaplessString::<64>::new();
     let _ = write!(profile_line, "[DRIVERS] profile: {}", driver_profile);
     let _ = fs_mgr

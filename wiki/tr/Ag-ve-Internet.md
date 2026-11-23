@@ -90,7 +90,7 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 | Sürücü | Donanım | Durum |
 | :--- | :--- | :--- |
 | `e1000.rs` | Intel e1000 / e1000e | 🟢 Tam |
-| `i219.rs` | Intel I219-V | 🟢 Tam |
+| `e1000.rs` + `i219.rs` | Intel I219/I220/I225/I226 | 🟢 Tam |
 | `e1000.rs` | Realtek PCIe, RTL8139, Broadcom NetXtreme | 🟢 Tam |
 | `ne2000.rs` | NE2000 / RTL8019AS (ISA PnP), RTL8029AS (PCI) | 🟢 Tam |
 | `virtio_net.rs` | VirtIO-net | 🟢 Tam |

@@ -79,8 +79,9 @@ ağ ve ses aygıtları yalnızca `minimal` dışındaki profillerde eklenir.
 
 | Bileşen | Sürücü | Durum | Son Doğrulama | Not |
 | :--- | :--- | :---: | :--- | :--- |
-| Intel e1000/e1000e | `e1000.rs` | ✅ | QEMU `default` 2026-11-17 | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS |
-| Intel I219-V | `i219.rs` | 🟢 | — | Gigabit Ethernet |
+| Intel e1000/e1000e (8254x/8257x, I210/I211/I350) | `e1000.rs` | ✅ | QEMU `default` 2026-11-17 | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS |
+| Intel I219/I220/I225/I226 (cloverpoint/rainbow) | `e1000.rs` + `i219.rs` (kimlik tablosu) | 🟢 | — | Aynı e1000e kayıt düzenini kullanır (RDBAL=0x2800, TDBAL=0x3800, RAL0=0x5400); PCI bus 0..255 taraması ve 64-bit BAR desteğiyle sürülür |
+| Intel e1000e / I219-LM (0x15B7 vb.) | `e1000.rs` | 🟢 | — | `i219.rs` kimlik tablosu e1000 taraması tarafından kullanılır |
 | Realtek RTL8139 | `e1000.rs` | 🟢 | — | I/O port, C+ modu |
 | Realtek PCIe (RTL8168/8169/8125/8101) | `e1000.rs` | 🟢 | — | C+ modu, 64-bit RX/TX |
 | NE2000 / RTL8019AS (ISA PnP) | `ne2000.rs` | 🟢 | — | ISA PnP, uzak DMA |

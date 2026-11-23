@@ -962,49 +962,55 @@ pub fn render_full_frame(
 
     let region = fb.base_clip();
 
+    // Gece ışığı filtresi yalnızca içerik bölgesine uygulanır; imleç
+    // filtresiz kalır (davranış eskisiyle aynı).
     if dirty_rect.is_some() {
         fb.apply_night_light_rect(nl, region);
-
-        fb.flush_rect((
-            region.x0,
-            region.y0,
-            region.x1 - region.x0,
-            region.y1 - region.y0,
-        ));
     } else {
         fb.apply_night_light(nl);
-
-        fb.flush();
     }
 
-    fb.clear_frame_clip();
-
-    // Fare imleci kare başına **tek yerde** ve en son çizilir: kırpma bölgesi
-    // temizlendikten ve gece ışığı filtresi uygulandıktan sonra. Böylece
-    // imleç ne kırpma bölgesine takılır ne de filtreli/filtersiz iki kez
-    // ekrana basılır.
+    // İmleci backbuffer'a çiz ve kareyi TEK bir LFB yazımıyla ekrana aktar.
     //
-    // Tam/kirli kare çizimi eski yazılım imlecini geri yükler. İmleci burada
-    // yeniden çizmeden çıkılırsa imleç bir sonraki fare olayına kadar kaybolur;
-    // daha kötüsü, sonraki kısmi kare eski arka plan kaydını yanlış bölgeye
-    // uygulayarak iz ve ekran bozulması üretebilir. İçeriği flush ettikten
-    // sonra imleci ekranın mevcut backbuffer'ı üzerine kaydet ve yalnızca
-    // imleç alanını aktar.
+    // Önceki akış: içerik `flush_rect` ile, imleç ise ayrı bir `flush_rect`
+    // ile ekrana yazılıyordu; yani kare başına iki ayrı yazım oluyordu.
+    // Host, konuk framebuffer'ını tararken yapılan bu yarı yazımlar ekran
+    // yırtılmasına ve hayalet imleç izlerine yol açıyordu (VirtualBox'ta
+    // belirgin). Artık imleç içerikle birlikte backbuffer'a çizilir ve
+    // birleşik bölge tek seferde aktarılır.
     compositor.draw_mouse_cursor(
         fb,
         mouse.x.max(0) as usize,
         mouse.y.max(0) as usize,
         mouse.left_button,
     );
-    if let Some(cursor_rect) = fb.cursor_rect() {
-        fb.flush_rect(cursor_rect);
-    }
+    let cursor_rect = fb.cursor_rect();
 
-    // Frame pacing: donanim VSync bayragini bekle (vsync_wait); VSync takip
-    // modunda kare vblank uyumunda ~60 Hz kare pazarlanir. Desteklenmeyen
-    // olayda mevcut donanim yolu devre disi kalir, kisa spin ust siniri de.
+    let content_rect = (
+        region.x0,
+        region.y0,
+        region.x1.saturating_sub(region.x0),
+        region.y1.saturating_sub(region.y0),
+    );
+    let flush_rect = match cursor_rect {
+        Some((cx, cy, cw, ch)) => Some(drivers::video::rect_union(content_rect, (cx, cy, cw, ch))),
+        None => Some(content_rect),
+    };
 
+    fb.clear_frame_clip();
+
+    // Dikey-blank senkronu: LFB'ye yazmadan *önce* dikey retrace başlangıcını
+    // bekle; böylece kopyalama taranan ekranın boşta olduğu anda yapılır.
     if vsync_enabled() {
         crate::drivers::gpu::vsync_wait();
+    }
+
+    if dirty_rect.is_some() {
+        if let Some((x, y, w, h)) = flush_rect {
+            fb.flush_rect((x, y, w, h));
+        }
+    } else {
+        // Tam kare: backbuffer'ın tamamı tek memcpy ile aktarılır.
+        fb.flush();
     }
 }

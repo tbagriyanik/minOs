@@ -128,6 +128,12 @@ static mut CAPS: GpuCaps = GpuCaps {
 static mut HW_CURSOR_ENABLED: bool = false;
 static mut HW_CURSOR_X: u16 = 0;
 static mut HW_CURSOR_Y: u16 = 0;
+// Yazilim VSync yedegi: donanim 0x3DA dikey-blank portu calismadiginda
+// (VirtualBox vb.) kare hizi ~60 Hz'de sinirlandirilir, ekran yirtilmesini
+// onlemek icin. Son cagri zamani monotonic_ms cinsinden saklanir.
+static mut VSYNC_FALLBACK_LAST_MS: u64 = 0;
+/// Yazilim VSync yedegi icin hedef kare araligi (ms). ~60 Hz.
+const VSYNC_FALLBACK_INTERVAL_MS: u64 = 16;
 
 fn detect_vga() -> (bool, bool, bool) {
     let mut vga = false;
@@ -297,16 +303,83 @@ pub fn hw_cursor_enabled() -> bool {
     unsafe { HW_CURSOR_ENABLED }
 }
 
-/// Dikey-blank beklemesi (VGA status port 0x3DA bit 3). Yoksa kısa spin.
-pub fn vsync_wait() {
-    // 30k iterasyon üst sınırı: donanım yoksa takılmayı önler.
-    for _ in 0..30_000 {
-        let s: u8;
-        unsafe {
-            core::arch::asm!("in al, dx", in("dx") 0x3DAu16, out("al") s, options(nomem, nostack, preserves_flags));
+/// Dikey-blank (vblank) beklemesi (VGA status port 0x3DA bit 3).
+///
+/// Donanım 0x3DA bit 3'ü (dikey retrace) hiç set etmiyorsa — örneğin
+/// VirtualBox'ın VBoxVGA'sı veya donanım imleci olmayan özel GPU'lar —
+/// her karede boşuna 30 bin iterasyon spin yapmak fare/klavye gecikmesi
+/// üretiyordu. Bu yüzden destek bir kez yoklanır; yoksa bekleme tamamen
+/// devre dışı bırakılır.
+///
+/// Durum: 0 = henüz yoklanmadı, 1 = vblank destekleniyor, 2 = destek yok.
+static VBLANK_STATE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// 0x3DA durum portunu okur (dikey retrace durumu).
+#[inline]
+fn vga_input_status() -> u8 {
+    let s: u8;
+    unsafe {
+        core::arch::asm!("in al, dx", in("dx") 0x3DAu16, out("al") s, options(nomem, nostack, preserves_flags));
+    }
+    s
+}
+
+/// Donanımın dikey-blank bildirip bildirmediğini bir kez yoklar.
+fn probe_vblank() -> bool {
+    // ~50 ms pencerede bit 3 gözlenirse vblank bildiriliyor demektir.
+    let start = crate::boot::time::monotonic_ms();
+    while crate::boot::time::monotonic_ms().saturating_sub(start) < 50 {
+        if vga_input_status() & 0x08 != 0 {
+            return true;
         }
-        if (s & 0x08) != 0 {
+        core::hint::spin_loop();
+    }
+    false
+}
+
+/// Gerçek vblank beklemesi (bit 3 set olana kadar, üst sınırlı).
+fn wait_for_vblank() {
+    for _ in 0..30_000 {
+        if vga_input_status() & 0x08 != 0 {
             break;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Dikey-blank beklemesi (VGA status port 0x3DA bit 3).
+///
+/// Donanım 0x3DA bit 3'ü (dikey retrace) hiç set etmiyorsa — örneğin
+/// VirtualBox'ta — 0x3DA durum portunu okur (dikey retrace durumu).
+/// Donanım vblank yoksa yazilim VSync yedegiyle ~60 Hz'de kare hizi
+/// sinirlandirilir, böylece ekran yirtilmesi onlenir.
+pub fn vsync_wait() {
+    match VBLANK_STATE.load(core::sync::atomic::Ordering::Relaxed) {
+        1 => wait_for_vblank(),
+        2 => {
+            // Donanım vblank yok: yazilim VSync yedegiyle kare hizi sinirla.
+            let now = crate::boot::time::monotonic_ms();
+            let last = unsafe { VSYNC_FALLBACK_LAST_MS };
+            if now.saturating_sub(last) < VSYNC_FALLBACK_INTERVAL_MS {
+                let remaining = VSYNC_FALLBACK_INTERVAL_MS - now.saturating_sub(last);
+                let start = now;
+                while crate::boot::time::monotonic_ms().saturating_sub(start) < remaining {
+                    core::hint::spin_loop();
+                }
+            }
+            unsafe {
+                VSYNC_FALLBACK_LAST_MS = crate::boot::time::monotonic_ms();
+            }
+        }
+        _ => {
+            if probe_vblank() {
+                VBLANK_STATE.store(1, core::sync::atomic::Ordering::Relaxed);
+                wait_for_vblank();
+            } else {
+                // Donanım vblank bildirmiyor: her karede boşuna beklemek yerine
+                // yazilim VSync yedegine gec.
+                VBLANK_STATE.store(2, core::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 }

@@ -26,7 +26,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | Donanım / Aygıt | Sürücü Modülü | Durum | Kapsam & Yetenekler |
 | :--- | :--- | :---: | :--- |
 | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
-| Intel I219-V Ethernet | `i219.rs` | 🟢 Tam | Gigabit Ethernet bağlantısı ve paket aktarımı |
+| Intel I219/I220/I225/I226 Ethernet | `e1000.rs` (+ `i219.rs` kimlik tablosu) | 🟢 Tam | e1000e kayıt düzeni; PCI bus 0..255 taraması, 64-bit BAR, EEPROM MAC |
 | Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
 | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası, MII link |
 | AMD PCnet | `network_cards.rs` | 🟡 Algılama | PCI aygıt kimliği algılama; tam DMA sürücüsü geliştirme aşamasında |

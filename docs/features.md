@@ -74,7 +74,7 @@ Derleme profilleri, QEMU örnekleri ve ayrıntılı donanım sınırları için 
 | **Derleme Komut Dosyası (`build.rs`)** | 210 satır |
 | **Toplam (`src/` + `tests/` + `build.rs`)** | 199.358 satır (ham) |
 
-Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 179.005, yorum satırları da hariç ~151.800 satırdır. Host birim testleri: **543 test (543 geçti / 0 hata)**.
+Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 179.005, yorum satırları da hariç ~151.800 satırdır. Host birim testleri: **547 test (547 geçti / 0 hata)**.
 
 ---
 

@@ -26,7 +26,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | Hardware / Device | Driver Module | Status | Scope & Capabilities |
 | :--- | :--- | :---: | :--- |
 | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Full | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
-| Intel I219-V Ethernet | `i219.rs` | 🟢 Full | Gigabit Ethernet link and packet transfer |
+| Intel I219/I220/I225/I226 Ethernet | `e1000.rs` (+ `i219.rs` device-ID table) | 🟢 Full | e1000e register layout; PCI bus 0..255 scan, 64-bit BAR, EEPROM MAC |
 | Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Full | C+ mode, 64-bit RX/TX rings, PHYSTATUS link tracking |
 | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Full | I/O ports, C+ mode, 4 TX channels, 8 KiB RX ring, MII link |
 | AMD PCnet | `network_cards.rs` | 🟡 Detection | PCI identification; full DMA driver is still under development |

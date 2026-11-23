@@ -29,7 +29,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Sürücü | Dosya | Durum | Açıklama |
 | :--- | :--- | :---: | :--- |
 | Intel e1000/e1000e | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS 1.3 |
-| Intel I219-V | `i219.rs` | 🟢 Tam | Gigabit Ethernet |
+| Intel I219/I220/I225/I226 | `e1000.rs` (+ `i219.rs` kimlik tablosu) | 🟢 Tam | e1000e kayıt düzeni; bus 0..255 taraması, 64-bit BAR |
 | Realtek RTL8139 | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası |
 | NE2000 / RTL8019AS (ISA PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP, uzak DMA, 8K RX halkası |
 | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |

@@ -70,7 +70,16 @@ const REALTEK_VENDOR: u32 = 0x10EC;
 const BROADCOM_VENDOR: u32 = 0x14E4;
 
 // Aynı descriptor/MMIO düzenini kullanan klasik 8254x ve 8257x denetleyicileri (Intel e1000 / e1000e).
-const E1000_DEVICES: [u32; 10] = [
+//
+// Kayıt düzeni: RDBAL=0x2800, TDBAL=0x3800, RAL0=0x5400. Bu düzen QEMU'nun
+// 82540EM modelinde, 8257x (e1000e) kartlarında, I210/I211/I350'de ve modern
+// I217/I218/I219/I220/I225/I226 denetleyicilerinde ortaktır; bu nedenle hepsi
+// aynı kod yolundan sürülür.
+//
+// NOT: Modern Intel (I219/I225/I226) kimlikleri `drivers::i219` tablosunda
+// tutulur; `is_intel_nic()` her iki tabloyu birlikte değerlendirir.
+const E1000_DEVICES: [u32; 28] = [
+    // --- 8254x (klasik e1000) ---
     0x100E, // 82540EM (QEMU default)
     0x100F, // 82545EM (VMware e1000 default)
     0x1010, // 82546EB
@@ -80,7 +89,27 @@ const E1000_DEVICES: [u32; 10] = [
     0x107C, // 82541PI
     0x10D3, // 82574L (VMware / QEMU e1000e)
     0x10F5, // 82567LM
+    // --- 8257x (e1000e) ---
+    0x10A6, // 82571
+    0x10A7, // 82574L
+    0x10A8, // 82579
+    0x10A9, // 82574L2
+    0x10B8, // 82573
+    0x10B9, // 82572
+    0x10C9, // 82576
+    0x10D2, // 82571
+    0x10E6, // 82574
+    0x10E7, // 82574
+    0x10E8, // 82574
+    0x1526, // 82583
+    // --- I210 / I211 / I350 ---
+    0x1533, // I210-IS
+    0x1536, // I210-LM
+    0x1537, // I210-Copper
+    0x1538, // I210-Fiber
     0x1539, // I211
+    0x1521, // I350
+    0x1546, // I350
 ];
 
 // VMware sanal ağ aygıtları
@@ -122,6 +151,112 @@ const BROADCOM_DEVICES: [u32; 14] = [
     0x1678, // NetXtreme BCM5714S
     0x169A, // NetXtreme BCM5782
 ];
+
+// ---------------------------------------------------------------------------
+// Aygıt kimliği ve BAR yardımcıları
+// ---------------------------------------------------------------------------
+
+/// Intel ağ denetleyicisi mi? (e1000/e1000e 8254x-8257x, I210/I211/I350 ve
+/// modern I217/I218/I219/I220/I225/I226 ailesi.)
+///
+/// Modern Intel kimlikleri `drivers::i219` tablosunda tutulur; iki tablo
+/// birlikte değerlendirilir.
+fn is_intel_nic(device_id: u32) -> bool {
+    E1000_DEVICES.contains(&device_id) || crate::drivers::i219::matches_device(device_id)
+}
+
+/// Verilen BAR kaydından bellek (MMIO) taban adresini okur.
+///
+/// * I/O BAR (bit0=1) desteklenmez → `None`.
+/// * Adres atanmamış (0) → `None` (firmware BAR tahsisi yapmamış).
+/// * 64-bit bellek BAR → yüksek 32 bit `bar_off + 4` konumundan okunur;
+///   aksi halde 4 GB üstündeki kartlarda taban adresi kesilir ve
+///   MMIO erişimi sayfa hatası üretir.
+fn mmio_bar_base(bus: u8, dev: u8, func: u8, bar_off: u8) -> Option<u64> {
+    let bar = pci_read32(bus, dev, func, bar_off);
+    if bar == 0 || (bar & 1) == 1 {
+        return None;
+    }
+    let is_64 = (bar & 0x06) == 0x04;
+    let bar_hi = if is_64 {
+        pci_read32(bus, dev, func, bar_off + 4) as u64
+    } else {
+        0
+    };
+    let base = ((bar as u64) & 0xFFFF_FFF0) | (bar_hi << 32);
+    if base == 0 {
+        None
+    } else {
+        Some(base)
+    }
+}
+
+/// Desteklenmeyen ağ denetleyicilerini (PCI class 0x02) listeler ve seri
+/// konsola yazar. Desteklenen bir kart bulunamadığında çağrılır; kullanıcı
+/// "ağ kartı yok" yerine "kart var ama sürücüsü yok" bilgisini görür.
+fn report_unsupported_nics() {
+    const MAX_REPORTED: usize = 6;
+    let mut found: usize = 0;
+    for bus in 0..=255u8 {
+        for dev in 0..32u8 {
+            let id0 = pci_read32(bus, dev, 0, 0x00);
+            if id0 == 0xFFFF_FFFF || id0 == 0 {
+                continue;
+            }
+            let hdr = (pci_read32(bus, dev, 0, 0x0C) >> 16) & 0xFF;
+            let max_func = if (hdr & 0x80) != 0 { 8u8 } else { 1u8 };
+            for func in 0..max_func {
+                let id = if func == 0 {
+                    id0
+                } else {
+                    pci_read32(bus, dev, func, 0x00)
+                };
+                if id == 0xFFFF_FFFF || id == 0 {
+                    continue;
+                }
+                let class_rev = pci_read32(bus, dev, func, 0x08);
+                let class = (class_rev >> 24) & 0xFF;
+                if class != 0x02 {
+                    continue;
+                }
+                let vid = id & 0xFFFF;
+                let did = (id >> 16) & 0xFFFF;
+                // Desteklenen aileler burada listelenmez.
+                if vid == E1000_VENDOR && is_intel_nic(did) {
+                    continue;
+                }
+                if vid == REALTEK_VENDOR && (REALTEK_DEVICES.contains(&did) || did == 0x8029) {
+                    continue;
+                }
+                if vid == VMWARE_VENDOR && VMWARE_DEVICES.contains(&did) {
+                    continue;
+                }
+                if vid == BROADCOM_VENDOR && BROADCOM_DEVICES.contains(&did) {
+                    continue;
+                }
+                if found < MAX_REPORTED {
+                    e1000_print("[NET] Desteklenmeyen ag aygiti: PCI ");
+                    e1000_print_hex(bus);
+                    e1000_print(":");
+                    e1000_print_hex(dev);
+                    e1000_print(" vendor 0x");
+                    e1000_print_hex((vid >> 8) as u8);
+                    e1000_print_hex(vid as u8);
+                    e1000_print(" device 0x");
+                    e1000_print_hex((did >> 8) as u8);
+                    e1000_print_hex(did as u8);
+                    e1000_print("\n");
+                }
+                found += 1;
+            }
+        }
+    }
+    if found > MAX_REPORTED {
+        e1000_print("[NET] ... ve ");
+        e1000_print_dec((found - MAX_REPORTED) as u64);
+        e1000_print(" ag aygiti daha var.\n");
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Broadcom B57 MAC kayıt ofsetleri
@@ -168,13 +303,28 @@ pub enum NicType {
 
 static mut DETECTED_NIC: NicType = NicType::IntelE1000;
 
+/// Tespit edilen kartın PCI aygıt kimliği (arayüzde model adı için).
+static mut DETECTED_DEVICE_ID: u32 = 0;
+
+/// Tespit edilen kartın PCI aygıt kimliğini döndürür.
+pub fn detected_device_id() -> u32 {
+    unsafe { DETECTED_DEVICE_ID }
+}
+
 pub fn nic_type() -> NicType {
     unsafe { DETECTED_NIC }
 }
 
 pub fn nic_name() -> &'static str {
     match unsafe { DETECTED_NIC } {
-        NicType::IntelE1000 => "Intel e1000",
+        NicType::IntelE1000 => {
+            // Modern Intel aileler kendi adlarıyla gösterilir (I219/I226 vb.).
+            if crate::drivers::i219::matches_device(unsafe { DETECTED_DEVICE_ID }) {
+                "Intel I219-V / I226"
+            } else {
+                "Intel e1000"
+            }
+        }
         NicType::VmwareVmxnet3 => "VMware VMXNET3",
         NicType::RealtekR8169 => "Realtek PCIe GbE (RTL8168/8169)",
         NicType::RealtekRtl8139 => "Realtek RTL8139",
@@ -186,7 +336,13 @@ pub fn nic_name() -> &'static str {
 /// Arayüzlerde gösterilecek yerelleştirilmiş (TR/EN) açıklayıcı sürücü adı.
 pub fn nic_label(english: bool) -> &'static str {
     match unsafe { DETECTED_NIC } {
-        NicType::IntelE1000 => "Intel e1000",
+        NicType::IntelE1000 => {
+            if crate::drivers::i219::matches_device(unsafe { DETECTED_DEVICE_ID }) {
+                "Intel I219-V / I226"
+            } else {
+                "Intel e1000"
+            }
+        }
         NicType::VmwareVmxnet3 => "VMware VMXNET3",
         NicType::RealtekR8169 => "Realtek PCIe GbE",
         NicType::RealtekRtl8139 => {
@@ -851,6 +1007,22 @@ unsafe fn read_mac_from_eeprom() -> [u8; 6] {
             core::hint::spin_loop();
         }
     }
+
+    // EEPROM okunamadıysa (SPI flash kullanan yeni kartlarda EERD yanıt
+    // vermeyebilir) donanımın sıfırlamadan sonra kendi yüklediği MAC
+    // kayıtlarını oku: RAL0 (0x5400) / RAH0 (0x5404).
+    if mac.iter().all(|b| *b == 0) {
+        let ral = mmio_read32(REG_RAL0);
+        let rah = mmio_read32(REG_RAH0);
+        if ral != 0 || rah != 0 {
+            mac[0] = (ral & 0xFF) as u8;
+            mac[1] = ((ral >> 8) & 0xFF) as u8;
+            mac[2] = ((ral >> 16) & 0xFF) as u8;
+            mac[3] = ((ral >> 24) & 0xFF) as u8;
+            mac[4] = (rah & 0xFF) as u8;
+            mac[5] = ((rah >> 8) & 0xFF) as u8;
+        }
+    }
     mac
 }
 
@@ -1248,9 +1420,15 @@ pub fn init(pmm_dma_phys: Option<u64>) {
 
     // PCI'da Intel e1000 / VMware VMXNET3 / Realtek (RTL8139, RTL816x) /
     // Broadcom NIC ara.
+    //
+    // Bus aralığı 0..=255'tir: PCIe köprüsü arkasındaki onboard kartlar
+    // (Intel I219/V, Realtek RTL8168 vb.) bus 1..~8 arasında numaralanır ve
+    // dar bir tarama onları göremezdi. Tarama yalnızca fonksiyon 0'ı okuyup
+    // "multi-function" biti setse diğer fonksiyonları açar; boş aygıtlar
+    // 0xFFFFFFFF döndürdüğü için atlanır.
     let mut found: Option<(u8, u8, u8, u64, NicType)> = None;
     unsafe {
-        for bus in 0..8u8 {
+        for bus in 0..=255u8 {
             for dev in 0..32u8 {
                 let id0 = pci_read32(bus, dev, 0, 0x00);
                 if id0 == 0xFFFF_FFFF || id0 == 0 {
@@ -1294,14 +1472,27 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                         continue;
                     }
 
-                    if vid == E1000_VENDOR && E1000_DEVICES.contains(&did) {
-                        let bar0_lo = pci_read32(bus, dev, func, 0x10);
-                        let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
-                        found = Some((bus, dev, func, base, NicType::IntelE1000));
-                        break;
+                    if vid == E1000_VENDOR && is_intel_nic(did) {
+                        // Intel e1000/e1000e/I219 ailesi: BAR0 bellek BAR'dır ve
+                        // modern kartlarda 64-bit olabilir (yüksek 32 bit BAR1'de).
+                        match mmio_bar_base(bus, dev, func, 0x10) {
+                            Some(base) => {
+                                found = Some((bus, dev, func, base, NicType::IntelE1000));
+                                break;
+                            }
+                            None => {
+                                e1000_print(
+                                    "[NET] Intel NIC BAR0 atanmis degil (firmware BAR tahsisi yok); atlandi.\n",
+                                );
+                                continue;
+                            }
+                        }
                     } else if vid == VMWARE_VENDOR && VMWARE_DEVICES.contains(&did) {
                         let bar0_lo = pci_read32(bus, dev, func, 0x10);
                         let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
+                        if base == 0 {
+                            continue;
+                        }
                         found = Some((bus, dev, func, base, NicType::VmwareVmxnet3));
                         break;
                     } else if vid == REALTEK_VENDOR
@@ -1365,11 +1556,16 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 e1000_print(
                     "[NET] Ag adaptoru (Intel / VMware / Realtek / Broadcom) PCI'da bulunamadi.\n",
                 );
+                // Kart var ama sürücüsü yoksa aygıtı da raporla: "kart yok"
+                // ile "kart var, desteklenmiyor" ayrımı teşhisi kolaylaştırır.
+                report_unsupported_nics();
                 INIT_OUTCOME.store(1, Ordering::Relaxed);
                 return;
             }
         };
         DETECTED_NIC = ntype;
+        // Tespit edilen aygıtın PCI kimliği (arayüzde model adı için).
+        DETECTED_DEVICE_ID = (pci_read32(bus, dev, func, 0x00) >> 16) & 0xFFFF;
 
         // NE2000 uyumlu PCI kart (RTL8029AS): ISA/PnP sürücüsüne devredilir.
         if ntype == NicType::Ne2000Pci {
@@ -1649,5 +1845,24 @@ fn e1000_print_hex(v: u8) {
 fn e1000_print_byte(b: u8) {
     if e1000_log_enabled() {
         crate::serial::write_byte(b);
+    }
+}
+
+/// Ondalık sayı yazdırır (teşhis mesajlarında kullanılır).
+fn e1000_print_dec(mut v: u64) {
+    if v == 0 {
+        e1000_print_byte(b'0');
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut idx = 0;
+    while v > 0 {
+        buf[idx] = b'0' + (v % 10) as u8;
+        v /= 10;
+        idx += 1;
+    }
+    while idx > 0 {
+        idx -= 1;
+        e1000_print_byte(buf[idx]);
     }
 }

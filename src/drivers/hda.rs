@@ -480,7 +480,14 @@ pub unsafe fn ensure_stream_running() -> bool {
     let sd = HDA_SD_BASE;
 
     if (mmio_read32(mmio, sd + SD_CTL) & 0x02) == 0 {
-        return stream_start();
+        let ok = stream_start();
+        if ok {
+            // Stream (baslatildiginda) DMA durakma sayacini sifirla: QEMU gibi
+            // sanallaştırma ortamlarında DMA pozisyonu gec baslayabilir, ilk
+            // karelerde yanlislikla "durakli" sayilip PC Speaker'a donulmemeli.
+            DMA_STALL_COUNT.store(0, Ordering::Relaxed);
+        }
+        return ok;
     }
 
     true

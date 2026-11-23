@@ -84,6 +84,13 @@ Kökte `minos.iso` dosyası oluşturulur.
 
 ### 4. QEMU ile Çalıştır
 
+> **Ses notu:** Sürücü yalnızca **Intel HDA** (codec NID 1/2/3) destekler.
+> QEMU'da `-device intel-hda` tek başına **codec'sizdir** ve ses üretmez;
+> HDA codec'i ayrıca eklenmelidir ve sıra önemlidir (`intel-hda` önce).
+> Windows'ta `wasapi`/`pa` backend'i yoktur; `sdl` veya `dsound` kullanılır.
+> `test_qemu.ps1` ise sesi `driver=wav` ile **dosyaya** yazar (host'tan
+> duyulmaz).
+
 **Linux (PulseAudio + Intel HDA + e1000):**
 ```bash
 qemu-system-x86_64 -cdrom minos.iso -m 512M -smp 2 -vga std -global VGA.vgamem_mb=64 \
@@ -97,6 +104,21 @@ qemu-system-x86_64.exe -cdrom .\minos.iso -m 512M -smp 2 -vga std -global VGA.vg
   -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
+
+### 5. Açılış Profilleri (Limine menüsü)
+
+| Menü girdisi | Komut satırı | Davranış |
+| :--- | :--- | :--- |
+| minOs Live Environment | `live full` | Tüm sürücüler + kendi kendine test bataryası |
+| **minOs Fast Boot** | `live full fast` | Tüm sürücüler, **test bataryası atlanır** (en hızlı açılış) |
+| minOs Safe Mode | `live safe` | Donanım sürücüleri yok |
+| minOs Audio Test | `live audio` | Yalnızca HDA ses |
+| minOs Hardware Test | `live hardware` | USB + ağ (ses yok) |
+
+> `fast` profili, açılışta çalışan bellek/süreç/Ring3 test bataryasını atlar;
+> sanal makinede ve yavaş disklerde açılış süresini belirgin şekilde kısaltır.
+> Hangi aşamanın ne kadar sürdüğünü seri konsoldaki `[BOOT-TIME]` satırları
+> gösterir.
 
 ---
 
@@ -116,6 +138,23 @@ qemu-system-x86_64.exe -cdrom .\minos.iso -m 512M -smp 2 -vga std -global VGA.vg
 > - `PANIC: limine: This CPU does not support 64-bit mode`: Sanal makine türünün `Other (64-bit)` olduğundan emin olun.
 > - Siyah ekran: Grafik denetleyicisini `VBoxVGA` yapın, 3D hızlandırmayı kapatın, VRAM en az 16 MB olmalı.
 > - UEFI: `VBoxManage modifyvm "minOs" --firmware efi`.
+> - **Ekran yırtılması:** VirtualBox konuk framebuffer'ını kendi taramasıyla
+>   ekrana kopyalar; yazılım, vblank'e kilitlenmediği için kare ortasında
+>   yazma yapabilir. minOs kare başına tek yazma yapar ve vblank'i destekleyen
+>   donanımda yazma öncesi bekler. Yine de yırtılma fark ederseniz çözünürlüğü
+>   1024×768'e sabitleyin (kopya süresi kısalır) ve VirtualBox 7.0+ ile
+>   **VirtIO-GPU** deneyin (host tarafı atomik kopyalar).
+
+---
+
+## Gerçek Donanım Sorun Giderme
+
+| Belirti | Olası Neden | Yapılacak |
+| :--- | :--- | :--- |
+| Ağ kartı görünmüyor | Kart, desteklenmeyen bir aile (Marvell/Atheros) veya firmware BAR atamamış | Seri logda `[NET] Desteklenmeyen ag aygiti: PCI ...` satırına bakın; Intel I219/I226 ve Realtek RTL8168 artık `e1000` sürücüsüyle sürülür |
+| USB fare görünmüyor | BIOS'ta Legacy USB kapalı ve xHCI'nin USB2 portu yok | BIOS'ta "Legacy USB Support"u açın veya yalnızca USB3 Type-C portlu bir dizüstünde HID çalışmaz |
+| Fare yavaş / takılıyor | iki fare kaynağı (USB HID + PS/2 8042 emülasyonu) aynı anda işleniyordu | Artık BIOS legacy devri tamamlanamazsa PS/2 fare yolu otomatik kapatılır; fare hızını Ayarlar'dan yükseltebilirsiniz |
+| İlk açılış çok yavaş | ISO'nun diskten ilk okunuşu + her boot'ta test bataryası | Limine menüsünden **minOs Fast Boot** girdisini seçin (`live full fast`) |
 
 ---
 

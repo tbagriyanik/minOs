@@ -114,15 +114,9 @@ const CAR_PAINT: [u32; 12] = [
 
 /// Taksi sarısı.
 const TAXI_COLOR: u32 = 0xE3B32B;
-/// Taksi şerit rengi.
-const TAXI_STRIPE: u32 = 0x24282E;
 ///polis aracı gövde rengi.
 const POLICE_COLOR: u32 = 0xE6E8EC;
-/// polis aracı mavi bandı.
-const POLICE_BLUE: u32 = 0x1D4E9C;
 
-/// Far rengi (gece modunda aracın önünü aydınlatır).
-const HEADLIGHT_COLOR: u32 = 0xFFF6E0;
 /// Gece gökyüzü üst rengi.
 const NIGHT_SKY_TOP: u32 = 0x02040A;
 /// Gece gökyüzü alt rengi.
@@ -2240,7 +2234,7 @@ impl CityDriveApp {
         let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;
 
         // Aracın boyutları (metre cinsinden).
-        let (length, width, height) = car.kind.dims();
+        let (length, width, _height) = car.kind.dims();
 
         // Araç yön vektörü ve sağ vektörü.
         let forward = (car.dir_x, car.dir_y);

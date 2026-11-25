@@ -165,6 +165,12 @@ impl MinGuiCompositor {
     ///
     /// Donanım imleci etkinse yazılım imleci çizilmez.
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
+        // İmleç gizlenmişse (ör. FPS oyununda fare bakışı) çizme; önceki
+        // karede saklanan arka planı geçersiz kıl ki hayalet iz kalmasın.
+        if crate::gui::screens::is_cursor_hidden() {
+            fb.invalidate_cursor_save();
+            return;
+        }
         if fb.hw_cursor_active() {
             // Donanım imleci konumu kendisi izler; yazılım yedeği tutulmaz.
             fb.save_cursor_background(mx, my);

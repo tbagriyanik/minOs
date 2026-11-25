@@ -72,6 +72,11 @@ const ENEMY_ATTACK_DIST: f32 = 1.5;
 const ENEMY_CHASE_SPEED: f32 = 0.03;
 const ENEMY_ATTACK_DELAY: usize = 60;
 const ENEMY_ATTACK_DAMAGE: u32 = 15;
+// Düşmanların oyuncuyu fark edip takip etmeye başladığı mesafe.
+const ENEMY_CHASE_RADIUS: f32 = 9.0;
+// Düşmanların oyuncunun başlangıç konumuna bu mesafeden daha yakın doğmamasını sağlar.
+const ENEMY_MIN_SPAWN_DIST: f32 = 6.0;
+const ENEMY_MIN_SPAWN_DIST_SQ: f32 = ENEMY_MIN_SPAWN_DIST * ENEMY_MIN_SPAWN_DIST;
 
 // ---------------------------------------------------------------------------
 // Klavye bit maskeleri (key_mask alanı için)
@@ -415,13 +420,23 @@ impl FpsGameApp {
         }; MAX_ENEMIES];
 
         // Başlangıç düşmanlarını harita üzerindeki boş hücrelere yerleştir.
+        // Oyuncunun başlangıç konumuna (3.5, 3.5) çok yakın doğmalarını engelle.
+        let spawn_px = 3.5_f32;
+        let spawn_py = 3.5_f32;
         let mut n = 0;
         for (ty, row) in MAP.iter().enumerate().skip(2).take(MAP_H.saturating_sub(3)) {
             for (tx, &cell) in row.iter().enumerate().skip(2).take(MAP_W.saturating_sub(3)) {
                 if cell == 0 && n < MAX_ENEMIES && (tx + ty) % 3 == 0 {
+                    let ex = tx as f32 + 0.5;
+                    let ey = ty as f32 + 0.5;
+                    let ddx = ex - spawn_px;
+                    let ddy = ey - spawn_py;
+                    if ddx * ddx + ddy * ddy < ENEMY_MIN_SPAWN_DIST_SQ {
+                        continue;
+                    }
                     enemies[n] = Enemy {
-                        x: tx as f32 + 0.5,
-                        y: ty as f32 + 0.5,
+                        x: ex,
+                        y: ey,
                         alive: true,
                         hit_timer: 0,
                         attack_timer: 0,
@@ -1361,7 +1376,7 @@ impl FpsGameApp {
 
                 // Mesafeye göre boyut: yaklaşık insan ölçeği (yaklaşık 0.9).
                 let sprite_h = (render_h as f32 / dist.max(0.3) * 0.62) as usize;
-                let sprite_w = (sprite_h / 2).max(10).min(96);
+                let sprite_w = (sprite_h / 2).clamp(10, 96);
                 let draw_start_y = (render_h / 2).saturating_sub(sprite_h / 2);
                 let draw_end_y = (render_h / 2).saturating_add(sprite_h / 2).min(render_h);
 
@@ -2256,6 +2271,11 @@ impl FpsGameApp {
         }
     }
 
+    /// Oyun şu anda oynanıyor mu (menüde değil)?
+    pub fn is_playing(&self) -> bool {
+        self.result == GameResult::Playing
+    }
+
     /// Klavye girdisini işle. true dönerse tüketildi.
     pub fn handle_key(&mut self, ch: char, audio_dev: &mut AudioDevice) -> bool {
         if self.result == GameResult::Menu {
@@ -2280,6 +2300,13 @@ impl FpsGameApp {
                 return true;
             }
             return false;
+        }
+        // Esc: ana menüye dön ve basılı tuşları temizle.
+        if ch == '\x1b' {
+            self.result = GameResult::Menu;
+            self.key_mask = 0;
+            self.shooting = false;
+            return true;
         }
         if ch == '\n' || ch == '\r' {
             return false;
@@ -2629,7 +2656,7 @@ impl FpsGameApp {
 
                     let mut should_attack = false;
 
-                    if dist > ENEMY_ATTACK_DIST && dist < MAX_DEPTH {
+                    if dist > ENEMY_ATTACK_DIST && dist < ENEMY_CHASE_RADIUS {
                         let step = ENEMY_CHASE_SPEED;
                         let nx = e.x + (dx / dist) * step;
                         let ny = e.y + (dy / dist) * step;
@@ -2684,7 +2711,19 @@ impl FpsGameApp {
                     ];
                     for (i, e) in self.enemies.iter_mut().take(self.enemy_count).enumerate() {
                         if !e.alive {
-                            let (sx, sy) = spawn_points[i % spawn_points.len()];
+                            // Oyuncuya en uzak doğma noktasını seç ki üstüne binmesinler.
+                            let mut best = spawn_points[i % spawn_points.len()];
+                            let mut best_d = -1.0_f32;
+                            for &(cx, cy) in spawn_points.iter() {
+                                let ddx = cx - self.pos_x;
+                                let ddy = cy - self.pos_y;
+                                let d = ddx * ddx + ddy * ddy;
+                                if d > best_d {
+                                    best_d = d;
+                                    best = (cx, cy);
+                                }
+                            }
+                            let (sx, sy) = best;
                             *e = Enemy {
                                 x: sx,
                                 y: sy,

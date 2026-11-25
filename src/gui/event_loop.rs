@@ -9831,6 +9831,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         let mouse_moved = mouse.x != state.last_mouse_x || mouse.y != state.last_mouse_y;
 
+        // FPS 3D oyun oynanırken (pencere odaklı ve Playing durumunda) fare
+        // imlecini gizle; Esc ile menüye dönüldüğünde veya pencere (Alt+F4)
+        // kapatıldığında otomatik geri göster. Durum değişiminde yeniden çizim
+        // tetiklenir ki gizle/göster hemen ekrana yansısın.
+        let fps3d_playing = app_is_focused(&compositor, 16)
+            && apps
+                .fps_3d_app
+                .as_ref()
+                .map(|a| a.is_playing())
+                .unwrap_or(false);
+        let was_cursor_hidden = crate::gui::screens::is_cursor_hidden();
+        crate::gui::screens::set_cursor_hidden(fps3d_playing);
+        if was_cursor_hidden != fps3d_playing {
+            state.force_render = true;
+        }
+
         if mouse_moved && compositor.is_start_menu_open {
             let (_, menu_y, _, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
             for g in 0..5 {

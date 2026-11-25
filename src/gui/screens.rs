@@ -1,13 +1,28 @@
 //! Loading, boot and welcome screens.
 
 use super::*;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Fare imlecinin "meşgul" (kum saati) kipinde olup olmadığı.
 /// `true` olduğunda `draw_mouse_cursor` ok yerine kum saati çizer.
 /// Sayaç biçimindedir: iç içe uzun işlemler (ör. paket kurulumu içinden
 /// küçük bir dosya okuma) birbirini erken kapatmaz.
 static CURSOR_BUSY: AtomicUsize = AtomicUsize::new(0);
+
+/// Fare imlecinin tamamen gizlenmesi isteniyorsa `true` yapılır.
+/// FPS oyununda fare bakışı sırasında imleç gizlenir; Esc ile menüye
+/// dönüldüğünde tekrar görünür olur.
+static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+/// İmleç gizleme durumunu ayarlar.
+pub fn set_cursor_hidden(hidden: bool) {
+    CURSOR_HIDDEN.store(hidden, Ordering::SeqCst);
+}
+
+/// İmleç gizleme durumu döner.
+pub fn is_cursor_hidden() -> bool {
+    CURSOR_HIDDEN.load(Ordering::SeqCst)
+}
 
 /// Meşgul durumunu ayarlar. Uzun işlemler (PNG çözme, kopyalama vb.) sırasında
 /// `true`, işlem bittiğinde `false` yapılmalıdır.

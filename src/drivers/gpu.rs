@@ -314,6 +314,24 @@ pub fn hw_cursor_enabled() -> bool {
 /// Durum: 0 = henüz yoklanmadı, 1 = vblank destekleniyor, 2 = destek yok.
 static VBLANK_STATE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
+/// Donanim vblank yokken kac `vsync_wait` cagrisindan sonra yeniden yoklanir.
+///
+/// Tek seferlik yoklama kalici bir karara donusuyordu: erken (orn. zaman
+/// tabani kalibre edilmeden) yapilan bir yoklama basarisiz olursa sistem
+/// kalan omru boyunca yanlislikla "donanim vblank yok" modunda kaliyor ve
+/// LFB'ye yazma ekranin ortasina denk geliyordu. Periyodik yeniden
+/// yoklama bu kilidi kirar.
+const VBLANK_REPROBE_INTERVAL: u32 = 1800;
+
+/// Yeniden yoklama sayaci.
+static VBLANK_REPROBE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Olculen kare periyodu (iki vblank darbesi arasi), mikrosaniye.
+static FRAME_PERIOD_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Son vblank darbesinin TSC dongu sayaci.
+static LAST_VBLANK_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// 0x3DA durum portunu okur (dikey retrace durumu).
 #[inline]
 fn vga_input_status() -> u8 {
@@ -327,17 +345,57 @@ fn vga_input_status() -> u8 {
 /// Donanımın dikey-blank bildirip bildirmediğini bir kez yoklar.
 fn probe_vblank() -> bool {
     // ~50 ms pencerede bit 3 gözlenirse vblank bildiriliyor demektir.
-    let start = crate::boot::time::monotonic_ms();
-    while crate::boot::time::monotonic_ms().saturating_sub(start) < 50 {
+    let mut saw_set = false;
+    let mut saw_clear = false;
+    let budget_cycles = unsafe { crate::boot::time::TSC_CYCLES_PER_US }
+        .max(1)
+        .saturating_mul(40_000);
+    let start = crate::boot::time::read_cpu_cycles();
+    for i in 0..200_000 {
         if vga_input_status() & 0x08 != 0 {
+            saw_set = true;
+        } else {
+            saw_clear = true;
+        }
+        if saw_set && saw_clear {
             return true;
+        }
+        // Dongu butcesi her 64 yinelemeden bir kontrol edilir: rdtsc
+        // maliyeti yoklamayi gereksiz yere uzatmasin.
+        if i % 64 == 63 && crate::boot::time::read_cpu_cycles().wrapping_sub(start) > budget_cycles
+        {
+            break;
         }
         core::hint::spin_loop();
     }
     false
 }
 
-/// Gerçek vblank beklemesi (bit 3 set olana kadar, üst sınırlı).
+/// Vblank darbesini kaydeder ve kare periyodunu olcer.
+fn note_vblank_edge() {
+    let now = crate::boot::time::read_cpu_cycles();
+    let last = LAST_VBLANK_CYCLES.swap(now, core::sync::atomic::Ordering::Relaxed);
+    if last != 0 {
+        let cycles_per_us = unsafe { crate::boot::time::TSC_CYCLES_PER_US }.max(1);
+        let delta_us = (now.wrapping_sub(last) / cycles_per_us) as u32;
+        // Makul aralik: 4 ms (250 Hz) .. 200 ms (5 Hz).
+        if (4_000..=200_000).contains(&delta_us) {
+            FRAME_PERIOD_US.store(delta_us, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Donanim vblank darbesi mevcut mu?
+pub fn vblank_available() -> bool {
+    VBLANK_STATE.load(core::sync::atomic::Ordering::Relaxed) == 1
+}
+
+/// Olculen kare periyodu (mikrosaniye). Bilinmiyorsa 0.
+pub fn frame_period_us() -> u32 {
+    FRAME_PERIOD_US.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Gercek vblank beklemesi (bit 3 set olana kadar, ust sinirli).
 fn wait_for_vblank() {
     for _ in 0..30_000 {
         if vga_input_status() & 0x08 != 0 {
@@ -355,7 +413,10 @@ fn wait_for_vblank() {
 /// sinirlandirilir, böylece ekran yirtilmesi onlenir.
 pub fn vsync_wait() {
     match VBLANK_STATE.load(core::sync::atomic::Ordering::Relaxed) {
-        1 => wait_for_vblank(),
+        1 => {
+            wait_for_vblank();
+            note_vblank_edge();
+        }
         2 => {
             // Donanım vblank yok: yazilim VSync yedegiyle kare hizi sinirla.
             let now = crate::boot::time::monotonic_ms();
@@ -370,11 +431,24 @@ pub fn vsync_wait() {
             unsafe {
                 VSYNC_FALLBACK_LAST_MS = crate::boot::time::monotonic_ms();
             }
+
+            // Periyodik olarak yeniden yokla: ilk deneme erken bir anda
+            // yapilmis veya donanim gec hazir olmus olabilir.
+            let counter = VBLANK_REPROBE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if counter >= VBLANK_REPROBE_INTERVAL {
+                VBLANK_REPROBE.store(0, core::sync::atomic::Ordering::Relaxed);
+                if probe_vblank() {
+                    VBLANK_STATE.store(1, core::sync::atomic::Ordering::Relaxed);
+                    wait_for_vblank();
+                    note_vblank_edge();
+                }
+            }
         }
         _ => {
             if probe_vblank() {
                 VBLANK_STATE.store(1, core::sync::atomic::Ordering::Relaxed);
                 wait_for_vblank();
+                note_vblank_edge();
             } else {
                 // Donanım vblank bildirmiyor: her karede boşuna beklemek yerine
                 // yazilim VSync yedegine gec.

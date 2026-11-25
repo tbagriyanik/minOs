@@ -1,0 +1,119 @@
+    Blocking waiting for file lock on build directory
+    Checking minos-kernel v2.7.0 (D:\minos)
+src\apps\fps_game.rs:127:24: error[E0425]: cannot find value `TEX_W` in this scope: not found in this scope
+src\apps\fps_game.rs:128:24: error[E0425]: cannot find value `TEX_H` in this scope: not found in this scope
+src\apps\fps_game.rs:129:17: error[E0425]: cannot find value `TEX_W` in this scope: not found in this scope
+src\apps\fps_game.rs:130:17: error[E0425]: cannot find value `TEX_H` in this scope: not found in this scope
+src\apps\fps_game.rs:132:22: error[E0425]: cannot find value `TEX_BRICK` in this scope: not found in this scope
+src\apps\fps_game.rs:133:22: error[E0425]: cannot find value `TEX_METAL` in this scope: not found in this scope
+src\apps\fps_game.rs:134:14: error[E0425]: cannot find value `TEX_STONE` in this scope: not found in this scope
+src\apps\fps_game.rs:276:32: error[E0425]: cannot find value `WEAPON_COUNT` in this scope: not found in this scope
+src\apps\fps_game.rs:393:28: error[E0425]: cannot find value `TILE_DOOR` in this scope: not found in this scope
+src\apps\fps_game.rs:445:21: error[E0425]: cannot find value `WEAPON_PISTOL` in this scope: not found in this scope
+src\apps\fps_game.rs:446:31: error[E0425]: cannot find value `PISTOL_AMMO_MAX` in this scope: not found in this scope
+src\apps\fps_game.rs:446:48: error[E0425]: cannot find value `SHOTGUN_AMMO_MAX` in this scope: not found in this scope
+src\apps\fps_game.rs:474:17: error[E0425]: cannot find value `PLAYER_RADIUS` in this scope: not found in this scope
+src\apps\fps_game.rs:492:21: error[E0425]: cannot find value `TILE_WALL` in this scope: not found in this scope
+src\apps\fps_game.rs:495:21: error[E0425]: cannot find value `TILE_DOOR` in this scope: not found in this scope
+src\apps\fps_game.rs:530:37: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:531:13: error[E0425]: cannot find value `SHOTGUN_PELLETS` in this scope: not found in this scope
+src\apps\fps_game.rs:535:31: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:581:69: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:599:33: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:600:13: error[E0425]: cannot find value `SHOTGUN_AMMO_MAX` in this scope: not found in this scope
+src\apps\fps_game.rs:602:13: error[E0425]: cannot find value `PISTOL_AMMO_MAX` in this scope: not found in this scope
+src\apps\fps_game.rs:608:29: error[E0425]: cannot find value `RELOAD_TICKS` in this scope: not found in this scope
+src\apps\fps_game.rs:614:33: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:615:13: error[E0425]: cannot find value `SHOTGUN_AMMO_MAX` in this scope: not found in this scope
+src\apps\fps_game.rs:617:13: error[E0425]: cannot find value `PISTOL_AMMO_MAX` in this scope: not found in this scope
+src\apps\fps_game.rs:672:24: error[E0425]: cannot find value `TILE_WALL` in this scope: not found in this scope
+src\apps\fps_game.rs:672:46: error[E0425]: cannot find value `TILE_DOOR` in this scope: not found in this scope
+src\apps\fps_game.rs:686:59: error[E0425]: cannot find value `TILE_DOOR` in this scope: not found in this scope
+src\apps\fps_game.rs:746:60: error[E0425]: cannot find value `MAX_ARMOR` in this scope: not found in this scope
+src\apps\fps_game.rs:815:35: error[E0425]: cannot find value `MOUSE_SENS` in this scope: not found in this scope
+src\apps\fps_game.rs:1121:29: error[E0425]: cannot find value `TILE_WALL` in this scope: not found in this scope
+src\apps\fps_game.rs:1121:48: error[E0425]: cannot find value `TILE_DOOR` in this scope: not found in this scope
+src\apps\fps_game.rs:1139:50: error[E0425]: cannot find value `MAX_DEPTH` in this scope: not found in this scope
+src\apps\fps_game.rs:1141:17: error[E0425]: cannot find value `MAX_DEPTH` in this scope: not found in this scope
+src\apps\fps_game.rs:1161:17: error[E0425]: cannot find value `TILE_WALL` in this scope: not found in this scope
+src\apps\fps_game.rs:1175:40: error[E0425]: cannot find value `TILE_DOOR` in this scope: not found in this scope
+src\apps\fps_game.rs:1180:63: error[E0425]: cannot find value `MAX_DEPTH` in this scope: not found in this scope
+src\apps\fps_game.rs:1249:40: error[E0425]: cannot find value `ENEMIES_PER_FRAME` in this scope: not found in this scope
+src\apps\fps_game.rs:1262:27: error[E0425]: cannot find value `MAX_DEPTH` in this scope: not found in this scope
+src\apps\fps_game.rs:1272:32: error[E0425]: cannot find value `FOV` in this scope: not found in this scope
+src\apps\fps_game.rs:1276:40: error[E0425]: cannot find value `FOV` in this scope: not found in this scope
+src\apps\fps_game.rs:1736:41: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:1965:43: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:1970:43: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:1983:46: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:1988:46: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:2007:59: error[E0425]: cannot find value `MUZZLE_FLASH_TICKS` in this scope: not found in this scope
+src\apps\fps_game.rs:2057:58: error[E0425]: cannot find value `DAMAGE_FLASH_TICKS` in this scope: not found in this scope
+src\apps\fps_game.rs:2212:34: error[E0425]: cannot find value `KEY_W` in this scope: not found in this scope
+src\apps\fps_game.rs:2216:34: error[E0425]: cannot find value `KEY_S` in this scope: not found in this scope
+src\apps\fps_game.rs:2220:34: error[E0425]: cannot find value `KEY_A` in this scope: not found in this scope
+src\apps\fps_game.rs:2224:34: error[E0425]: cannot find value `KEY_D` in this scope: not found in this scope
+src\apps\fps_game.rs:2230:51: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:2231:25: error[E0425]: cannot find value `SHOTGUN_FIRE_DELAY` in this scope: not found in this scope
+src\apps\fps_game.rs:2233:25: error[E0425]: cannot find value `PISTOL_FIRE_DELAY` in this scope: not found in this scope
+src\apps\fps_game.rs:2237:47: error[E0425]: cannot find value `MUZZLE_FLASH_TICKS` in this scope: not found in this scope
+src\apps\fps_game.rs:2253:35: error[E0425]: cannot find value `WEAPON_PISTOL` in this scope: not found in this scope
+src\apps\fps_game.rs:2254:54: error[E0425]: cannot find value `WEAPON_PISTOL` in this scope: not found in this scope
+src\apps\fps_game.rs:2260:35: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:2261:54: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:2303:30: error[E0425]: cannot find value `KEY_LEFT` in this scope: not found in this scope
+src\apps\fps_game.rs:2306:30: error[E0425]: cannot find value `KEY_RIGHT` in this scope: not found in this scope
+src\apps\fps_game.rs:2316:30: error[E0425]: cannot find value `KEY_UP` in this scope: not found in this scope
+src\apps\fps_game.rs:2319:30: error[E0425]: cannot find value `KEY_DOWN` in this scope: not found in this scope
+src\apps\fps_game.rs:2341:43: error[E0425]: cannot find value `WEAPON_SHOTGUN` in this scope: not found in this scope
+src\apps\fps_game.rs:2342:17: error[E0425]: cannot find value `SHOTGUN_FIRE_DELAY` in this scope: not found in this scope
+src\apps\fps_game.rs:2344:17: error[E0425]: cannot find value `PISTOL_FIRE_DELAY` in this scope: not found in this scope
+src\apps\fps_game.rs:2348:39: error[E0425]: cannot find value `MUZZLE_FLASH_TICKS` in this scope: not found in this scope
+src\apps\fps_game.rs:2381:53: error[E0425]: cannot find value `KEY_SHIFT` in this scope: not found in this scope
+src\apps\fps_game.rs:2382:21: error[E0425]: cannot find value `SPRINT_SPEED` in this scope: not found in this scope
+src\apps\fps_game.rs:2384:21: error[E0425]: cannot find value `WALK_SPEED` in this scope: not found in this scope
+src\apps\fps_game.rs:2386:36: error[E0425]: cannot find value `KEY_W` in this scope: not found in this scope
+src\apps\fps_game.rs:2390:36: error[E0425]: cannot find value `KEY_S` in this scope: not found in this scope
+src\apps\fps_game.rs:2394:36: error[E0425]: cannot find value `KEY_A` in this scope: not found in this scope
+src\apps\fps_game.rs:2398:36: error[E0425]: cannot find value `KEY_D` in this scope: not found in this scope
+src\apps\fps_game.rs:2410:36: error[E0425]: cannot find value `KEY_UP` in this scope: not found in this scope
+src\apps\fps_game.rs:2413:36: error[E0425]: cannot find value `KEY_DOWN` in this scope: not found in this scope
+src\apps\fps_game.rs:2422:36: error[E0425]: cannot find value `KEY_LEFT` in this scope: not found in this scope
+src\apps\fps_game.rs:2423:34: error[E0425]: cannot find value `ROT_SPEED` in this scope: not found in this scope
+src\apps\fps_game.rs:2425:36: error[E0425]: cannot find value `KEY_RIGHT` in this scope: not found in this scope
+src\apps\fps_game.rs:2426:33: error[E0425]: cannot find value `ROT_SPEED` in this scope: not found in this scope
+src\apps\fps_game.rs:2555:31: error[E0425]: cannot find value `ENEMY_ATTACK_DIST` in this scope: not found in this scope
+src\apps\fps_game.rs:2555:59: error[E0425]: cannot find value `MAX_DEPTH` in this scope: not found in this scope
+src\apps\fps_game.rs:2556:36: error[E0425]: cannot find value `ENEMY_CHASE_SPEED` in this scope: not found in this scope
+src\apps\fps_game.rs:2565:39: error[E0425]: cannot find value `ENEMY_ATTACK_DIST` in this scope: not found in this scope
+src\apps\fps_game.rs:2573:56: error[E0425]: cannot find value `ENEMY_ATTACK_DELAY` in this scope: not found in this scope
+src\apps\fps_game.rs:2574:35: error[E0425]: cannot find value `ENEMY_ATTACK_DAMAGE` in this scope: not found in this scope
+src\apps\fps_game.rs:2580:51: error[E0425]: cannot find value `DAMAGE_FLASH_TICKS` in this scope: not found in this scope
+src\apps\fps_game.rs:1180:92: error[E0689]: can't call method `min` on ambiguous numeric type `{float}`
+src\apps\city_drive.rs:2276:25: error[E0308]: mismatched types: expected a tuple with 3 elements, found one with 2 elements
+src\apps\city_drive.rs:2289:14: error[E0308]: mismatched types: expected `(usize, usize, usize, usize)`, found integer
+src\apps\city_drive.rs:2291:14: error[E0308]: mismatched types: expected `(usize, usize, usize, usize)`, found integer
+src\apps\city_drive.rs:2293:14: error[E0308]: mismatched types: expected `(usize, usize, usize, usize)`, found integer
+src\apps\city_drive.rs:2295:14: error[E0308]: mismatched types: expected `(usize, usize, usize, usize)`, found integer
+src\apps\city_drive.rs:2297:14: error[E0308]: mismatched types: expected `(usize, usize, usize, usize)`, found integer
+src\apps\city_drive.rs:2299:14: error[E0308]: mismatched types: expected `(usize, usize, usize, usize)`, found integer
+src\apps\city_drive.rs:2368:45: error[E0308]: mismatched types: expected `usize`, found `i32`
+src\apps\city_drive.rs:2375:45: error[E0308]: mismatched types: expected `usize`, found `i32`
+src\apps\city_drive.rs:2389:16: error[E0308]: arguments to this method are incorrect
+src\apps\city_drive.rs:2397:16: error[E0308]: arguments to this method are incorrect
+src\apps\city_drive.rs:2405:16: error[E0308]: arguments to this method are incorrect
+src\apps\city_drive.rs:2413:16: error[E0308]: arguments to this method are incorrect
+src\apps\fps_game.rs:1550:21: warning: unreachable pattern: no value can reach this
+src\apps\fps_game.rs:1557:21: warning: unreachable pattern: no value can reach this
+src\apps\fps_game.rs:1558:21: warning: unreachable pattern: no value can reach this
+src\apps\fps_game.rs:1549:21: warning: unused variable: `TILE_WALL`
+src\apps\fps_game.rs:1550:21: warning: unused variable: `TILE_DOOR`: help: if this is intentional, prefix it with an underscore: `_TILE_DOOR`
+src\apps\fps_game.rs:1557:21: warning: unused variable: `TILE_PICKUP`: help: if this is intentional, prefix it with an underscore: `_TILE_PICKUP`
+src\apps\fps_game.rs:1653:21: warning: unreachable pattern: no value can reach this
+src\apps\fps_game.rs:1660:21: warning: unreachable pattern: no value can reach this
+src\apps\fps_game.rs:1661:21: warning: unreachable pattern: no value can reach this
+src\apps\fps_game.rs:1652:21: warning: unused variable: `TILE_WALL`
+src\apps\fps_game.rs:1653:21: warning: unused variable: `TILE_DOOR`: help: if this is intentional, prefix it with an underscore: `_TILE_DOOR`
+src\apps\fps_game.rs:1660:21: warning: unused variable: `TILE_PICKUP`: help: if this is intentional, prefix it with an underscore: `_TILE_PICKUP`
+warning: `minos-kernel` (bin "minos-kernel") generated 12 warnings
+error: could not compile `minos-kernel` (bin "minos-kernel") due to 103 previous errors; 12 warnings emitted

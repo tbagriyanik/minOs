@@ -1000,10 +1000,20 @@ pub fn render_full_frame(
     fb.clear_frame_clip();
 
     // Dikey-blank senkronu: LFB'ye yazmadan *önce* dikey retrace başlangıcını
-    // bekle; böylece kopyalama taranan ekranın boşta olduğu anda yapılır.
-    if vsync_enabled() {
+    // bekle.
+    //
+    // Tek linerli bir framebuffer'da kare, ışın (beam) ekranı yukarıdan
+    // aşağıya doğru tarar. Kopyalama ışından daha hızlı tamamlanırsa
+    // (8 MB memcpy ışın hızının çok üstünde) her satır ışın o satıra
+    // ulaşmadan önce yazılmış olur ve yırtılma oluşmaz. Bunun koşulu
+    // kopyalamanın ışın BAŞINDA başlamasıdır; donanım retrace darbesi
+    // vermiyorsa bu garanti edilemez (bu durumda kare hızı yazılım
+    // yedeğiyle sınırlandırılır).
+    if crate::drivers::gpu::vblank_available() || vsync_enabled() {
         crate::drivers::gpu::vsync_wait();
     }
+
+    let present_start = crate::boot::time::read_cpu_cycles();
 
     if dirty_rect.is_some() {
         if let Some((x, y, w, h)) = flush_rect {
@@ -1012,5 +1022,25 @@ pub fn render_full_frame(
     } else {
         // Tam kare: backbuffer'ın tamamı tek memcpy ile aktarılır.
         fb.flush();
+    }
+
+    // Tanı: kopyalama süresi kare periyodundan uzunsa ışın kopyalamayı
+    // yakalar ve yırtılma kaçınılmazdır. Bu durum tek seferlik seri
+    // mesajıyla bildirilir.
+    let copy_us = crate::boot::time::read_cpu_cycles().wrapping_sub(present_start)
+        / unsafe { crate::boot::time::TSC_CYCLES_PER_US }.max(1);
+    let frame_us = crate::drivers::gpu::frame_period_us() as u64;
+    if frame_us > 0 && copy_us > frame_us {
+        static mut PRESENT_WARNED: bool = false;
+        if !unsafe { PRESENT_WARNED } {
+            unsafe {
+                PRESENT_WARNED = true;
+            }
+            crate::serial_print("[GFX] UYARI: LFB kopyalama kare suresini asiyor (");
+            crate::serial_print_dec(copy_us);
+            crate::serial_print(" us > ");
+            crate::serial_print_dec(frame_us);
+            crate::serial_print(" us) - yirtilma olabilir\n");
+        }
     }
 }

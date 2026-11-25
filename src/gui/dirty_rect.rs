@@ -46,6 +46,21 @@ impl DirtyRect {
     }
 }
 
+/// İki kirli bölgeyi birlestirir.
+///
+/// `None` girdiler "bu kaynaktan iş yok" demektir. Her iki bölge de varsa
+/// birleşim (bounding) dikdörtgen döner. Böylece aynı karede gelen iki
+/// farklı güncelleme kaynağı (orn. sürükleme + uygulama değişikliği)
+/// birbirini ezmeden birlikte ele alınır.
+pub fn merge_regions(a: Option<DirtyRect>, b: Option<DirtyRect>) -> Option<DirtyRect> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (Some(x), Some(y)) => Some(x.union(y)),
+    }
+}
+
 pub struct GlobalDirtyTracker {
     rects: [DirtyRect; MAX_DIRTY_RECTS],
     len: usize,
@@ -57,6 +72,14 @@ pub struct GlobalDirtyTracker {
     /// Per pencere render listesi: pencere başına birleşik kirli dikdörtgen.
     /// `DirtyRect::new(0, 0, 0, 0)` = o pencere için henüz kirli bölge yok.
     window_rects: [DirtyRect; MAX_TRACKED_WINDOWS],
+    /// Tüm per pencere kirli rectlerin birleşimi (bounding rect).
+    ///
+    /// `mark_window` ile giren işaretler de cercevenin kirli bölgesine
+    /// dahil edilmelidir: aksi halde pencere "kendi listesinde kirli"
+    /// olmasına rağmen cerceve kirli dikdörtgeni onu kapsamaz ve
+    /// pencere yalnızca kırpma bölgesi kadar yeniden çizilir. Böylece
+    /// pencerenin değişen kısmı ekranda bayat kalır (parça parça güncelleme).
+    window_bounding: DirtyRect,
 }
 
 impl GlobalDirtyTracker {
@@ -67,6 +90,7 @@ impl GlobalDirtyTracker {
             overflowed: false,
             bounding: DirtyRect::new(0, 0, 0, 0),
             window_rects: [DirtyRect::new(0, 0, 0, 0); MAX_TRACKED_WINDOWS],
+            window_bounding: DirtyRect::new(0, 0, 0, 0),
         }
     }
 
@@ -93,14 +117,26 @@ impl GlobalDirtyTracker {
 
     /// Bir pencereye kirli dikdörtgen ekler; per pencere render listesini
     /// günceller (union ile).
+    ///
+    /// İşaret aynı zamanda cercevenin genel kirli bölgesine de yansıtılır:
+    /// yalnızca per pencere listesine yazmak, pencereyi "kirli" yapmasına
+    /// rağmen cerceve kirli dikdörtgeninde kapsam dışı bırakır ve pencere
+    /// kırpma bölgesi kadar çizilir. Sonuc: pencerenin bir kısmı yeni,
+    /// bir kısmı eski (bayat) görünür.
     pub fn mark_window(&mut self, window_id: usize, rect: DirtyRect) {
         if window_id < MAX_TRACKED_WINDOWS && rect.width > 0 && rect.height > 0 {
             let current = self.window_rects[window_id];
-            self.window_rects[window_id] = if current.width == 0 && current.height == 0 {
+            let merged = if current.width == 0 && current.height == 0 {
                 rect
             } else {
                 current.union(rect)
             };
+            self.window_rects[window_id] = merged;
+            if self.window_bounding.width == 0 || self.window_bounding.height == 0 {
+                self.window_bounding = merged;
+            } else {
+                self.window_bounding = self.window_bounding.union(merged);
+            }
         }
     }
 
@@ -128,6 +164,7 @@ impl GlobalDirtyTracker {
         self.len = 0;
         self.overflowed = false;
         self.bounding = DirtyRect::new(0, 0, 0, 0);
+        self.window_bounding = DirtyRect::new(0, 0, 0, 0);
         for rect in self.window_rects.iter_mut() {
             *rect = DirtyRect::new(0, 0, 0, 0);
         }
@@ -136,8 +173,18 @@ impl GlobalDirtyTracker {
     pub fn as_slice(&self) -> &[DirtyRect] {
         &self.rects[..self.len]
     }
+
+    /// Takipçide bekleyen herhangi bir çizim işi var mı?
+    ///
+    /// Per pencere (`mark_window`) işaretleri de hesaba katılır: yalnızca
+    /// `track` çağrılarına bakmak, yalnızca pencere işaretleri bulunan
+    /// karelerde redraw tetiklenmemesine ve pencere içeriğinin bayat
+    /// kalmasına yol açardı.
     pub fn is_empty(&self) -> bool {
-        self.len == 0 && !self.overflowed
+        self.len == 0
+            && !self.overflowed
+            && self.window_bounding.width == 0
+            && self.window_bounding.height == 0
     }
     /// Tam ekran redraw gerekip gerekmediğini belirler.
     /// GlobalDirtyTracker MAX_DIRTY_RECTS (64) Capacity aşıldığında bile,
@@ -154,12 +201,27 @@ impl GlobalDirtyTracker {
         self.bounding.width > 0 && self.bounding.height > 0
     }
 
+    /// Bu turun kirli bölge birleşimi (global + per pencere).
+    ///
+    /// Per pencere işaretleri de dahil edilir; aksi halde bir pencere
+    /// "kendi listesinde kirli" olduğu halde cerceve kirli dikdörtgeni onu
+    /// kapsamaz ve pencere yalnizca kirpma bolgesi kadar cizilir.
     pub fn bounding_rect(&self) -> Option<DirtyRect> {
-        // Bounding rect sıfırsa (tüm boyutlar 0) anlamı yoktur.
-        if self.bounding.width == 0 || self.bounding.height == 0 {
+        let global = if self.bounding.width == 0 || self.bounding.height == 0 {
             None
         } else {
             Some(self.bounding)
+        };
+        let per_window = if self.window_bounding.width == 0 || self.window_bounding.height == 0 {
+            None
+        } else {
+            Some(self.window_bounding)
+        };
+        match (global, per_window) {
+            (None, None) => None,
+            (Some(g), None) => Some(g),
+            (None, Some(w)) => Some(w),
+            (Some(g), Some(w)) => Some(g.union(w)),
         }
     }
 
@@ -266,5 +328,52 @@ mod tests {
         tracker.clear();
         assert_eq!(tracker.window_dirty(2), None);
         assert!(tracker.is_empty());
+    }
+
+    #[test]
+    fn per_window_marks_count_as_pending_work() {
+        // Yalnizca mark_window çağrısı varsa takipçi boş sayılmaz:
+        // aksi halde pencere değişikliği redraw tetiklemez ve içerik bayat kalır.
+        let mut tracker = GlobalDirtyTracker::new();
+        assert!(tracker.is_empty());
+        tracker.mark_window(3, DirtyRect::new(40, 50, 60, 70));
+        assert!(
+            !tracker.is_empty(),
+            "per pencere isareti bekleyen is olarak sayilmali"
+        );
+        assert_eq!(
+            tracker.bounding_rect(),
+            Some(DirtyRect::new(40, 50, 60, 70)),
+            "per pencere isareti cerceve kirli bolgesine dahil edilmeli"
+        );
+    }
+
+    #[test]
+    fn bounding_rect_unions_global_and_per_window_regions() {
+        let mut tracker = GlobalDirtyTracker::new();
+        tracker.track(0, DirtyRect::new(0, 900, 100, 20));
+        tracker.mark_window(5, DirtyRect::new(300, 200, 100, 100));
+        let merged = tracker.bounding_rect().expect("birlesik bolge");
+        // Global: x=[0,100) y=[900,920); per pencere: x=[300,400) y=[200,300)
+        assert_eq!(merged, DirtyRect::new(0, 200, 400, 720));
+    }
+
+    #[test]
+    fn clear_resets_per_window_bounding() {
+        let mut tracker = GlobalDirtyTracker::new();
+        tracker.mark_window(2, DirtyRect::new(10, 10, 20, 20));
+        tracker.clear();
+        assert!(tracker.is_empty());
+        assert_eq!(tracker.bounding_rect(), None);
+    }
+
+    #[test]
+    fn merge_regions_unions_both_sources() {
+        let a = DirtyRect::new(10, 10, 30, 30);
+        let b = DirtyRect::new(100, 40, 20, 20);
+        assert_eq!(merge_regions(Some(a), Some(b)), Some(a.union(b)));
+        assert_eq!(merge_regions(Some(a), None), Some(a));
+        assert_eq!(merge_regions(None, Some(b)), Some(b));
+        assert_eq!(merge_regions(None, None), None);
     }
 }

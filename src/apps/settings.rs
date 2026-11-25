@@ -510,13 +510,13 @@ fn render_device_inventory(
 /// Yardımcı düğme/geometri tanımları (çizim ve tıklama testi ortak kullanır).
 const TAB_X: usize = 10;
 const TAB_W: usize = 116;
-const TAB_H: usize = 26;
+const TAB_H: usize = 34;
 const CONTENT_X: usize = 140;
 
 /// Standart dikey ritim ve marjin sabitleri:
 /// Tüm sekmelerde başlıklar, metinler, kontroller ve gruplar bu ızgaraya oturur.
-pub const UI_TOP_Y: usize = 36; // İçerik başlangıç Y konumu
-pub const UI_ROW_STEP: usize = 36; // Satır aralığı (row spacing)
+pub const UI_TOP_Y: usize = 30; // İçerik başlangıç Y konumu
+pub const UI_ROW_STEP: usize = 28; // Satır aralığı (row spacing)
 pub const UI_BTN_H: usize = 22; // Standart buton yüksekliği
 pub const UI_LABEL_OFFSET: usize = 4; // Butonla aynı satırdaki metnin dikey hizası
 
@@ -829,7 +829,7 @@ impl SystemSettings {
     pub fn tab_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
         (
             win_x + TAB_X,
-            win_y + sp(36) + i * sp(30),
+            win_y + sp(36) + i * sp(42),
             sp(TAB_W),
             sp(TAB_H),
         )
@@ -2004,10 +2004,11 @@ impl SystemSettings {
             1 => 14,
             2 => 18,
             3 => 32,
-            _ => 22,
+            4 => 26,
+            _ => 26,
         };
         let width = CONTENT_X + sp(1000) + sp(16);
-        let full_height = sp(UI_TOP_Y + rows * UI_ROW_STEP + 80);
+        let full_height = sp(UI_TOP_Y + rows * UI_ROW_STEP + 60);
         let height = full_height.saturating_sub(crate::gui::scaled_titlebar_h());
         (width, height)
     }
@@ -2064,10 +2065,12 @@ impl SystemSettings {
             } else {
                 Color::TEXT_MUTED
             };
+            // Sekme metni dikey olarak ortalanır (yatay sekme yerine solda dikey sekme).
+            let text_y = r.1 + (r.3.saturating_sub(sp(16))) / 2;
             MinGuiCompositor::draw_string_clipped(
                 fb,
                 r.0 + 8,
-                r.1 + 5,
+                text_y,
                 t,
                 col,
                 (
@@ -2084,9 +2087,9 @@ impl SystemSettings {
             0 => {
                 // --- minOs Sistem ve Sürüm Bilgisi (Satır 0) ---
                 let ver_str = if self.language.is_english() {
-                    "minOs Sarman Edition v2.6 (x86_64)"
+                    "minOs Sarman Edition v2.7 (x86_64)"
                 } else {
-                    "minOs Sarman Sürümü v2.6 (x86_64)"
+                    "minOs Sarman Sürümü v2.7 (x86_64)"
                 };
                 MinGuiCompositor::draw_string(
                     fb,

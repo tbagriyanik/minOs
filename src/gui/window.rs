@@ -739,6 +739,10 @@ impl MinGuiCompositor {
         } else {
             232
         };
+        // Saydam pencere seçildiğinde arka planı bulanıklıklaştır (cam/glass efekti).
+        if transparent {
+            fb.blur_region(win.x, win.y, win.width, win.height, 2);
+        }
         fb.draw_rounded_rect_alpha(
             win.x,
             win.y,

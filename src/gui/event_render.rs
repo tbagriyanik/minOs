@@ -295,10 +295,17 @@ pub fn render_frame(
             || night_light_active
         {
             None
-        } else if let Some(drag) = state.drag_dirty_rect {
-            Some(drag)
         } else {
-            tracked_dirty
+            // Sürükleme dikdörtgeni ile izlenen kirli bölge BİRLİKTE
+            // kullanılır. Yalnızca biri seçilirse diğerindeki değişiklik
+            // bu karede ekrana yansımaz ve pencere parça parça güncellenir.
+            let merged = crate::gui::dirty_rect::merge_regions(
+                state
+                    .drag_dirty_rect
+                    .map(|r| crate::gui::dirty_rect::DirtyRect::new(r.0, r.1, r.2, r.3)),
+                tracked_dirty.map(|r| crate::gui::dirty_rect::DirtyRect::new(r.0, r.1, r.2, r.3)),
+            );
+            merged.map(|r| (r.x, r.y, r.width, r.height))
         };
         state.last_workspace = compositor.active_workspace;
 
@@ -375,7 +382,7 @@ pub fn render_frame(
                 // LFB'ye yazmadan önce dikey-blank'ı bekle: yalnızca fare
                 // hareket ederken de yazma taranan ekranın ortasına
                 // düşerse ekran yırtılması oluşur.
-                if crate::gui::frame::vsync_enabled() {
+                if crate::drivers::gpu::vblank_available() || crate::gui::frame::vsync_enabled() {
                     crate::drivers::gpu::vsync_wait();
                 }
                 fb.flush_rect(u);

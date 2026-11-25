@@ -10,6 +10,83 @@ use crate::time_budget::TimeBudget;
 use core::f32::consts::{PI, TAU};
 
 // ---------------------------------------------------------------------------
+// Harita / döşeme sabitleri (fps_game kendi haritasını kullanır)
+// ---------------------------------------------------------------------------
+const TILE_WALL: u8 = 1;
+const TILE_DOOR: u8 = 2;
+/// Pickup döşemesi — statik haritada kullanılmaz, yalnızca eşleme kollarında
+/// yer tutucu olarak bulunur (pickuplar dinamik olarak yerleştirilir).
+const TILE_PICKUP: u8 = 3;
+
+// ---------------------------------------------------------------------------
+// Tekstür sabitleri (8×8 prosedürel dokular)
+// ---------------------------------------------------------------------------
+const TEX_W: usize = 8;
+const TEX_H: usize = 8;
+const TEX_BRICK: u8 = 0;
+const TEX_METAL: u8 = 1;
+const TEX_STONE: u8 = 2;
+
+// ---------------------------------------------------------------------------
+// Silah sabitleri
+// ---------------------------------------------------------------------------
+const WEAPON_PISTOL: u8 = 0;
+const WEAPON_SHOTGUN: u8 = 1;
+const WEAPON_COUNT: usize = 2;
+
+const PISTOL_AMMO_MAX: u32 = 50;
+const SHOTGUN_AMMO_MAX: u32 = 20;
+const SHOTGUN_PELLETS: usize = 5;
+
+const PISTOL_FIRE_DELAY: usize = 8;
+const SHOTGUN_FIRE_DELAY: usize = 20;
+const RELOAD_TICKS: usize = 40;
+
+// ---------------------------------------------------------------------------
+// Oyuncu ve hareket sabitleri
+// ---------------------------------------------------------------------------
+const PLAYER_RADIUS: f32 = 0.25;
+const WALK_SPEED: f32 = 0.06;
+const SPRINT_SPEED: f32 = 0.10;
+const ROT_SPEED: f32 = 0.04;
+const MOUSE_SENS: f32 = 0.003;
+
+// ---------------------------------------------------------------------------
+// Görüş alanı ve render sabitleri
+// ---------------------------------------------------------------------------
+const FOV: f32 = 1.2; // ~69°
+const MAX_DEPTH: f32 = 20.0;
+const ENEMIES_PER_FRAME: usize = 8;
+
+// ---------------------------------------------------------------------------
+// Görsel efekt sabitleri
+// ---------------------------------------------------------------------------
+const MUZZLE_FLASH_TICKS: usize = 4;
+const DAMAGE_FLASH_TICKS: usize = 8;
+
+// ---------------------------------------------------------------------------
+// Zırh ve savaş sabitleri
+// ---------------------------------------------------------------------------
+const MAX_ARMOR: u32 = 100;
+const ENEMY_ATTACK_DIST: f32 = 1.5;
+const ENEMY_CHASE_SPEED: f32 = 0.03;
+const ENEMY_ATTACK_DELAY: usize = 60;
+const ENEMY_ATTACK_DAMAGE: u32 = 15;
+
+// ---------------------------------------------------------------------------
+// Klavye bit maskeleri (key_mask alanı için)
+// ---------------------------------------------------------------------------
+const KEY_W: u16 = 1 << 0;
+const KEY_S: u16 = 1 << 1;
+const KEY_A: u16 = 1 << 2;
+const KEY_D: u16 = 1 << 3;
+const KEY_UP: u16 = 1 << 4;
+const KEY_DOWN: u16 = 1 << 5;
+const KEY_LEFT: u16 = 1 << 6;
+const KEY_RIGHT: u16 = 1 << 7;
+const KEY_SHIFT: u16 = 1 << 8;
+
+// ---------------------------------------------------------------------------
 // no_std için hızlı trigonometrik ve karekök fonksiyonları
 // ---------------------------------------------------------------------------
 
@@ -179,85 +256,31 @@ fn metal_texel(x: usize, y: usize) -> u32 {
 // Sabitler ve yardımcı matematik
 // ---------------------------------------------------------------------------
 
-const MAP_W: usize = 16;
-const MAP_H: usize = 16;
-const FOV: f32 = PI * 0.4444; // ~80 derece (daha geniş görüş alanı)
-const MAX_DEPTH: f32 = 20.0;
-const WALK_SPEED: f32 = 0.12;
-const SPRINT_SPEED: f32 = 0.20;
-const ROT_SPEED: f32 = 0.10;
-// Ana döngü fare delta'sını yarım ölçekle gönderiyor; bu değer 1:1'e yakın,
-// Tüm düşmanları her karede çizmek, sprite'ların kareler arasında kaybolmasını
-// önler. Sayı düşük tutulduğu için raycast maliyeti değişmez.
-const ENEMIES_PER_FRAME: usize = MAX_ENEMIES;
-// daha kontrollü bir FPS dönüşü için ayarlandı.
-const MOUSE_SENS: f32 = 0.0045;
-const PLAYER_RADIUS: f32 = 0.25;
-
-// --- Silah türleri ---
-const WEAPON_PISTOL: u8 = 0;
-const WEAPON_SHOTGUN: u8 = 1;
-const WEAPON_COUNT: usize = 2;
-
-// Silah istatistikleri: (mermi başına hasar, ateş arası bekleme (tick), mermilik, yayılma)
-const PISTOL_FIRE_DELAY: usize = 8;
-const PISTOL_AMMO_MAX: u32 = 60;
-const SHOTGUN_PELLETS: u32 = 7;
-const SHOTGUN_FIRE_DELAY: usize = 24;
-const SHOTGUN_AMMO_MAX: u32 = 24;
-const RELOAD_TICKS: usize = 30;
-
-// --- Oynanış sabitleri ---
-const MAX_ARMOR: u32 = 100;
-const ENEMY_CHASE_SPEED: f32 = 0.025;
-const ENEMY_ATTACK_DIST: f32 = 0.9;
-const ENEMY_ATTACK_DAMAGE: u32 = 12;
-const ENEMY_ATTACK_DELAY: usize = 30;
-const DAMAGE_FLASH_TICKS: usize = 12;
-const MUZZLE_FLASH_TICKS: usize = 4;
-
-// --- Duvar tekstür sabitleri ---
-const TEX_W: usize = 8;
-const TEX_H: usize = 8;
-const TEX_BRICK: u8 = 0;
-const TEX_STONE: u8 = 1;
-const TEX_METAL: u8 = 2;
-
-// Tuş durumu maske bayrakları (handle_key / handle_arrow ile ayarlanır,
-// update() içinde tek seferde uygulanır — çok tuşlu hareket destekler).
-const KEY_W: u16 = 1 << 0;
-const KEY_S: u16 = 1 << 1;
-const KEY_A: u16 = 1 << 2;
-const KEY_D: u16 = 1 << 3;
-const KEY_LEFT: u16 = 1 << 4;
-const KEY_RIGHT: u16 = 1 << 5;
-const KEY_UP: u16 = 1 << 6;
-const KEY_DOWN: u16 = 1 << 7;
-const KEY_SHIFT: u16 = 1 << 8; // koşu
-
-/// Harita kare türleri: 0 = boş, 1 = duvar, 2 = kapı, 3 = canlı/pickup.
-const TILE_WALL: u8 = 1;
-const TILE_DOOR: u8 = 2;
-const TILE_PICKUP: u8 = 3;
-
-/// Harita: Wolfenstein 3D tarzı bölüm.
+const MAP_W: usize = 20;
+const MAP_H: usize = 20;
+/// Harita: room/corridor tabanli 20x20 bolum (# duvar, . acil, + kapı).
+/// Sol üst, sağ üst, sağ oda, sol orta, orta ve alt odalar koridorlarla baglanir.
 static MAP: [[u8; MAP_W]; MAP_H] = [
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 2, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1],
-    [1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 2, 1, 0, 2, 1, 1, 1, 0, 1, 0, 0, 1],
-    [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    [1, 0, 1, 0, 2, 0, 1, 1, 2, 0, 1, 1, 1, 1, 0, 1],
-    [1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 2, 1, 0, 1, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1],
-    [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 0, 2, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1],
-    [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
 /// Düşman: (x, y, can, aktif, saldırı zamanlayıcısı)
@@ -1289,9 +1312,8 @@ impl FpsGameApp {
         }
 
         if !cancelled {
-            // Düşman sprite'larını çiz (basit billboard).
-            // Sadece ENEMIES_PER_FRAME kadar düşman render edilir; remaining'ler
-            // sonraki frame'e ertelenir, jitter önlenir.
+            // Düşman sprite'larını çiz — ayrıntılandırılmış billboard + birleşik
+            // hacim (şapka, gövde, kollar, taban gölgesi) tarzı 3D görünüm.
             let mut rendered_sprites: usize = 0;
             for e in self.enemies.iter().take(self.enemy_count) {
                 if budget.is_expired() {
@@ -1301,16 +1323,14 @@ impl FpsGameApp {
                 if !e.alive {
                     continue;
                 }
-                // ENEMIES_PER_FRAME ile sınırlı render; remaining'ler sonraki frame'e.
                 if rendered_sprites >= ENEMIES_PER_FRAME {
                     continue;
                 }
                 rendered_sprites += 1;
-                // Mesafe ve frustum kısaltma: fast_sqrt yerine kare mesafe kontrolü.
+
                 let dx = e.x - self.pos_x;
                 let dy = e.y - self.pos_y;
                 let dist_sq = dx * dx + dy * dy;
-                // fast_sqrt guard: 0 divisyonunu ve z_buffer karşılaştırması.
                 let dist = if dist_sq > 0.0 {
                     fast_sqrt(dist_sq)
                 } else {
@@ -1321,8 +1341,6 @@ impl FpsGameApp {
                 }
                 let angle = fast_atan2(dy, dx);
                 let mut rel = angle - fast_atan2(self.dir_y, self.dir_x);
-                // while döngülerini if düzeltmeleriyle değiştir: angle normalizasyonu
-                // tek adımlı düzelme yeterlidir, while döngüsü çok maliyetli.
                 if rel < -PI {
                     rel += TAU;
                 } else if rel > PI {
@@ -1332,10 +1350,7 @@ impl FpsGameApp {
                     continue;
                 }
 
-                // Ekran x pozisyonu.
                 let screen_x = (rel / (FOV / 2.0) + 1.0) / 2.0 * (w as f32);
-                // Negatif screen_x (ekran kenarındaki düşman) usize cast'te panik
-                // veya sapma yaratıyor; bu düşmanı atla.
                 if screen_x < 0.0 {
                     continue;
                 }
@@ -1344,60 +1359,167 @@ impl FpsGameApp {
                     continue;
                 }
 
-                // Mesafeye göre boyut: duvar yüksekliğinin yaklaşık yarısı
-                // kadar bir insan silueti.
-                let sprite_h = (render_h as f32 / dist.max(0.3) * 0.45) as usize;
-                let sprite_w = (sprite_h / 2).clamp(8, 96);
+                // Mesafeye göre boyut: yaklaşık insan ölçeği (yaklaşık 0.9).
+                let sprite_h = (render_h as f32 / dist.max(0.3) * 0.62) as usize;
+                let sprite_w = (sprite_h / 2).max(10).min(96);
                 let draw_start_y = (render_h / 2).saturating_sub(sprite_h / 2);
                 let draw_end_y = (render_h / 2).saturating_add(sprite_h / 2).min(render_h);
 
-                // Z-buffer testi: duvarın önündeyse çiz. Sprite'ı tek sütun yerine
-                // gerçek bir billboard olarak çizmek düşmanları okunabilir kılar.
                 if dist < z_buffer[sx] {
-                    let color = if e.hit_timer > 0 {
-                        Color::ACCENT_RED
-                    } else {
-                        Color::ACCENT_PINK
-                    };
+                    let hit = e.hit_timer > 0;
+                    // Ana renkler (vurulmuşta kırmızıya dön).
+                    let body_col = if hit { 0xE04A3A } else { 0xB03A6A };
+                    let torso_col = if hit { 0xD06050 } else { 0x7A2D4E };
+                    let head_col = if hit { 0xF08A7C } else { 0xF2B09A };
+                    let leg_col = if hit { 0xA03A2E } else { 0x501C30 };
+                    let eye_col = if hit { 0x1A0D08 } else { 0xFFE79A };
+                    let dark = 0x140B18;
+
                     let cx = render_x + sx;
                     let cy0 = render_y + draw_start_y;
                     let cy1 = render_y + draw_end_y;
                     let sw = sprite_w;
+                    let body_h = cy1.saturating_sub(cy0);
+
+                    // Taban gölgesi: düşmanın ayaklarının etrafında koyu oval.
+                    let shadow_w = sw * 12 / 10;
+                    let sh_y = cy1.saturating_sub(1);
+                    for xx in 0..shadow_w {
+                        let px = cx.saturating_sub(shadow_w / 2) + xx;
+                        let local_x = px.saturating_sub(render_x);
+                        if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
+                            let t = (xx as f32 / shadow_w as f32 - 0.5).abs() * 2.0;
+                            if t < 1.0 {
+                                fb.put_pixel(px, sh_y, 0x0A0710);
+                            }
+                        }
+                    }
+
+                    // Gövde (tüm sprite boyunca, dikey bantlar ile gölgelendirme).
                     for yy in cy0..cy1 {
                         if budget.is_expired() {
                             cancelled = true;
                             break;
                         }
+                        let rel_y =
+                            yy.saturating_sub(cy0) as f32 / (cy1.saturating_sub(cy0).max(1) as f32);
+                        let is_head = rel_y < 0.26;
+                        let is_leg = rel_y > 0.72;
                         for xx in 0..sw {
                             let px = cx.saturating_sub(sw / 2) + xx;
-                            // Sprite'ın yalnızca merkez sütununu değil, her
-                            // sütununu duvar z-buffer'ına göre kes. Aksi halde
-                            // duvarın arkasındaki düşman billboard'u duvarın
-                            // kenarlarından görünüyordu.
                             let local_x = px.saturating_sub(render_x);
                             if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                let rel_y = yy.saturating_sub(cy0) as f32
-                                    / (cy1.saturating_sub(cy0).max(1)) as f32;
-                                let is_head = rel_y < 0.28;
-                                let edge = xx < 2 || xx + 2 >= sw;
-                                let pixel_color = if edge {
-                                    0x190F22
-                                } else if is_head {
-                                    0xF08A7C
+                                let rel_x = xx as f32 / sw as f32 - 0.5;
+                                let edge = rel_x.abs() > 0.46;
+                                let shade_x = 1.0 - rel_x.abs() * 0.45;
+                                let base = if is_head {
+                                    head_col
+                                } else if is_leg {
+                                    leg_col
                                 } else {
-                                    color
+                                    body_col
                                 };
-                                fb.put_pixel(px, yy, pixel_color);
+                                let r = (((base >> 16) & 0xFF) as f32 * shade_x) as u32;
+                                let g = (((base >> 8) & 0xFF) as f32 * shade_x) as u32;
+                                let b = ((base & 0xFF) as f32 * shade_x) as u32;
+                                let color = if edge { dark } else { (r << 16) | (g << 8) | b };
+                                fb.put_pixel(px, yy, color);
                             }
                         }
                     }
                     if cancelled {
                         break;
                     }
-                    // 3D üst yüz ve sağ yan yüz (kutu hacmi).
-                    let top_h = (sprite_h * 6 / 100).max(1);
+
+                    // Başlık / kafa gölgesi (tepe kısım).
+                    let head_h = (body_h * 26 / 100).max(3);
+                    let head_top = cy0;
+                    for yy in head_top..head_top.saturating_add(head_h) {
+                        if yy >= cy1 {
+                            break;
+                        }
+                        let rel_y = yy.saturating_sub(head_top) as f32 / head_h.max(1) as f32;
+                        let intensity = 0.65 + rel_y * 0.35;
+                        for xx in 0..sw {
+                            let px = cx.saturating_sub(sw / 2) + xx;
+                            let local_x = px.saturating_sub(render_x);
+                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
+                                let r = (((head_col >> 16) & 0xFF) as f32 * intensity) as u32;
+                                let g = (((head_col >> 8) & 0xFF) as f32 * intensity) as u32;
+                                let b = ((head_col & 0xFF) as f32 * intensity) as u32;
+                                fb.put_pixel(px, yy, (r << 16) | (g << 8) | b);
+                            }
+                        }
+                    }
+                    if cancelled {
+                        break;
+                    }
+
+                    // Tek gövde bantları: omuzlar ve gövde sınırları.
+                    let torso_top = cy0.saturating_add(body_h * 26 / 100);
+                    let torso_bottom = cy0.saturating_add(body_h * 72 / 100);
+                    for yy in torso_top..torso_bottom {
+                        if yy >= cy1 {
+                            break;
+                        }
+                        for xx in 0..sw {
+                            let px = cx.saturating_sub(sw / 2) + xx;
+                            let local_x = px.saturating_sub(render_x);
+                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
+                                let rel_y = (yy - torso_top) as f32
+                                    / (torso_bottom - torso_top).max(1) as f32;
+                                let shade = 0.55 + rel_y * 0.45;
+                                let r = (((torso_col >> 16) & 0xFF) as f32 * shade) as u32;
+                                let g = (((torso_col >> 8) & 0xFF) as f32 * shade) as u32;
+                                let b = ((torso_col & 0xFF) as f32 * shade) as u32;
+                                fb.put_pixel(px, yy, (r << 16) | (g << 8) | b);
+                            }
+                        }
+                    }
+                    if cancelled {
+                        break;
+                    }
+
+                    // Kollar: omuz çizgisinden kalça çizgisine (dış kenarda koyu).
+                    let arm_w = (sw / 5).max(2);
+                    for side in [0usize, 1usize] {
+                        for yy in torso_top..torso_bottom.min(cy1) {
+                            if budget.is_expired() {
+                                cancelled = true;
+                                break;
+                            }
+                            for ax in 0..arm_w {
+                                let px = if side == 0 {
+                                    cx.saturating_sub(sw / 2) + ax
+                                } else {
+                                    cx.saturating_add(sw / 2).saturating_sub(arm_w) + ax
+                                };
+                                let local_x = px.saturating_sub(render_x);
+                                if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
+                                    let r = (((torso_col >> 16) & 0xFF) as f32 * 0.7) as u32;
+                                    let g = (((torso_col >> 8) & 0xFF) as f32 * 0.7) as u32;
+                                    let b = ((torso_col & 0xFF) as f32 * 0.7) as u32;
+                                    fb.put_pixel(px, yy, (r << 16) | (g << 8) | b);
+                                }
+                            }
+                        }
+                    }
+                    if cancelled {
+                        break;
+                    }
+
+                    // Gözler (nişanlanabilir kontrast noktaları).
+                    let eye_y = cy0.saturating_add(body_h / 6);
+                    let eye_w = (sw / 6).max(2);
+                    let left_eye_x = cx.saturating_sub(sw / 3);
+                    let right_eye_x = cx.saturating_add(sw / 3).saturating_sub(eye_w);
+                    fb.draw_rect(left_eye_x, eye_y, eye_w, (body_h / 12).max(2), eye_col);
+                    fb.draw_rect(right_eye_x, eye_y, eye_w, (body_h / 12).max(2), eye_col);
+
+                    // Görünüm yüksekliği üstünde küçük bir fark belirginleştirici.
+                    let top_h = (sprite_h * 5 / 100).max(1);
                     let ty0 = cy0.saturating_sub(top_h);
-                    let top_col = MinGuiCompositor::shade(color, 40);
+                    let top_col = MinGuiCompositor::shade(body_col, 40);
                     for yy in ty0..cy0 {
                         if budget.is_expired() {
                             cancelled = true;
@@ -1414,8 +1536,10 @@ impl FpsGameApp {
                     if cancelled {
                         break;
                     }
-                    let side_w = (sprite_w * 14 / 100).max(1);
-                    let side_col = MinGuiCompositor::shade(color, -70);
+
+                    // Sağ yan yüz (hacim).
+                    let side_w = (sprite_w * 12 / 100).max(1);
+                    let side_col = MinGuiCompositor::shade(body_col, -60);
                     for yy in cy0..cy1 {
                         if budget.is_expired() {
                             cancelled = true;
@@ -1429,13 +1553,6 @@ impl FpsGameApp {
                             }
                         }
                     }
-                    if cancelled {
-                        break;
-                    }
-                    // Kontrastlı gözler/nişan alınabilir merkez.
-                    let eye_y = cy0 + (cy1.saturating_sub(cy0) / 5);
-                    fb.draw_rect(cx.saturating_sub(sw / 4), eye_y, 3, 3, 0xFFF1C1);
-                    fb.draw_rect(cx + sw / 4, eye_y, 3, 3, 0xFFF1C1);
                 }
             }
         }
@@ -2556,14 +2673,14 @@ impl FpsGameApp {
                     self.wave = self.wave.saturating_add(1);
                     self.wave_timer = 180;
                     let spawn_points = [
-                        (2.0, 2.0),
-                        (2.0, 13.0),
-                        (13.0, 2.0),
-                        (13.0, 13.0),
-                        (7.0, 2.0),
-                        (2.0, 7.0),
-                        (13.0, 7.0),
-                        (7.0, 13.0),
+                        (2.5, 2.5),
+                        (17.5, 2.5),
+                        (17.5, 5.5),
+                        (2.5, 17.5),
+                        (9.5, 17.5),
+                        (15.5, 17.5),
+                        (2.5, 9.5),
+                        (9.5, 14.5),
                     ];
                     for (i, e) in self.enemies.iter_mut().take(self.enemy_count).enumerate() {
                         if !e.alive {

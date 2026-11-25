@@ -728,7 +728,7 @@ fn build_request_with_headers(
         path,
         b" HTTP/1.1\r\nHost: ",
         host,
-        b"\r\nUser-Agent: minOs-http/2.6\r\nAccept-Encoding: gzip, deflate, br\r\nConnection: keep-alive",
+        b"\r\nUser-Agent: minOs-http/2.7\r\nAccept-Encoding: gzip, deflate, br\r\nConnection: keep-alive",
     ];
 
     let mut n = 0usize;

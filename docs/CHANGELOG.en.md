@@ -3,9 +3,17 @@
 This file contains the detailed change lists for minOs releases.
 The README files only summarise the highlights; the full list lives here.
 
-## Current · v2.6.0
+## Current · v2.7.0
 
-### What's New (v2.6.0)
+### Fixes · Window tearing and partial (fragmented) window updates
+
+- **Window updates are now atomic:** per-window dirty marks recorded through `GlobalDirtyTracker::mark_window` are now folded into the frame's global dirty region (`window_bounding` union). Previously those marks only reached the per-window list, while `take_dirty_region()` used the global union — so a window could be "dirty in its own list" yet fall outside the frame clip rectangle and was redrawn only inside that clip. The visible result was a window whose changed part was new while the rest stayed stale (piece-by-piece updates). `is_empty()` also ignored per-window marks, so frames whose only pending work was a window mark never triggered a redraw at all (a closed user-mode window could leave a ghost on screen).
+- **Drag and tracked dirty regions no longer overwrite each other:** `event_render.rs` used `drag_dirty_rect` *instead of* the tracked dirty region; both are now merged so a frame containing both a drag and an application change shows both.
+- **Reliable vertical-blank detection:** `probe_vblank` now requires observing both a "set" and a "clear" transition (devices whose 0x3DA read is stuck at 0xFF/0x00 were previously mistaken for having a vblank) and uses a TSC cycle budget instead of `monotonic_ms` (which could spin forever before the time base was calibrated). The one-shot probe no longer latches the system into "no hardware vblank" mode: the port is re-probed every 1800 calls, so an early or unlucky probe cannot disable screen sync for the rest of the session.
+- **Frame-period measurement and diagnostics:** the interval between vblank pulses is measured (`gpu::frame_period_us`); when the LFB copy takes longer than a frame the host would catch the copy mid-scan and tearing becomes unavoidable, so a one-shot `[GFX]` warning is written to the serial log.
+- **VirtIO-GPU display path fixed:** `Framebuffer::flush`/`flush_rect` skipped the CPU copy when VirtIO-GPU was active and only performed the host transfer, while the actual drawing stayed in the software backbuffer — the LFB was therefore never updated. The CPU copy now always runs, and the host transfer/flush is performed in addition when VirtIO-GPU is active.
+
+### What's New (v2.7.0)
 
 - **Paint UI/UX redesign:** two-bar scalable toolbar, hover/pressed animated buttons, color picker, brush-tip preview, interpolation-based continuous drawing/erasing, right-drag to erase, Ctrl+N/O/S shortcuts.
 - **Lazy application loading:** shell apps stay resident; others load on first open and unload when their last window closes.

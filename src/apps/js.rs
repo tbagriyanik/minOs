@@ -2166,7 +2166,7 @@ impl JsRuntime {
         );
         map.insert(
             String::from("appVersion"),
-            JsValue::String(String::from("5.0 (minOs/2.6)")),
+            JsValue::String(String::from("5.0 (minOs/2.7)")),
         );
         map.insert(
             String::from("appName"),

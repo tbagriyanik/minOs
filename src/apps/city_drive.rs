@@ -429,6 +429,7 @@ impl VehicleKind {
             VehicleKind::Compact => (3.80, 1.68, 1.48),
             VehicleKind::Sedan => (4.62, 1.78, 1.45),
             VehicleKind::Suv => (4.72, 1.86, 1.70),
+            // 3D rendering boyutları için eklendi
             VehicleKind::Van => (5.20, 1.94, 2.15),
             VehicleKind::Pickup => (5.30, 1.90, 1.82),
             VehicleKind::Taxi => (4.70, 1.80, 1.50),
@@ -2237,359 +2238,214 @@ impl CityDriveApp {
         car: &TrafficCar,
     ) {
         let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;
-        let (screen_x, depth, scale) = match self.project(car.x, car.y, win_w, focal, zbuf) {
-            Some(v) => v,
-            None => return,
-        };
 
-        // Görüş yönü ile araç yönü arasındaki açı.
-        let rel_x = car.x - self.car_x;
-        let rel_y = car.y - self.car_y;
-        let dist = sqrtf(rel_x * rel_x + rel_y * rel_y);
-        if dist < 0.01 {
-            return;
-        }
-        let cos_a = (car.dir_x * rel_x + car.dir_y * rel_y) / dist;
-        let sin_a = absf(car.dir_x * rel_y - car.dir_y * rel_x) / dist;
-        let rear = cos_a > 0.55;
-        let front = cos_a < -0.55;
-        let side_view = !rear && !front;
+        // Aracın boyutları (metre cinsinden).
+        let (length, width, height) = car.kind.dims();
 
-        // Görünen genişlik: araç uzunluğu ile genişliğinin izdüşümü.
-        let proj_len = car.length * sin_a + car.width * absf(cos_a);
-        let size_y = (car.height * scale).max(3.0) as i32;
-        let size_x = (proj_len * scale).max(3.0) as i32;
+        // Araç yön vektörü ve sağ vektörü.
+        let forward = (car.dir_x, car.dir_y);
+        let right = (-car.dir_y, car.dir_x);
 
-        let bottom = horizon as f32 + CAM_H * scale;
-        let top = bottom - size_y as f32;
-        let y0 = (win_y as f32 + top).max(0.0) as usize;
-        let y1 = (win_y as f32 + bottom).max(0.0) as usize;
-        let h = y1.saturating_sub(y0).max(1);
-        let left = screen_x - size_x / 2;
-        let lx = left.max(0) as usize;
-        let lw = size_x.max(1) as usize;
+        // Araç küpünün 8 köşesini yerel koordinatlara hesapla.
+        let half_len = length / 2.0;
+        let half_wid = width / 2.0;
 
-        // Duvar arkasında kalan sütunları kırp (araç binanın üstüne binmez).
-        let (runs, run_count) = visible_runs(zbuf, depth, left, left + size_x);
-        if run_count == 0 {
-            return;
-        }
+        // 8 köşe: (l, w) where l ∈ {-half_len, half_len}, w ∈ {-half_wid, half_wid}
+        // ve z=0 (zemin) veya z=height (tavan)
+        let local_corners: [(f32, f32); 8] = [
+            (-half_len, -half_wid), // Ön-sol (z=0)
+            (half_len, -half_wid),  // Ön-sağ (z=0)
+            (half_len, half_wid),   // Arka-sağ (z=0)
+            (-half_len, half_wid),  // Arka-sol (z=0)
+            (-half_len, -half_wid), // Ön-sol tavan (z=height)
+            (half_len, -half_wid),  // Ön-sağ tavan (z=height)
+            (half_len, half_wid),   // Arka-sağ tavan (z=height)
+            (-half_len, half_wid),  // Arka-sol tavan (z=height)
+        ];
 
-        let factor = 0.42 + 0.58 * (1.0 - (depth / MAX_VIEW).clamp(0.0, 1.0));
-        let body = shade(car.color, factor);
-        let dark = shade(car.color, factor * 0.62);
-        let glass = shade(0x2C3A44, factor);
-        let tire = shade(0x14161A, factor);
+        // Her köşeyi dünya koordinatlarına çevir ve proje et
+        let mut projected: [(i32, f32); 8] = [(0, 0.0); 8];
+        let mut valid = [false; 8];
 
-        // Zemin gölgesi.
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            lx,
-            y1.saturating_sub(1),
-            lw,
-            1,
-            shade(0x000000, 0.45),
-        );
+        for (i, (local_l, local_w)) in local_corners.iter().enumerate() {
+            // Dünya koordinatlarına çevir:
+            let world_x = car.x + forward.0 * local_l + right.0 * local_w;
+            let world_y = car.y + forward.1 * local_l + right.1 * local_w;
 
-        // Gövde (ön yüz).
-        draw_clipped(fb, &runs, run_count, lx, y0, lw, h, body);
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            lx + (lw * 12 / 100),
-            y0 + (h * 8 / 100),
-            (lw * 76 / 100).max(1),
-            1,
-            shade(0xFFFFFF, factor * 0.42),
-        );
-
-        // 3D hacim: üst yüz (kabin) ve sağ yan yüz.
-        let top_h = (h * 6 / 100).max(1);
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            lx,
-            y0.saturating_sub(top_h),
-            lw,
-            top_h,
-            shade(0xE8E8EC, factor.min(1.2)),
-        );
-        let side_w = (lw * 14 / 100).max(1);
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            lx + lw.saturating_sub(side_w),
-            y0,
-            side_w,
-            h,
-            shade(dark, 0.85),
-        );
-
-        // Alt koyu şerit (plaka / tampon hizası).
-        let skirt = (h * 18 / 100).max(1);
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            lx,
-            y1.saturating_sub(skirt),
-            lw,
-            skirt,
-            dark,
-        );
-
-        // Cam bandı.
-        let glass_h = if side_view {
-            (h * 34 / 100).max(1)
-        } else {
-            (h * 38 / 100).max(1)
-        };
-        let glass_y = y0 + (h * 12 / 100).max(1);
-        let glass_x = if side_view {
-            lx + (lw * 10 / 100).max(1)
-        } else {
-            lx + 1
-        };
-        let glass_w = if side_view {
-            (lw * 80 / 100).max(1)
-        } else {
-            lw.saturating_sub(2).max(1)
-        };
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            glass_x,
-            glass_y,
-            glass_w,
-            glass_h.min(h),
-            glass,
-        );
-        // Cam üst kenarında ışık yansıması.
-        draw_clipped(
-            fb,
-            &runs,
-            run_count,
-            glass_x,
-            glass_y,
-            glass_w,
-            1,
-            shade(0x9FC6D8, factor * 0.8),
-        );
-
-        if side_view {
-            // Tekerlekler (yan görünüş).
-            let wheel_h = (h * 26 / 100).max(2);
-            let wheel_w = (lw * 18 / 100).max(2);
-            let wheel_y = y1.saturating_sub(wheel_h);
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 8 / 100),
-                wheel_y,
-                wheel_w,
-                wheel_h,
-                tire,
-            );
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 74 / 100).min(lx.saturating_add(lw)),
-                wheel_y,
-                wheel_w,
-                wheel_h,
-                tire,
-            );
-            // Kapı çizgisi.
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 46 / 100),
-                y0 + (h * 30 / 100),
-                1,
-                (h * 45 / 100).max(1),
-                dark,
-            );
-        }
-
-        if front {
-            // Farlar.
-            let lamp_h = (h * 13 / 100).max(2);
-            let lamp_w = (lw * 20 / 100).max(2);
-            let lamp_y = y1.saturating_sub(skirt + lamp_h + 1);
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 12 / 100),
-                lamp_y,
-                lamp_w,
-                lamp_h,
-                shade(0xFFF4D2, factor),
-            );
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 68 / 100).min(lx.saturating_add(lw)),
-                lamp_y,
-                lamp_w,
-                lamp_h,
-                shade(0xFFF4D2, factor),
-            );
-            // Ön tampon.
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx,
-                y1.saturating_sub(skirt),
-                lw,
-                1,
-                shade(0x2A2E34, factor),
-            );
-        }
-        if rear {
-            // Stop lambaları (fren sırasında parlak).
-            let lamp_h = (h * 15 / 100).max(2);
-            let lamp_w = (lw * 20 / 100).max(2);
-            let lamp_y = y1.saturating_sub(skirt + lamp_h + 1);
-            let lamp = if car.brake > 0.2 {
-                shade(0xFF5A4A, factor.min(1.1))
+            // Proje et (z-buffer testiyle)
+            if let Some((sx, dz, _)) = self.project(world_x, world_y, win_w, focal, zbuf) {
+                projected[i] = (sx, dz);
+                valid[i] = true;
             } else {
-                shade(0xB02A22, factor)
+                projected[i] = (0, MAX_VIEW + 1.0);
+                valid[i] = false;
+            }
+        }
+
+        // Yüzleri determin et. Her yüz için 4 köşe indeksi.
+        // 0=taban, 1=tavan, 2=ön, 3=arka, 4=sol, 5=sağ
+        let faces: [[usize; 4]; 6] = [
+            // Taban (z=0 plane): köşe 0,1,3,2 (counter-clockwise)
+            [0, 1, 3, 2],
+            // Tavan (z=height plane): köşe 4,5,7,6
+            [4, 5, 7, 6],
+            // Ön yüz: köşe 0,4,5,1
+            [0, 4, 5, 1],
+            // Arka yüz: köşe 3,7,6,2
+            [3, 7, 6, 2],
+            // Sol yüz: köşe 0,3,7,4
+            [0, 3, 7, 4],
+            // Sağ yüz: köşe 1,5,6,2
+            [1, 5, 6, 2],
+        ];
+
+        // Her yüz için z-buffer testi ve çizim
+        for (face_idx, face) in faces.iter().enumerate() {
+            // Tüm köşeler geçerli mi ve derinlik bütçesi içinde mi?
+            let mut all_valid = true;
+
+            for &corner_idx in face {
+                if !valid[corner_idx] {
+                    all_valid = false;
+                    break;
+                }
+                let dz = projected[corner_idx].1;
+                if dz > MAX_VIEW {
+                    all_valid = false;
+                    break;
+                }
+            }
+
+            if !all_valid {
+                continue;
+            }
+
+            // Z-buffer testi: tüm köşeler mevcut z-buffer değerinden daha önse?
+            let mut z_pass = true;
+            for &corner_idx in face {
+                let dz = projected[corner_idx].1;
+                let sx = projected[corner_idx].0 as usize;
+                if sx >= 1024 {
+                    z_pass = false;
+                    break;
+                }
+                if dz >= zbuf[sx] {
+                    z_pass = false;
+                    break;
+                }
+            }
+
+            if !z_pass {
+                continue;
+            }
+
+            // Yüz rengi - yön bazlı gölgelendirme
+            let face_color = match face_idx {
+                0 => car.color,             // Taban
+                1 => shade(car.color, 0.8), // Tavan
+                2 => car.color,             // Ön yüz
+                3 => shade(car.color, 0.7), // Arka yüz
+                4 => car.color,             // Sol yüz
+                5 => shade(car.color, 0.9), // Sağ yüz
+                _ => car.color,
             };
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 12 / 100),
-                lamp_y,
-                lamp_w,
-                lamp_h,
-                lamp,
-            );
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 68 / 100).min(lx.saturating_add(lw)),
-                lamp_y,
-                lamp_w,
-                lamp_h,
-                lamp,
-            );
-            // Plaka.
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                lx + (lw * 42 / 100),
-                y1.saturating_sub(skirt + 1),
-                (lw * 16 / 100).max(1),
-                1,
-                shade(0xE8E4D8, factor),
+
+            // Yüzü çiz:Horizontal lines at top and bottom of the face
+            let p0 = face[0];
+            let p1 = face[1];
+            let p2 = face[2];
+            let p3 = face[3];
+
+            let (x0, y0_z) = projected[p0];
+            let (x1, y1_z) = projected[p1];
+            let (x2, y2_z) = projected[p2];
+            let (x3, y3_z) = projected[p3];
+
+            // Üst yatay çizgi
+            if x0 >= 0 && x1 < win_w as i32 {
+                let draw_y = (win_y + horizon) as i32 - (y0_z.min(y1_z) * 0.5) as i32;
+                if draw_y >= 0 {
+                    fb.draw_rect(
+                        x0.max(0) as usize,
+                        draw_y.max(0) as usize,
+                        (x1 - x0).max(1) as usize,
+                        1,
+                        face_color,
+                    );
+                }
+            }
+            // Alt yatay çizgi
+            if x2 >= 0 && x3 < win_w as i32 {
+                let draw_y2 = (win_y + horizon) as i32 - (y2_z.min(y3_z) * 0.5) as i32;
+                if draw_y2 >= 0 {
+                    fb.draw_rect(
+                        x2.max(0) as usize,
+                        draw_y2.max(0) as usize,
+                        (x3 - x2).max(1) as usize,
+                        1,
+                        face_color,
+                    );
+                }
+            }
+        }
+
+        // Tekerlekler: araç rengine göre küçük daireler
+        let wheel_color = if is_night { 0xFFFFFF } else { car.color };
+        let wheel_size = 3usize;
+
+        // Ön sol tekerlek
+        let fl_proj = projected[0];
+        let fl_x = fl_proj.0 - 1;
+        let fl_y = (win_y + horizon) as i32 + 2;
+        if fl_x >= 0 && fl_x < win_w as i32 && fl_y >= 0 {
+            fb.draw_rect(
+                fl_x as usize,
+                fl_y as usize,
+                wheel_size,
+                wheel_size,
+                wheel_color,
             );
         }
 
-        // Tür karakteristikleri: taksi tabelası ve polis lambası.
-        match car.kind {
-            VehicleKind::Taxi => {
-                let sign_w = (lw * 34 / 100).max(3);
-                let sign_h = (h * 9 / 100).max(2);
-                let sign_x = screen_x.saturating_sub((sign_w / 2) as i32).max(0) as usize;
-                draw_clipped(
-                    fb,
-                    &runs,
-                    run_count,
-                    sign_x,
-                    y0.saturating_sub(sign_h),
-                    sign_w,
-                    sign_h,
-                    shade(0xF2E4B0, factor),
-                );
-                draw_clipped(
-                    fb,
-                    &runs,
-                    run_count,
-                    sign_x,
-                    y0.saturating_sub(sign_h),
-                    sign_w,
-                    1,
-                    shade(TAXI_STRIPE, factor),
-                );
-            }
-            VehicleKind::Police => {
-                let bar_w = (lw * 52 / 100).max(4);
-                let bar_h = (h * 9 / 100).max(2);
-                let bar_x = screen_x.saturating_sub((bar_w / 2) as i32).max(0) as usize;
-                let bar_y = y0.saturating_sub(bar_h);
-                draw_clipped(
-                    fb,
-                    &runs,
-                    run_count,
-                    bar_x,
-                    bar_y,
-                    bar_w / 2,
-                    bar_h,
-                    shade(0xE03A3A, factor),
-                );
-                draw_clipped(
-                    fb,
-                    &runs,
-                    run_count,
-                    bar_x + bar_w / 2,
-                    bar_y,
-                    bar_w - bar_w / 2,
-                    bar_h,
-                    shade(0x3A6BE0, factor),
-                );
-                // Gövde üzerindeki mavi kaplama bandı.
-                let band_y = y0 + (h * 52 / 100);
-                draw_clipped(
-                    fb,
-                    &runs,
-                    run_count,
-                    lx,
-                    band_y,
-                    lw,
-                    (h * 14 / 100).max(1),
-                    shade(POLICE_BLUE, factor),
-                );
-            }
-            _ => {}
+        // Ön sağ tekerlek
+        let fr_proj = projected[1];
+        let fr_x = fr_proj.0 - 1;
+        let fr_y = (win_y + horizon) as i32 + 2;
+        if fr_x >= 0 && fr_x < win_w as i32 && fr_y >= 0 {
+            fb.draw_rect(
+                fr_x as usize,
+                fr_y as usize,
+                wheel_size,
+                wheel_size,
+                wheel_color,
+            );
         }
 
-        // Gece modunda ön facing araçlar için far ışığı konisi (yere düşen ışık).
-        if is_night && front {
-            let glow_h = (h * 60 / 100).max(4);
-            let glow_w = (lw * 90 / 100).max(6);
-            let glow_x = lx.saturating_add((lw.saturating_sub(glow_w)) / 2);
-            let glow_y = y1.saturating_sub(glow_h);
-            let glow = shade(HEADLIGHT_COLOR, factor * 0.35);
-            draw_clipped(fb, &runs, run_count, glow_x, glow_y, glow_w, glow_h, glow);
-            // Far merkezi parlaklığı.
-            let core_h = (h * 10 / 100).max(2);
-            let core_w = (lw * 30 / 100).max(4);
-            let core_x = lx.saturating_add((lw.saturating_sub(core_w)) / 2);
-            let core_y = y1.saturating_sub(skirt + core_h + 2);
-            draw_clipped(
-                fb,
-                &runs,
-                run_count,
-                core_x,
-                core_y,
-                core_w,
-                core_h,
-                shade(0xFFFFFF, factor),
+        // Arka sol tekerlek
+        let rl_proj = projected[3];
+        let rl_x = rl_proj.0 - 1;
+        let rl_y = (win_y + horizon) as i32 - 2;
+        if rl_x >= 0 && rl_x < win_w as i32 && rl_y >= 0 {
+            fb.draw_rect(
+                rl_x as usize,
+                rl_y as usize,
+                wheel_size,
+                wheel_size,
+                wheel_color,
+            );
+        }
+
+        // Arka sağ tekerlek
+        let rr_proj = projected[2];
+        let rr_x = rr_proj.0 - 1;
+        let rr_y = (win_y + horizon) as i32 - 2;
+        if rr_x >= 0 && rr_x < win_w as i32 && rr_y >= 0 {
+            fb.draw_rect(
+                rr_x as usize,
+                rr_y as usize,
+                wheel_size,
+                wheel_size,
+                wheel_color,
             );
         }
     }

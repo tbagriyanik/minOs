@@ -1,4 +1,5 @@
 use crate::gui::theme;
+use alloc::vec::Vec;
 
 pub const MAX_SCREEN_WIDTH: usize = 2560;
 pub const MAX_SCREEN_HEIGHT: usize = 1600;
@@ -461,18 +462,8 @@ impl Framebuffer {
         let copy_w = x_end - x;
         let copy_h = y_end - y;
 
-        if crate::drivers::virtio_gpu::is_active() {
-            // VirtIO-GPU etkinse CPU bit-blit atla; donanım doğrudan bölgeyi
-            // host'a transfer eder ve flush yapar.
-            crate::drivers::virtio_gpu::flush_rect(
-                x as u32,
-                y as u32,
-                copy_w as u32,
-                copy_h as u32,
-            );
-            return;
-        }
-
+        // CPU kopyasi (backbuffer -> LFB). Bu adim atlanirsa LFB guncel
+        // icerigi tutmaz ve ekranda bayat kare kalir.
         let pitch_words = self.pitch / 4;
         let src_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *const u32;
 
@@ -488,6 +479,16 @@ impl Framebuffer {
                 y,
                 copy_w,
                 copy_h,
+            );
+        }
+
+        // VirtIO-GPU etkinse ayni bolgenin host'a aktarimi ve flush'i yapilir.
+        if crate::drivers::virtio_gpu::is_active() {
+            crate::drivers::virtio_gpu::flush_rect(
+                x as u32,
+                y as u32,
+                copy_w as u32,
+                copy_h as u32,
             );
         }
     }
@@ -1542,13 +1543,9 @@ impl Framebuffer {
     }
 
     pub fn flush(&mut self) {
-        if crate::drivers::virtio_gpu::is_active() {
-            // VirtIO-GPU etkinse CPU memcpy atla; donanım doğrudan backbuffer'ı
-            // host'a transfer eder ve flush yapar.
-            crate::drivers::virtio_gpu::flush_framebuffer();
-            return;
-        }
-
+        // CPU kopyasi (backbuffer -> LFB) her zaman yapilir. LFB, donanimin
+        // taradigi tek tampondur; atlanirsa ekranda son guncellenmis kare
+        // kalir.
         let pitch_words = self.pitch / 4;
         unsafe {
             if pitch_words == self.width {
@@ -1570,6 +1567,12 @@ impl Framebuffer {
                     );
                 }
             }
+        }
+
+        // VirtIO-GPU etkinse LFB'nin kendisi resource backing'idir; host'a
+        // aktarim ve flush ayrica yapilir.
+        if crate::drivers::virtio_gpu::is_active() {
+            crate::drivers::virtio_gpu::flush_framebuffer();
         }
     }
 
@@ -1622,6 +1625,81 @@ impl Framebuffer {
                         | lg[((c >> 8) & 255) as usize]
                         | lb[(c & 255) as usize];
                 }
+            }
+        }
+    }
+
+    /// Belirli bir bölgedeki pikselleri kutu bulanıklığıyla (box blur)
+    /// bulanıklıklaştırır. Cam/glass efekti için kullanılır. Yatay ve dikey
+    /// geçişler ayrı ayrı yapılır (separable box blur); her geçiş için yalnızca
+    /// bir satır/sütun arabelleği ayrılır.
+    pub fn blur_region(&mut self, x: usize, y: usize, w: usize, h: usize, radius: usize) {
+        if w == 0 || h == 0 || radius == 0 {
+            return;
+        }
+
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x1 = (x + w).min(self.width).min(self.clip.x1);
+        let y1 = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        let bw = x1 - x0;
+        let bh = y1 - y0;
+
+        // Yatay bulanıklık: her satır için pikseli komşularıyla ortalama.
+        let mut row_buf: Vec<u32> = Vec::with_capacity(bw);
+        for cy in y0..y1 {
+            row_buf.clear();
+            for cx in x0..x1 {
+                row_buf.push(self.get_pixel(cx, cy));
+            }
+            for (i, cx) in (x0..x1).enumerate() {
+                let start = i.saturating_sub(radius);
+                let end = (i + radius + 1).min(bw);
+                let mut sum_r: u32 = 0;
+                let mut sum_g: u32 = 0;
+                let mut sum_b: u32 = 0;
+                for &p in &row_buf[start..end] {
+                    sum_r += (p >> 16) & 0xFF;
+                    sum_g += (p >> 8) & 0xFF;
+                    sum_b += p & 0xFF;
+                }
+                let count = (end - start) as u32;
+                self.put_pixel(
+                    cx,
+                    cy,
+                    ((sum_r / count) << 16) | ((sum_g / count) << 8) | (sum_b / count),
+                );
+            }
+        }
+
+        // Dikey bulanıklık: her sütun için pikseli komşu satırlarla ortalama.
+        let mut col_buf: Vec<u32> = Vec::with_capacity(bh);
+        for cx in x0..x1 {
+            col_buf.clear();
+            for cy in y0..y1 {
+                col_buf.push(self.get_pixel(cx, cy));
+            }
+            for (i, cy) in (y0..y1).enumerate() {
+                let start = i.saturating_sub(radius);
+                let end = (i + radius + 1).min(bh);
+                let mut sum_r: u32 = 0;
+                let mut sum_g: u32 = 0;
+                let mut sum_b: u32 = 0;
+                for &p in &col_buf[start..end] {
+                    sum_r += (p >> 16) & 0xFF;
+                    sum_g += (p >> 8) & 0xFF;
+                    sum_b += p & 0xFF;
+                }
+                let count = (end - start) as u32;
+                self.put_pixel(
+                    cx,
+                    cy,
+                    ((sum_r / count) << 16) | ((sum_g / count) << 8) | (sum_b / count),
+                );
             }
         }
     }

@@ -6,13 +6,13 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-206%2C213%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-547%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
-[![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-206%2C435%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-551%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Version](https://img.shields.io/badge/Version-v2.7.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
 
-## Current · v2.6.0
+## Current · v2.7.0
 
 - The Paint app UI was redesigned end-to-end: two scale-aware tool strips, visible buttons with hover/press animation (Open/Save/Undo/Redo/Clear/Brush/Eraser/shapes), a color-picker popup, brush-tip preview, right-drag erase and Ctrl+N/Ctrl+O/Ctrl+S shortcuts; fast strokes and erasing are now gap-free via interpolation.
 - Application instances are lazily loaded: shell apps (File Manager, Settings, Browser, Music, Task Manager) stay resident; all other apps are loaded on first launch via `AppInstances::load` and dropped from memory when their last window closes — idle apps consume no RAM.
@@ -32,7 +32,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Keyboard and mouse now work in default QEMU runs: `run.ps1` now attaches `qemu-xhci + usb-kbd + usb-tablet` (USB HID) by default. `usb-tablet` uses absolute coordinates and QEMU syncs the mouse position directly with the host cursor, so the mouse moves smoothly without lag in QEMU. QEMU 11's default `pc` machine had the i8042 controller but no PS/2 keyboard/mouse device attached, so previous releases never received desktop input events; this is fixed. 
 - The desktop UI was polished and accelerated end-to-end: smooth mouse-wheel scrolling in every app; short open animations for windows, the start menu, context menus, the Alt+Tab switcher and the calendar/volume popups; tooltip balloons on the taskbar and tray; slide animations for toast notifications; and a glyph cache for text rendering. System Settings > Display gained **Interface animations** (disables all motion, including smooth scrolling) and **Transparent windows** toggles.
 - Accessibility improvements: title bar shows unsaved-changes indicator (●) and long-title ellipsis truncation (…); buttons distinguish selected (green border), focused (yellow focus ring) and disabled (dimmed) states; all windows get correct app ID (app_id) for title and icon.
-- The host suite reached 547 tests; all pass (547 passed, 0 failed).
+- The host suite reached 551 tests; all pass (551 passed, 0 failed).
 
 See the [full changelog](docs/CHANGELOG.en.md) for details.
 
@@ -52,7 +52,7 @@ Run host tests with:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Latest verification: **547 host tests passed** (`547 passed; 0 failed`). The project contains **206,213 Rust lines** in total: **195,541 lines under `src/`**, **4,893 lines under `tests/`**, and the remaining **5,779 lines** in fuzz targets, `build.rs`, `tools/` and root-level test helper files (excluding `target/`). Counts are physical lines in the current working tree's `.rs` files.
+Latest verification: **551 host tests passed** (`551 passed; 0 failed`). The project contains **206,435 Rust lines** in total: **195,763 lines under `src/`**, **4,893 lines under `tests/`**, and the remaining **5,779 lines** in fuzz targets, `build.rs`, `tools/` and root-level test helper files (excluding `target/`). Counts are physical lines in the current working tree's `.rs` files.
 
 ## Documentation
 

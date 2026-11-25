@@ -405,7 +405,7 @@ pub fn register_default_windows(
 
     // 14: Control Panel
     let cp_w = 620.min(width.saturating_sub(20)).max(200);
-    let cp_h = 470
+    let cp_h = 560
         .min(height.saturating_sub(scaled_taskbar_h() + 10))
         .max(120);
     compositor.add_window(gui::Window::new(

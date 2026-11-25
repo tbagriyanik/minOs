@@ -6,13 +6,13 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-206%2C213%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-547%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
-[![Version](https://img.shields.io/badge/Version-v2.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-206%2C435%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-551%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Version](https://img.shields.io/badge/Version-v2.7.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Çekirdek `no_std` ve `no_main` kullanır; grafik masaüstü ve yerleşik uygulamalar sunar.
 
-## Güncel bilgiler · v2.6.0
+## Güncel bilgiler · v2.7.0
 
 - Çizim Tahtası (Paint) arayüzü baştan tasarlandı: iki ölçeklenebilir araç şeridi, görünen ve hover/basma animasyonlu düğmeler (Aç/Kaydet/Geri Al/Yinele/Temizle/Fırça/Silgi/şekiller), renk seçici açılır penceresi, fırça ucu önizlemesi, sağ tuşla sürükleyerek silme ve Ctrl+N/Ctrl+O/Ctrl+S kısayolları; hızlı sürüklemelerde çizgi ve silme artık enterpolasyonla kesintisiz.
 - Uygulama örnekleri tembel yüklenir: kabuk uygulamaları (Dosya Yöneticisi, Ayarlar, Tarayıcı, Müzik, Görev Yöneticisi) her zaman bellekte kalır; diğer uygulamalar ilk açılışta `AppInstances::load` ile yüklenir ve son pencere kapanınca `unload` ile bellekten düşürülür — boşta duran uygulamalar RAM kaplamaz.
@@ -32,7 +32,7 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - QEMU varsayılan çalıştırmasında klavye ve fare artık çalışıyor: `run.ps1` artık varsayılan olarak `qemu-xhci + usb-kbd + usb-tablet` (USB HID) bağlar. `usb-tablet` mutlak koordinatlıdır ve QEMU fare konumunu doğrudan host imleciyle senkronize eder, böylece QEMU'da fare takılmadan pürüzsüz hareket eder. QEMU 11'in varsayılan `pc` makinesinde i8042 denetleyicisi olduğuna karşın PS/2 klavye/fare aygıtı bağlı gelmediği için önceki sürümlerde masaüstü giriş olayları gelmemişti. 
 - Masaüstü arayüzü uçtan uca cilalandı ve hızlandırıldı: tüm uygulamalarda tekerlekle yumuşak kaydırma; pencere, başlat menüsü, bağlam menüsü, Alt+Tab geçişi ve takvim/ses açılır pencerelerinde kısa açılış animasyonları; görev çubuğu ve tepside ipucu (tooltip) balonları; toast bildirimlerde kayma animasyonu; metin çiziminde glyph önbelleği. Sistem Ayarları > Ekran sekmesine **Arayüz animasyonları** (tüm hareketi kapatır) ve **Saydam pencereler** anahtarları eklendi.
 - Erişilebilirlik iyileştirmeleri: başlık çubuğunda kaydedilmemiş değişiklik işareti (●) ve uzun başlık kısaltma (…); düğmelerde seçili (yeşil çerçeve), odaklanmış (sarı odak halkası) ve devre dışı (koyulaştırılmış) durumlar ayrıştırıldı; tüm pencereler doğru uygulama kimliği (app_id) ile başlık ve simge alır.
-- Host test paketi 547 teste ulaştı; tüm testler geçti (547 passed, 0 failed).
+- Host test paketi 551 teste ulaştı; tüm testler geçti (551 passed, 0 failed).
 
 Değişikliklerin tam listesi: [Sürüm günlüğü](docs/CHANGELOG.md).
 
@@ -52,7 +52,7 @@ Host testlerini çalıştırmak için:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Son doğrulama: **547 host testi geçti** (`547 passed; 0 failed`). Projede toplam **206.213 Rust satırı** bulunur; bunun **195.541 satırı `src/`**, **4.893 satırı `tests/`**, kalan **5.779 satır** ise fuzz hedefleri, `build.rs`, `tools/` ve kök seviyedeki test yardımcı dosyalarıdır (`target/` hariç). Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
+Son doğrulama: **551 host testi geçti** (`551 passed; 0 failed`). Projede toplam **206.435 Rust satırı** bulunur; bunun **195.763 satırı `src/`**, **4.893 satırı `tests/`**, kalan **5.779 satır** ise fuzz hedefleri, `build.rs`, `tools/` ve kök seviyedeki test yardımcı dosyalarıdır (`target/` hariç). Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
 
 ## Özellikler
 

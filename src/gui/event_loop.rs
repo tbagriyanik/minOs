@@ -723,6 +723,23 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         open_app(&mut compositor, &mut apps, &fs_mgr.vfs, 14);
         apps::controlpanel::select_tab(3);
         apps::controlpanel::start_perf_test();
+        // Performans testi sekmesi için pencere boyutunu içeriğe göre ayarla.
+        if let Some((cidx, _)) = focused_window_for_app(&compositor, 14) {
+            if let Some(w) = compositor.windows[cidx].as_mut() {
+                let (cw, ch) = apps::controlpanel::content_extent();
+                let titlebar_h = crate::gui::scaled_titlebar_h();
+                let taskbar_h = crate::gui::scaled_taskbar_h();
+                let usable_h = height.saturating_sub(taskbar_h);
+                w.width = cw.min(width).max(w.width);
+                w.height = ch
+                    .saturating_add(titlebar_h + 1)
+                    .min(usable_h)
+                    .max(w.height);
+                if w.y + w.height > usable_h {
+                    w.y = usable_h.saturating_sub(w.height);
+                }
+            }
+        }
         serial_print("[BOOT] perftest=1: performans testi baslatildi.\n");
     }
 
@@ -5725,6 +5742,24 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                         apps::controlpanel::focus_tab(tab);
 
+                                        // Sekme değiştiğinde pencere boyutunu yeni içeriğe göre ayarla,
+                                        // Ağ Testi ve Performans Testi düğmeleri ekranın altında kalmasın.
+                                        if let Some(w) = compositor.windows[idx].as_mut() {
+                                            let (cw, ch) = apps::controlpanel::content_extent();
+                                            let titlebar_h = crate::gui::scaled_titlebar_h();
+                                            let taskbar_h = crate::gui::scaled_taskbar_h();
+                                            let usable_h = height.saturating_sub(taskbar_h);
+                                            w.width = cw.min(width).max(w.width);
+                                            w.height = ch
+                                                .saturating_add(titlebar_h + 1)
+                                                .min(usable_h)
+                                                .max(w.height);
+                                            if w.y + w.height > usable_h {
+                                                w.y = usable_h.saturating_sub(w.height);
+                                            }
+                                            state.force_render = true;
+                                        }
+
                                         break;
                                     }
                                 }
@@ -6442,6 +6477,23 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         apps.settings_app.select_tab_prev();
                     } else if app_is_focused(&compositor, 14) {
                         apps::controlpanel::select_tab_step(false);
+                        if let Some((cidx, _)) = focused_window_for_app(&compositor, 14) {
+                            if let Some(w) = compositor.windows[cidx].as_mut() {
+                                let (cw, ch) = apps::controlpanel::content_extent();
+                                let titlebar_h = crate::gui::scaled_titlebar_h();
+                                let taskbar_h = crate::gui::scaled_taskbar_h();
+                                let usable_h = height.saturating_sub(taskbar_h);
+                                w.width = cw.min(width).max(w.width);
+                                w.height = ch
+                                    .saturating_add(titlebar_h + 1)
+                                    .min(usable_h)
+                                    .max(w.height);
+                                if w.y + w.height > usable_h {
+                                    w.y = usable_h.saturating_sub(w.height);
+                                }
+                                state.force_render = true;
+                            }
+                        }
                     } else if app_is_focused(&compositor, 12) {
                         apps.viewer3d_app.as_mut().unwrap().rot_y -= 0.1;
                     } else if app_is_focused(&compositor, 15) {
@@ -6577,6 +6629,23 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         }
                     } else if app_is_focused(&compositor, 14) {
                         apps::controlpanel::select_tab_step(true);
+                        if let Some((cidx, _)) = focused_window_for_app(&compositor, 14) {
+                            if let Some(w) = compositor.windows[cidx].as_mut() {
+                                let (cw, ch) = apps::controlpanel::content_extent();
+                                let titlebar_h = crate::gui::scaled_titlebar_h();
+                                let taskbar_h = crate::gui::scaled_taskbar_h();
+                                let usable_h = height.saturating_sub(taskbar_h);
+                                w.width = cw.min(width).max(w.width);
+                                w.height = ch
+                                    .saturating_add(titlebar_h + 1)
+                                    .min(usable_h)
+                                    .max(w.height);
+                                if w.y + w.height > usable_h {
+                                    w.y = usable_h.saturating_sub(w.height);
+                                }
+                                state.force_render = true;
+                            }
+                        }
                     } else if app_is_focused(&compositor, 12) {
                         apps.viewer3d_app.as_mut().unwrap().rot_y += 0.1;
                     } else if app_is_focused(&compositor, 15) {

@@ -2095,9 +2095,9 @@ impl CityDriveApp {
             }
             self.draw_reward(fb, top, win_w, horizon, focal, &zbuf, reward);
         }
-        for car in self.traffic.iter() {
-            self.draw_vehicle(fb, top, win_w, horizon, focal, &zbuf, car);
-        }
+        self.draw_traffic_3d(
+            fb, win_x, top, win_w, view_h, horizon, focal, &zbuf, &budget,
+        );
         self.draw_particles(fb, top, win_w, horizon, focal, &zbuf);
 
         // 5) HUD.
@@ -2221,230 +2221,213 @@ impl CityDriveApp {
     ///
     /// Araç yönü ile görüş yönüne göre ön / arka / yan görünüş seçilir:
     /// önde farlar, arkada stop lambaları, yanda tekerlekler görünür.
-    fn draw_vehicle(
+    fn draw_traffic_3d(
         &self,
         fb: &mut Framebuffer,
-        win_y: usize,
+        win_x: usize,
+        top: usize,
         win_w: usize,
+        view_h: usize,
         horizon: usize,
         focal: f32,
         zbuf: &[f32; 1024],
-        car: &TrafficCar,
+        budget: &TimeBudget,
     ) {
+        use crate::apps::gfx3d::{self, Box3D, Camera3D, Face3D, PixelSink, ProjVertex, Shading};
+
+        struct FbSink<'a> {
+            fb: &'a mut Framebuffer,
+            win_x: usize,
+            top: usize,
+        }
+        impl<'a> PixelSink for FbSink<'a> {
+            fn put(&mut self, x: usize, y: usize, color: u32) {
+                self.fb.put_pixel(self.win_x + x, self.top + y, color);
+            }
+        }
+
+        let dir_x = cos(self.cam_dir);
+        let dir_y = sin(self.cam_dir);
+        let cam = Camera3D {
+            pos_x: self.car_x,
+            pos_y: self.car_y,
+            dir_x,
+            dir_y,
+            plane_x: -dir_y * PLANE_LEN,
+            plane_y: dir_x * PLANE_LEN,
+            eye_z: 1.15,
+            horizon_y: horizon as f32,
+            v_scale: focal,
+            view_w: win_w as f32,
+        };
         let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;
+        let shading = Shading {
+            light: (0.4, 0.3, 0.85),
+            ambient: if is_night { 0.35 } else { 0.55 },
+            diffuse: if is_night { 0.35 } else { 0.40 },
+            fill: 0.15,
+            fog_distance: MAX_VIEW,
+            fog_floor: 0.20,
+        };
 
-        // Aracın boyutları (metre cinsinden).
-        let (length, width, _height) = car.kind.dims();
+        // Her araç için gövde + kabin + far/stop + 4 tekerlek = en fazla 8 kutu -> 48 yüz.
+        // Uzaklığa göre en yakın 8 aracı tam 3B çiz.
+        let mut faces = [Face3D {
+            depth: 0.0,
+            color: 0,
+            v: [ProjVertex {
+                x: 0.0,
+                y: 0.0,
+                depth: 0.0,
+            }; 4],
+        }; 384];
+        let mut face_count = 0usize;
 
-        // Araç yön vektörü ve sağ vektörü.
-        let forward = (car.dir_x, car.dir_y);
-        let right = (-car.dir_y, car.dir_x);
-
-        // Araç küpünün 8 köşesini yerel koordinatlara hesapla.
-        let half_len = length / 2.0;
-        let half_wid = width / 2.0;
-
-        // 8 köşe: (l, w) where l ∈ {-half_len, half_len}, w ∈ {-half_wid, half_wid}
-        // ve z=0 (zemin) veya z=height (tavan)
-        let local_corners: [(f32, f32); 8] = [
-            (-half_len, -half_wid), // Ön-sol (z=0)
-            (half_len, -half_wid),  // Ön-sağ (z=0)
-            (half_len, half_wid),   // Arka-sağ (z=0)
-            (-half_len, half_wid),  // Arka-sol (z=0)
-            (-half_len, -half_wid), // Ön-sol tavan (z=height)
-            (half_len, -half_wid),  // Ön-sağ tavan (z=height)
-            (half_len, half_wid),   // Arka-sağ tavan (z=height)
-            (-half_len, half_wid),  // Arka-sol tavan (z=height)
-        ];
-
-        // Her köşeyi dünya koordinatlarına çevir ve proje et
-        let mut projected: [(i32, f32); 8] = [(0, 0.0); 8];
-        let mut valid = [false; 8];
-
-        for (i, (local_l, local_w)) in local_corners.iter().enumerate() {
-            // Dünya koordinatlarına çevir:
-            let world_x = car.x + forward.0 * local_l + right.0 * local_w;
-            let world_y = car.y + forward.1 * local_l + right.1 * local_w;
-
-            // Proje et (z-buffer testiyle)
-            if let Some((sx, dz, _)) = self.project(world_x, world_y, win_w, focal, zbuf) {
-                projected[i] = (sx, dz);
-                valid[i] = true;
-            } else {
-                projected[i] = (0, MAX_VIEW + 1.0);
-                valid[i] = false;
-            }
-        }
-
-        // Yüzleri determin et. Her yüz için 4 köşe indeksi.
-        // 0=taban, 1=tavan, 2=ön, 3=arka, 4=sol, 5=sağ
-        let faces: [[usize; 4]; 6] = [
-            // Taban (z=0 plane): köşe 0,1,3,2 (counter-clockwise)
-            [0, 1, 3, 2],
-            // Tavan (z=height plane): köşe 4,5,7,6
-            [4, 5, 7, 6],
-            // Ön yüz: köşe 0,4,5,1
-            [0, 4, 5, 1],
-            // Arka yüz: köşe 3,7,6,2
-            [3, 7, 6, 2],
-            // Sol yüz: köşe 0,3,7,4
-            [0, 3, 7, 4],
-            // Sağ yüz: köşe 1,5,6,2
-            [1, 5, 6, 2],
-        ];
-
-        // Her yüz için z-buffer testi ve çizim
-        for (face_idx, face) in faces.iter().enumerate() {
-            // Tüm köşeler geçerli mi ve derinlik bütçesi içinde mi?
-            let mut all_valid = true;
-
-            for &corner_idx in face {
-                if !valid[corner_idx] {
-                    all_valid = false;
-                    break;
-                }
-                let dz = projected[corner_idx].1;
-                if dz > MAX_VIEW {
-                    all_valid = false;
-                    break;
-                }
-            }
-
-            if !all_valid {
+        for car in self.traffic.iter() {
+            let dx = car.x - self.car_x;
+            let dy = car.y - self.car_y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq > MAX_VIEW * MAX_VIEW || dist_sq < 0.25 {
                 continue;
             }
-
-            // Z-buffer testi: tüm köşeler mevcut z-buffer değerinden daha önse?
-            let mut z_pass = true;
-            for &corner_idx in face {
-                let dz = projected[corner_idx].1;
-                let sx = projected[corner_idx].0 as usize;
-                if sx >= 1024 {
-                    z_pass = false;
-                    break;
-                }
-                if dz >= zbuf[sx] {
-                    z_pass = false;
-                    break;
-                }
+            if face_count + 48 > faces.len() {
+                break;
             }
 
-            if !z_pass {
-                continue;
-            }
+            let (length, width, height) = car.kind.dims();
+            let fwd = (car.dir_x, car.dir_y, 0.0);
+            let right = (-car.dir_y, car.dir_x, 0.0);
+            let up = (0.0, 0.0, 1.0);
+            let axes = [fwd, right, up];
 
-            // Yüz rengi - yön bazlı gölgelendirme
-            let face_color = match face_idx {
-                0 => car.color,             // Taban
-                1 => shade(car.color, 0.8), // Tavan
-                2 => car.color,             // Ön yüz
-                3 => shade(car.color, 0.7), // Arka yüz
-                4 => car.color,             // Sol yüz
-                5 => shade(car.color, 0.9), // Sağ yüz
-                _ => car.color,
-            };
-
-            // Yüzü çiz:Horizontal lines at top and bottom of the face
-            let p0 = face[0];
-            let p1 = face[1];
-            let p2 = face[2];
-            let p3 = face[3];
-
-            let (x0, y0_z) = projected[p0];
-            let (x1, y1_z) = projected[p1];
-            let (x2, y2_z) = projected[p2];
-            let (x3, y3_z) = projected[p3];
-
-            // Üst yatay çizgi
-            if x0 >= 0 && x1 < win_w as i32 {
-                let draw_y = (win_y + horizon) as i32 - (y0_z.min(y1_z) * 0.5) as i32;
-                if draw_y >= 0 {
-                    fb.draw_rect(
-                        x0.max(0) as usize,
-                        draw_y.max(0) as usize,
-                        (x1 - x0).max(1) as usize,
-                        1,
-                        face_color,
-                    );
-                }
-            }
-            // Alt yatay çizgi
-            if x2 >= 0 && x3 < win_w as i32 {
-                let draw_y2 = (win_y + horizon) as i32 - (y2_z.min(y3_z) * 0.5) as i32;
-                if draw_y2 >= 0 {
-                    fb.draw_rect(
-                        x2.max(0) as usize,
-                        draw_y2.max(0) as usize,
-                        (x3 - x2).max(1) as usize,
-                        1,
-                        face_color,
-                    );
-                }
-            }
-        }
-
-        // Tekerlekler: araç rengine göre küçük daireler
-        let wheel_color = if is_night { 0xFFFFFF } else { car.color };
-        let wheel_size = 3usize;
-
-        // Ön sol tekerlek
-        let fl_proj = projected[0];
-        let fl_x = fl_proj.0 - 1;
-        let fl_y = (win_y + horizon) as i32 + 2;
-        if fl_x >= 0 && fl_x < win_w as i32 && fl_y >= 0 {
-            fb.draw_rect(
-                fl_x as usize,
-                fl_y as usize,
-                wheel_size,
-                wheel_size,
-                wheel_color,
+            let body_h = height * 0.52;
+            let wheel_r = (height * 0.18).max(0.22);
+            let body_z = wheel_r * 0.5 + body_h * 0.5;
+            let body_colors = [car.color; 6];
+            gfx3d::push_box(
+                &mut faces,
+                &mut face_count,
+                &cam,
+                &Box3D {
+                    center: (car.x, car.y, body_z),
+                    half: (length * 0.48, width * 0.48, body_h * 0.5),
+                    axes,
+                    colors: body_colors,
+                    skip: 0b000010,
+                    emissive: false,
+                },
+                &shading,
             );
-        }
 
-        // Ön sağ tekerlek
-        let fr_proj = projected[1];
-        let fr_x = fr_proj.0 - 1;
-        let fr_y = (win_y + horizon) as i32 + 2;
-        if fr_x >= 0 && fr_x < win_w as i32 && fr_y >= 0 {
-            fb.draw_rect(
-                fr_x as usize,
-                fr_y as usize,
-                wheel_size,
-                wheel_size,
-                wheel_color,
+            // Kabin / camlı üst bölüm
+            let cabin_h = height * 0.40;
+            let cabin_z = wheel_r * 0.5 + body_h + cabin_h * 0.5;
+            let cabin_shift = -length * 0.06;
+            let glass = 0x243448;
+            let roof = shade(car.color, 0.88);
+            gfx3d::push_box(
+                &mut faces,
+                &mut face_count,
+                &cam,
+                &Box3D {
+                    center: (
+                        car.x + fwd.0 * cabin_shift,
+                        car.y + fwd.1 * cabin_shift,
+                        cabin_z,
+                    ),
+                    half: (length * 0.26, width * 0.41, cabin_h * 0.5),
+                    axes,
+                    colors: [roof, roof, glass, glass, glass, glass],
+                    skip: 0b000010,
+                    emissive: false,
+                },
+                &shading,
             );
+
+            // 4 tekerlek
+            let wx = length * 0.31;
+            let wy = width * 0.47;
+            let wheel_colors = [0x1A1C20; 6];
+            for &(sx, sy) in &[(-wx, -wy), (-wx, wy), (wx, -wy), (wx, wy)] {
+                gfx3d::push_box(
+                    &mut faces,
+                    &mut face_count,
+                    &cam,
+                    &Box3D {
+                        center: (
+                            car.x + fwd.0 * sx + right.0 * sy,
+                            car.y + fwd.1 * sx + right.1 * sy,
+                            wheel_r * 0.5,
+                        ),
+                        half: (wheel_r * 0.9, width * 0.08, wheel_r * 0.5),
+                        axes,
+                        colors: wheel_colors,
+                        skip: 0b000010,
+                        emissive: false,
+                    },
+                    &shading,
+                );
+            }
+
+            // Ön farlar ve arka stop lambaları
+            let front_off = length * 0.485;
+            let rear_off = -length * 0.485;
+            let light_y = width * 0.30;
+            let light_z = body_z;
+            for &sy in &[-light_y, light_y] {
+                gfx3d::push_box(
+                    &mut faces,
+                    &mut face_count,
+                    &cam,
+                    &Box3D {
+                        center: (
+                            car.x + fwd.0 * front_off + right.0 * sy,
+                            car.y + fwd.1 * front_off + right.1 * sy,
+                            light_z,
+                        ),
+                        half: (0.04, width * 0.10, body_h * 0.16),
+                        axes,
+                        colors: [0xFFF3C4; 6],
+                        skip: 0b000010,
+                        emissive: is_night,
+                    },
+                    &shading,
+                );
+                gfx3d::push_box(
+                    &mut faces,
+                    &mut face_count,
+                    &cam,
+                    &Box3D {
+                        center: (
+                            car.x + fwd.0 * rear_off + right.0 * sy,
+                            car.y + fwd.1 * rear_off + right.1 * sy,
+                            light_z,
+                        ),
+                        half: (0.04, width * 0.10, body_h * 0.16),
+                        axes,
+                        colors: [0xFF2B2B; 6],
+                        skip: 0b000010,
+                        emissive: true,
+                    },
+                    &shading,
+                );
+            }
         }
 
-        // Arka sol tekerlek
-        let rl_proj = projected[3];
-        let rl_x = rl_proj.0 - 1;
-        let rl_y = (win_y + horizon) as i32 - 2;
-        if rl_x >= 0 && rl_x < win_w as i32 && rl_y >= 0 {
-            fb.draw_rect(
-                rl_x as usize,
-                rl_y as usize,
-                wheel_size,
-                wheel_size,
-                wheel_color,
-            );
-        }
-
-        // Arka sağ tekerlek
-        let rr_proj = projected[2];
-        let rr_x = rr_proj.0 - 1;
-        let rr_y = (win_y + horizon) as i32 - 2;
-        if rr_x >= 0 && rr_x < win_w as i32 && rr_y >= 0 {
-            fb.draw_rect(
-                rr_x as usize,
-                rr_y as usize,
-                wheel_size,
-                wheel_size,
-                wheel_color,
+        if face_count > 0 {
+            let mut sink = FbSink { fb, win_x, top };
+            gfx3d::draw_faces(
+                &mut sink,
+                win_w,
+                view_h,
+                &zbuf[..win_w.min(1024)],
+                &mut faces,
+                face_count,
+                budget,
             );
         }
     }
 
-    /// Toplanabilir ödülü bilboard olarak çizer.
     fn draw_reward(
         &self,
         fb: &mut Framebuffer,

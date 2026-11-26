@@ -592,6 +592,11 @@ mod host_feature_tests;
 #[path = "host_gui_tests.rs"]
 mod host_gui_tests;
 
+// FPS oyunu 3B düşman modeli: silüet, dönüş, animasyon ve derinlik kırpma.
+#[cfg(test)]
+#[path = "host_fps_enemy_tests.rs"]
+mod host_fps_enemy_tests;
+
 // Toast bildirim sözleşmesi: tür başına renk/ikon/süre, otomatik kapanma,
 // Esc ile kapatma, duraklatma ve gerçek ilerleme göstergesi.
 #[cfg(test)]

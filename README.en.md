@@ -6,8 +6,8 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-206%2C435%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-551%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-202%2C729%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-558%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.7.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
@@ -21,7 +21,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Frozen-app monitoring now runs independently of the main loop, and the FPS 3D app reports real frame-rate measurements.
 - The FPS game has start and result menus; basic form controls support Tab navigation, Enter confirmation and Esc cancellation, including the Welcome screen.
 - Incomplete frames are no longer displayed when the render budget expires.
-- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 547 tests.
+- TLS/X.509 verification now checks leaf and intermediate validity, CA BasicConstraints/pathLen, and any KeyUsage/EKU extensions; the test-only validation bypass was removed. The host suite has 558 tests.
 - Kernel logging is now leveled and filterable: `trace/debug/info/warn/error` records tagged by target (`boot`, `driver`, `net`) are written to serial with a `[LEVEL][target]` prefix. Defaults come from the Limine cmdline `log=` token (`log=debug`, `log=info,net:trace`, …) and can be changed at runtime via `log ...` commands on the serial console; CI gained a `cargo clippy -D warnings` gate for the bare-metal kernel target.
 - The web browser is now a modern browser: HTTP/1.1 + TLS 1.3 gained HTTP/2 and HTTP/3 (QUIC); HTML5 gained inline SVG rasterization plus `<details>`/`<dialog>`/`<template>`/`<picture>` support; CSS3 gained context-aware selectors (`:nth-child`, `[attr=]`, `:is()`/`:not()`, sibling/ancestor combinators); Canvas 2D gained gradients, transforms, Bézier/arc paths, `save`/`restore` and `getImageData`/`putImageData`; minJs gained `XMLHttpRequest`, `history.pushState` and `requestAnimationFrame`.
 - Browser CSS3 `display` (flex/grid/block/inline/inline-block) and `overflow` rules are now applied correctly; a multi-CPU scheduler bug where a CPU skipped its own ready task and idled has been fixed.
@@ -32,7 +32,7 @@ minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its ke
 - Keyboard and mouse now work in default QEMU runs: `run.ps1` now attaches `qemu-xhci + usb-kbd + usb-tablet` (USB HID) by default. `usb-tablet` uses absolute coordinates and QEMU syncs the mouse position directly with the host cursor, so the mouse moves smoothly without lag in QEMU. QEMU 11's default `pc` machine had the i8042 controller but no PS/2 keyboard/mouse device attached, so previous releases never received desktop input events; this is fixed. 
 - The desktop UI was polished and accelerated end-to-end: smooth mouse-wheel scrolling in every app; short open animations for windows, the start menu, context menus, the Alt+Tab switcher and the calendar/volume popups; tooltip balloons on the taskbar and tray; slide animations for toast notifications; and a glyph cache for text rendering. System Settings > Display gained **Interface animations** (disables all motion, including smooth scrolling) and **Transparent windows** toggles.
 - Accessibility improvements: title bar shows unsaved-changes indicator (●) and long-title ellipsis truncation (…); buttons distinguish selected (green border), focused (yellow focus ring) and disabled (dimmed) states; all windows get correct app ID (app_id) for title and icon.
-- The host suite reached 551 tests; all pass (551 passed, 0 failed).
+- The host suite reached 558 tests; all pass (558 passed, 0 failed).
 
 See the [full changelog](docs/CHANGELOG.en.md) for details.
 
@@ -52,7 +52,7 @@ Run host tests with:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Latest verification: **551 host tests passed** (`551 passed; 0 failed`). The project contains **206,435 Rust lines** in total: **195,763 lines under `src/`**, **4,893 lines under `tests/`**, and the remaining **5,779 lines** in fuzz targets, `build.rs`, `tools/` and root-level test helper files (excluding `target/`). Counts are physical lines in the current working tree's `.rs` files.
+Latest verification: **558 host tests passed** (`558 passed; 0 failed`). The project contains **202,729 Rust lines** in total: **196,866 lines under `src/`**, **5,162 lines under `tests/`**, and the remaining **701 lines** in fuzz targets, `build.rs`, `tools/` and root-level test helper files (excluding `target/`). Counts are physical lines in the current working tree's `.rs` files.
 
 ## Documentation
 

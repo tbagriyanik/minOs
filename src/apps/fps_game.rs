@@ -1,6 +1,8 @@
 //! FPS tarzli performans testi oyunu.
 //! 3D ışın izleme (raycasting) motoru, fare ile bakis, WASD hareket,
 //! uzaklasma gürültüsüyle gölgelendirme, düşman hedefleri ve ses efektleri.
+//! Düşmanlar 3B kutulardan oluşan humanoid modeller olarak çizilir
+//! (bkz. `fps_enemy_model`).
 //! no_std + alloc ortamında çalışır, çekirdek audio cihazı üzerinden ses üretir.
 
 use crate::drivers::audio::AudioDevice;
@@ -49,13 +51,14 @@ const PLAYER_RADIUS: f32 = 0.25;
 const WALK_SPEED: f32 = 0.06;
 const SPRINT_SPEED: f32 = 0.10;
 const ROT_SPEED: f32 = 0.04;
-const MOUSE_SENS: f32 = 0.003;
+const MOUSE_SENS: f32 = 0.004;
 
 // ---------------------------------------------------------------------------
 // Görüş alanı ve render sabitleri
 // ---------------------------------------------------------------------------
-const FOV: f32 = 1.2; // ~69°
-const MAX_DEPTH: f32 = 20.0;
+// Not: 3B çizimde görüş alanı kameranın `plane` vektöründen türetilir; duvar
+// ve düşman modelleri aynı izdüşümü paylaşır. `MAX_DEPTH` model modülünden
+// gelir (duvar sisi ve düşman kırpma paylaşır).
 const ENEMIES_PER_FRAME: usize = 8;
 
 // ---------------------------------------------------------------------------
@@ -92,98 +95,35 @@ const KEY_RIGHT: u16 = 1 << 7;
 const KEY_SHIFT: u16 = 1 << 8;
 
 // ---------------------------------------------------------------------------
-// no_std için hızlı trigonometrik ve karekök fonksiyonları
+// Matematik ve 3B düşman modeli yardımcıları
 // ---------------------------------------------------------------------------
+//
+// Hızlı trigonometri ve düşman modeli çizimi bağımsız bir modülde toplandı;
+// böylece aynı model kodu hem çekirdekte hem de host testlerinde çalışır.
 
-const HALF_PI: f32 = PI / 2.0;
+use crate::apps::fps_enemy_model::{EnemyModel, ENEMY_KINDS};
+use crate::apps::gfx3d::{
+    fast_atan2, fast_cos, fast_sin, fast_sqrt, Camera3D, PixelSink, RenderBudget, MAX_DEPTH,
+};
 
-/// Taylor serisi ile sinüs (viewer3d ile aynı).
-#[inline(always)]
-fn fast_sin(mut x: f32) -> f32 {
-    if !x.is_finite() {
-        return 0.0;
-    }
-    // Açı normalizasyonu mutlaka sonlu kalsın. Bozuk/taşmış bir değer için
-    // `x -= TAU` sonsuz döngüye girebilirdi (özellikle uzun süreli dönüşte).
-    for _ in 0..8 {
-        if x <= PI {
-            break;
-        }
-        x -= TAU;
-    }
-    for _ in 0..8 {
-        if x >= -PI {
-            break;
-        }
-        x += TAU;
-    }
-    let x2 = x * x;
-    let x3 = x * x2;
-    let x5 = x3 * x2;
-    let x7 = x5 * x2;
-    x - (x3 / 6.0) + (x5 / 120.0) - (x7 / 5040.0)
+/// Framebuffer üzerine yazan `PixelSink` uygulaması.
+struct FramebufferSink<'a> {
+    fb: &'a mut Framebuffer,
+    origin_x: usize,
+    origin_y: usize,
 }
 
-#[inline(always)]
-fn fast_cos(x: f32) -> f32 {
-    fast_sin(x + HALF_PI)
+impl PixelSink for FramebufferSink<'_> {
+    fn put(&mut self, x: usize, y: usize, color: u32) {
+        self.fb
+            .put_pixel(self.origin_x + x, self.origin_y + y, color);
+    }
 }
 
-/// Newton-Raphson karekök.
-#[inline(always)]
-fn fast_sqrt(x: f32) -> f32 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    let mut g = if x >= 1.0 { x * 0.5 + 0.5 } else { 1.0 };
-    // Ekran ölçeğinde altı iterasyon yeterli doğruluk sağlar.
-    for _ in 0..6 {
-        g = 0.5 * (g + x / g);
-    }
-    g
-}
-
-/// atan2 yaklaşımı.
-#[inline(always)]
-fn fast_atan2(y: f32, x: f32) -> f32 {
-    if !x.is_finite() || !y.is_finite() {
-        return 0.0;
-    }
-    if x == 0.0 {
-        if y > 0.0 {
-            return HALF_PI;
-        }
-        if y < 0.0 {
-            return -HALF_PI;
-        }
-        return 0.0;
-    }
-    let mut atan = (y / x).atan_approx();
-    if x < 0.0 {
-        if y >= 0.0 {
-            atan += PI;
-        } else {
-            atan -= PI;
-        }
-    }
-    atan
-}
-
-/// f32 için atan yakınlığı (polinom).
-trait AtanApprox {
-    fn atan_approx(self) -> f32;
-}
-impl AtanApprox for f32 {
-    fn atan_approx(self) -> f32 {
-        let x = self.abs();
-        let x2 = x * x;
-        // x/(1+x^2) * (1 + x^2/3 + x^4/5 + ...) kısaltılmış seri
-        let result = x / (1.0 + x2) * (1.0 + x2 * (0.3333333 + x2 * (0.2 + x2 * 0.1428571)));
-        if self < 0.0 {
-            -result
-        } else {
-            result
-        }
+/// Zaman bütçesini model çizimine bağlar.
+impl RenderBudget for TimeBudget {
+    fn expired(&self) -> bool {
+        self.is_expired()
     }
 }
 
@@ -288,7 +228,7 @@ static MAP: [[u8; MAP_W]; MAP_H] = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
-/// Düşman: (x, y, can, aktif, saldırı zamanlayıcısı)
+/// Düşman: konum, yaşam durumu ve 3B model animasyon durumu.
 #[derive(Clone, Copy)]
 struct Enemy {
     x: f32,
@@ -296,6 +236,12 @@ struct Enemy {
     alive: bool,
     hit_timer: usize,
     attack_timer: usize,
+    /// Modelin baktığı yön (radyan, oyuncuya doğru).
+    facing: f32,
+    /// Yürüyüş animasyonu fazı.
+    walk_phase: f32,
+    /// Düşman türü (palet ve ölçek seçer).
+    kind: u8,
 }
 
 const MAX_ENEMIES: usize = 8;
@@ -417,6 +363,9 @@ impl FpsGameApp {
             alive: false,
             hit_timer: 0,
             attack_timer: 0,
+            facing: 0.0,
+            walk_phase: 0.0,
+            kind: 0,
         }; MAX_ENEMIES];
 
         // Başlangıç düşmanlarını harita üzerindeki boş hücrelere yerleştir.
@@ -440,6 +389,9 @@ impl FpsGameApp {
                         alive: true,
                         hit_timer: 0,
                         attack_timer: 0,
+                        facing: fast_atan2(spawn_py - ey, spawn_px - ex),
+                        walk_phase: 0.0,
+                        kind: (n % ENEMY_KINDS.len()) as u8,
                     };
                     n += 1;
                 }
@@ -1327,9 +1279,9 @@ impl FpsGameApp {
         }
 
         if !cancelled {
-            // Düşman sprite'larını çiz — ayrıntılandırılmış billboard + birleşik
-            // hacim (şapka, gövde, kollar, taban gölgesi) tarzı 3D görünüm.
-            let mut rendered_sprites: usize = 0;
+            // Düşmanlar gerçek 3B modeller olarak çizilir: kutulardan oluşan
+            // humanoid gövde, perspektif izdüşüm ve duvar derinlik tamponu ile.
+            let mut rendered_models: usize = 0;
             for e in self.enemies.iter().take(self.enemy_count) {
                 if budget.is_expired() {
                     cancelled = true;
@@ -1338,236 +1290,22 @@ impl FpsGameApp {
                 if !e.alive {
                     continue;
                 }
-                if rendered_sprites >= ENEMIES_PER_FRAME {
+                if rendered_models >= ENEMIES_PER_FRAME {
                     continue;
                 }
-                rendered_sprites += 1;
-
-                let dx = e.x - self.pos_x;
-                let dy = e.y - self.pos_y;
-                let dist_sq = dx * dx + dy * dy;
-                let dist = if dist_sq > 0.0 {
-                    fast_sqrt(dist_sq)
-                } else {
-                    0.0
-                };
-                if dist > MAX_DEPTH || dist < 0.5 {
-                    continue;
-                }
-                let angle = fast_atan2(dy, dx);
-                let mut rel = angle - fast_atan2(self.dir_y, self.dir_x);
-                if rel < -PI {
-                    rel += TAU;
-                } else if rel > PI {
-                    rel -= TAU;
-                }
-                if rel.abs() > FOV / 2.0 + 0.5 {
-                    continue;
-                }
-
-                let screen_x = (rel / (FOV / 2.0) + 1.0) / 2.0 * (w as f32);
-                if screen_x < 0.0 {
-                    continue;
-                }
-                let sx = screen_x as usize;
-                if sx >= w {
-                    continue;
-                }
-
-                // Mesafeye göre boyut: yaklaşık insan ölçeği (yaklaşık 0.9).
-                let sprite_h = (render_h as f32 / dist.max(0.3) * 0.62) as usize;
-                let sprite_w = (sprite_h / 2).clamp(10, 96);
-                let draw_start_y = (render_h / 2).saturating_sub(sprite_h / 2);
-                let draw_end_y = (render_h / 2).saturating_add(sprite_h / 2).min(render_h);
-
-                if dist < z_buffer[sx] {
-                    let hit = e.hit_timer > 0;
-                    // Ana renkler (vurulmuşta kırmızıya dön).
-                    let body_col = if hit { 0xE04A3A } else { 0xB03A6A };
-                    let torso_col = if hit { 0xD06050 } else { 0x7A2D4E };
-                    let head_col = if hit { 0xF08A7C } else { 0xF2B09A };
-                    let leg_col = if hit { 0xA03A2E } else { 0x501C30 };
-                    let eye_col = if hit { 0x1A0D08 } else { 0xFFE79A };
-                    let dark = 0x140B18;
-
-                    let cx = render_x + sx;
-                    let cy0 = render_y + draw_start_y;
-                    let cy1 = render_y + draw_end_y;
-                    let sw = sprite_w;
-                    let body_h = cy1.saturating_sub(cy0);
-
-                    // Taban gölgesi: düşmanın ayaklarının etrafında koyu oval.
-                    let shadow_w = sw * 12 / 10;
-                    let sh_y = cy1.saturating_sub(1);
-                    for xx in 0..shadow_w {
-                        let px = cx.saturating_sub(shadow_w / 2) + xx;
-                        let local_x = px.saturating_sub(render_x);
-                        if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                            let t = (xx as f32 / shadow_w as f32 - 0.5).abs() * 2.0;
-                            if t < 1.0 {
-                                fb.put_pixel(px, sh_y, 0x0A0710);
-                            }
-                        }
-                    }
-
-                    // Gövde (tüm sprite boyunca, dikey bantlar ile gölgelendirme).
-                    for yy in cy0..cy1 {
-                        if budget.is_expired() {
-                            cancelled = true;
-                            break;
-                        }
-                        let rel_y =
-                            yy.saturating_sub(cy0) as f32 / (cy1.saturating_sub(cy0).max(1) as f32);
-                        let is_head = rel_y < 0.26;
-                        let is_leg = rel_y > 0.72;
-                        for xx in 0..sw {
-                            let px = cx.saturating_sub(sw / 2) + xx;
-                            let local_x = px.saturating_sub(render_x);
-                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                let rel_x = xx as f32 / sw as f32 - 0.5;
-                                let edge = rel_x.abs() > 0.46;
-                                let shade_x = 1.0 - rel_x.abs() * 0.45;
-                                let base = if is_head {
-                                    head_col
-                                } else if is_leg {
-                                    leg_col
-                                } else {
-                                    body_col
-                                };
-                                let r = (((base >> 16) & 0xFF) as f32 * shade_x) as u32;
-                                let g = (((base >> 8) & 0xFF) as f32 * shade_x) as u32;
-                                let b = ((base & 0xFF) as f32 * shade_x) as u32;
-                                let color = if edge { dark } else { (r << 16) | (g << 8) | b };
-                                fb.put_pixel(px, yy, color);
-                            }
-                        }
-                    }
-                    if cancelled {
-                        break;
-                    }
-
-                    // Başlık / kafa gölgesi (tepe kısım).
-                    let head_h = (body_h * 26 / 100).max(3);
-                    let head_top = cy0;
-                    for yy in head_top..head_top.saturating_add(head_h) {
-                        if yy >= cy1 {
-                            break;
-                        }
-                        let rel_y = yy.saturating_sub(head_top) as f32 / head_h.max(1) as f32;
-                        let intensity = 0.65 + rel_y * 0.35;
-                        for xx in 0..sw {
-                            let px = cx.saturating_sub(sw / 2) + xx;
-                            let local_x = px.saturating_sub(render_x);
-                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                let r = (((head_col >> 16) & 0xFF) as f32 * intensity) as u32;
-                                let g = (((head_col >> 8) & 0xFF) as f32 * intensity) as u32;
-                                let b = ((head_col & 0xFF) as f32 * intensity) as u32;
-                                fb.put_pixel(px, yy, (r << 16) | (g << 8) | b);
-                            }
-                        }
-                    }
-                    if cancelled {
-                        break;
-                    }
-
-                    // Tek gövde bantları: omuzlar ve gövde sınırları.
-                    let torso_top = cy0.saturating_add(body_h * 26 / 100);
-                    let torso_bottom = cy0.saturating_add(body_h * 72 / 100);
-                    for yy in torso_top..torso_bottom {
-                        if yy >= cy1 {
-                            break;
-                        }
-                        for xx in 0..sw {
-                            let px = cx.saturating_sub(sw / 2) + xx;
-                            let local_x = px.saturating_sub(render_x);
-                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                let rel_y = (yy - torso_top) as f32
-                                    / (torso_bottom - torso_top).max(1) as f32;
-                                let shade = 0.55 + rel_y * 0.45;
-                                let r = (((torso_col >> 16) & 0xFF) as f32 * shade) as u32;
-                                let g = (((torso_col >> 8) & 0xFF) as f32 * shade) as u32;
-                                let b = ((torso_col & 0xFF) as f32 * shade) as u32;
-                                fb.put_pixel(px, yy, (r << 16) | (g << 8) | b);
-                            }
-                        }
-                    }
-                    if cancelled {
-                        break;
-                    }
-
-                    // Kollar: omuz çizgisinden kalça çizgisine (dış kenarda koyu).
-                    let arm_w = (sw / 5).max(2);
-                    for side in [0usize, 1usize] {
-                        for yy in torso_top..torso_bottom.min(cy1) {
-                            if budget.is_expired() {
-                                cancelled = true;
-                                break;
-                            }
-                            for ax in 0..arm_w {
-                                let px = if side == 0 {
-                                    cx.saturating_sub(sw / 2) + ax
-                                } else {
-                                    cx.saturating_add(sw / 2).saturating_sub(arm_w) + ax
-                                };
-                                let local_x = px.saturating_sub(render_x);
-                                if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                    let r = (((torso_col >> 16) & 0xFF) as f32 * 0.7) as u32;
-                                    let g = (((torso_col >> 8) & 0xFF) as f32 * 0.7) as u32;
-                                    let b = ((torso_col & 0xFF) as f32 * 0.7) as u32;
-                                    fb.put_pixel(px, yy, (r << 16) | (g << 8) | b);
-                                }
-                            }
-                        }
-                    }
-                    if cancelled {
-                        break;
-                    }
-
-                    // Gözler (nişanlanabilir kontrast noktaları).
-                    let eye_y = cy0.saturating_add(body_h / 6);
-                    let eye_w = (sw / 6).max(2);
-                    let left_eye_x = cx.saturating_sub(sw / 3);
-                    let right_eye_x = cx.saturating_add(sw / 3).saturating_sub(eye_w);
-                    fb.draw_rect(left_eye_x, eye_y, eye_w, (body_h / 12).max(2), eye_col);
-                    fb.draw_rect(right_eye_x, eye_y, eye_w, (body_h / 12).max(2), eye_col);
-
-                    // Görünüm yüksekliği üstünde küçük bir fark belirginleştirici.
-                    let top_h = (sprite_h * 5 / 100).max(1);
-                    let ty0 = cy0.saturating_sub(top_h);
-                    let top_col = MinGuiCompositor::shade(body_col, 40);
-                    for yy in ty0..cy0 {
-                        if budget.is_expired() {
-                            cancelled = true;
-                            break;
-                        }
-                        for xx in 0..sw {
-                            let px = cx.saturating_sub(sw / 2) + xx;
-                            let local_x = px.saturating_sub(render_x);
-                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                fb.put_pixel(px, yy, top_col);
-                            }
-                        }
-                    }
-                    if cancelled {
-                        break;
-                    }
-
-                    // Sağ yan yüz (hacim).
-                    let side_w = (sprite_w * 12 / 100).max(1);
-                    let side_col = MinGuiCompositor::shade(body_col, -60);
-                    for yy in cy0..cy1 {
-                        if budget.is_expired() {
-                            cancelled = true;
-                            break;
-                        }
-                        for xx in 0..side_w {
-                            let px = cx.saturating_add(sw / 2) + xx;
-                            let local_x = px.saturating_sub(render_x);
-                            if px < render_x + w && local_x < w && dist < z_buffer[local_x] {
-                                fb.put_pixel(px, yy, side_col);
-                            }
-                        }
-                    }
+                rendered_models += 1;
+                if !self.draw_enemy_3d(
+                    fb,
+                    render_x,
+                    render_y,
+                    w,
+                    render_h,
+                    &z_buffer[..w],
+                    e,
+                    &budget,
+                ) {
+                    cancelled = true;
+                    break;
                 }
             }
         }
@@ -1602,6 +1340,58 @@ impl FpsGameApp {
         }
 
         !cancelled
+    }
+
+    // -----------------------------------------------------------------------
+    // 3B düşman modeli çizimi
+    // -----------------------------------------------------------------------
+
+    /// Bir düşmanın 3B modelini çizer.
+    ///
+    /// Model çizimi `fps_enemy_model` modülünde yaşar; burada yalnızca
+    /// framebuffer ile model modülü arasındaki köprü kurulur. Bütçe aşılırsa
+    /// `false` döner.
+    fn draw_enemy_3d(
+        &self,
+        fb: &mut Framebuffer,
+        render_x: usize,
+        render_y: usize,
+        view_w: usize,
+        view_h: usize,
+        zbuf: &[f32],
+        e: &Enemy,
+        budget: &TimeBudget,
+    ) -> bool {
+        if view_w < 8 || view_h < 8 || zbuf.len() < view_w {
+            return true;
+        }
+        let cam = Camera3D {
+            pos_x: self.pos_x,
+            pos_y: self.pos_y,
+            dir_x: self.dir_x,
+            dir_y: self.dir_y,
+            plane_x: self.plane_x,
+            plane_y: self.plane_y,
+            eye_z: 0.5,
+            v_scale: view_h as f32,
+            horizon_y: view_h as f32 / 2.0,
+            view_w: view_w as f32,
+        };
+        let model = EnemyModel {
+            x: e.x,
+            y: e.y,
+            facing: e.facing,
+            walk_phase: e.walk_phase,
+            kind: e.kind,
+        };
+        let mut sink = FramebufferSink {
+            fb,
+            origin_x: render_x,
+            origin_y: render_y,
+        };
+        crate::apps::fps_enemy_model::draw_enemy_model(
+            &mut sink, &cam, zbuf, view_w, view_h, &model, budget,
+        )
     }
 
     /// Geriye uyumlu: bütçe kontrolü olmadan 3D render yapar.
@@ -2424,6 +2214,41 @@ impl FpsGameApp {
         }
     }
 
+    /// Basılı tutulan klavye tuşlarını (`KeyboardState`) her karede senkronize eder.
+    /// Böylece W/A/S/D ve ok tuşları tek tek basmak gerekmeden akıcı hareket sağlar.
+    pub fn sync_held_keys(&mut self, kbd: &crate::drivers::keyboard::KeyboardState) {
+        if self.result != GameResult::Playing {
+            return;
+        }
+        if kbd.is_held(0x11) {
+            self.key_mask |= KEY_W;
+        }
+        if kbd.is_held(0x1F) {
+            self.key_mask |= KEY_S;
+        }
+        if kbd.is_held(0x1E) {
+            self.key_mask |= KEY_A;
+        }
+        if kbd.is_held(0x20) {
+            self.key_mask |= KEY_D;
+        }
+        if kbd.is_held_extended(0x48) {
+            self.key_mask |= KEY_UP;
+        }
+        if kbd.is_held_extended(0x50) {
+            self.key_mask |= KEY_DOWN;
+        }
+        if kbd.is_held_extended(0x4B) {
+            self.key_mask |= KEY_LEFT;
+        }
+        if kbd.is_held_extended(0x4D) {
+            self.key_mask |= KEY_RIGHT;
+        }
+        if kbd.shift {
+            self.key_mask |= KEY_SHIFT;
+        }
+    }
+
     /// Fare hareketi ile bakış.
     pub fn handle_mouse_look(&mut self, dx: f32) {
         if self.result == GameResult::Playing {
@@ -2656,6 +2481,11 @@ impl FpsGameApp {
 
                     let mut should_attack = false;
 
+                    // 3B model yönü: düşman oyuncuya doğru bakar.
+                    e.facing = fast_atan2(dy, dx);
+
+                    let prev_x = e.x;
+                    let prev_y = e.y;
                     if dist > ENEMY_ATTACK_DIST && dist < ENEMY_CHASE_RADIUS {
                         let step = ENEMY_CHASE_SPEED;
                         let nx = e.x + (dx / dist) * step;
@@ -2668,6 +2498,11 @@ impl FpsGameApp {
                         }
                     } else if dist <= ENEMY_ATTACK_DIST && e.attack_timer == 0 {
                         should_attack = true;
+                    }
+
+                    // Yürüyüş animasyonu fazı: hareket ettikçe ilerler.
+                    if e.x != prev_x || e.y != prev_y {
+                        e.walk_phase = (e.walk_phase + 0.28) % TAU;
                     }
 
                     // Değişiklikleri geri yaz.
@@ -2730,6 +2565,9 @@ impl FpsGameApp {
                                 alive: true,
                                 hit_timer: 0,
                                 attack_timer: 0,
+                                facing: fast_atan2(self.pos_y - sy, self.pos_x - sx),
+                                walk_phase: 0.0,
+                                kind: ((self.wave + i) % ENEMY_KINDS.len()) as u8,
                             };
                         }
                     }

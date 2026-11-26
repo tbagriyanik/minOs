@@ -202,38 +202,7 @@ fn publish_runtime_app_memory(
 
     // Seri döküm pahalıdır: ~18 satır 115200 baud'da yüzlerce ms UART
     // meşguliyeti ve SERIAL_LOCK tutma süresi demektir. Kayıt defteri her
-    // çağrıda güncellenir (Görev Yöneticisi bunu okur); `[APP-MEM]` seri
-    // satırları ilk çağrıda ve sonrasında en fazla 5 saniyede bir gönderilir.
-    // `test_qemu.ps1` işaret satırını başlangıçtaki tam dökümden yakalar.
-    static LAST_SERIAL_DUMP_MS: core::sync::atomic::AtomicU64 =
-        core::sync::atomic::AtomicU64::new(u64::MAX);
-    let now_ms = monotonic_ms();
-    let last_dump = LAST_SERIAL_DUMP_MS.load(core::sync::atomic::Ordering::Relaxed);
-    if last_dump == u64::MAX || now_ms.wrapping_sub(last_dump) >= 5_000 {
-        LAST_SERIAL_DUMP_MS.store(now_ms, core::sync::atomic::Ordering::Relaxed);
-
-        let mut total = gui::TextBuf::new();
-        total.push_str("[APP-MEM] toplam=");
-        total.push_usize(apps::memory::total());
-        total.push_str(" bayt, guncelleme=");
-        total.push_usize(apps::memory::snapshot_seq() as usize);
-        serial_print(total.as_str());
-        serial_print("\n");
-
-        // `app=` ve `bytes=` alan sırası/düzeni `test_qemu.ps1` tarafından
-        // ayrıştırıldığı için korunur; uygulama adı sonda ek bilgi olarak verilir.
-        apps::memory::for_each(|app_id, bytes| {
-            let mut line = gui::TextBuf::new();
-            line.push_str("[APP-MEM] app=");
-            line.push_usize(app_id);
-            line.push_str(" bytes=");
-            line.push_usize(bytes);
-            line.push_str(" name=");
-            line.push_str(apps::memory::app_name(app_id));
-            serial_print(line.as_str());
-            serial_print("\n");
-        });
-    }
+    // `apps::memory` anlık görüntüsü Görev Yöneticisi tarafından doğrudan okunur.
 }
 
 /// `FileManagerApp` onay iletişim kutusu açıkken Enter onayını ilgili diyalog
@@ -10009,10 +9978,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // Mouse look only when FPS-3D window is focused; avoids unnecessary
         // redraws when another window has focus.
         if mouse_moved && app_is_focused(&compositor, 16) {
-            let dx = (mouse.x as f32 - state.last_mouse_x as f32) * 0.5;
-            if dx.abs() > 0.5 {
+            let dx = mouse.x as f32 - state.last_mouse_x as f32;
+            if dx.abs() > 0.0 {
                 apps.fps_3d_app.as_mut().unwrap().handle_mouse_look(dx);
-                state.force_render = true;
+            }
+            if apps.fps_3d_app.as_ref().is_some_and(|g| g.is_playing()) {
+                mouse.x = (width as i32) / 2;
+                mouse.y = (height as i32) / 2;
             }
         }
         // Delta hesaplandıktan sonra referans konumunu güncelle. Önceki sıra
@@ -10251,6 +10223,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     apps::guard::prepare_recoverable(16, apps::guard::NO_WINDOW);
                 if unsafe { apps::guard::begin(fps3d_start) } {
                     let fps3d_start_ms = crate::monotonic_ms();
+                    if app_is_focused(&compositor, 16) {
+                        apps.fps_3d_app.as_mut().unwrap().sync_held_keys(keyboard);
+                    }
                     let fps3d_completed = apps
                         .fps_3d_app
                         .as_mut()

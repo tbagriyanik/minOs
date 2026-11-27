@@ -48,10 +48,10 @@ const RELOAD_TICKS: usize = 40;
 // Oyuncu ve hareket sabitleri
 // ---------------------------------------------------------------------------
 const PLAYER_RADIUS: f32 = 0.25;
-const WALK_SPEED: f32 = 0.06;
-const SPRINT_SPEED: f32 = 0.10;
-const ROT_SPEED: f32 = 0.04;
-const MOUSE_SENS: f32 = 0.004;
+const WALK_SPEED: f32 = 0.085;
+const SPRINT_SPEED: f32 = 0.135;
+const ROT_SPEED: f32 = 0.055;
+const MOUSE_SENS: f32 = 0.0055;
 
 // ---------------------------------------------------------------------------
 // Görüş alanı ve render sabitleri
@@ -60,6 +60,38 @@ const MOUSE_SENS: f32 = 0.004;
 // ve düşman modelleri aynı izdüşümü paylaşır. `MAX_DEPTH` model modülünden
 // gelir (duvar sisi ve düşman kırpma paylaşır).
 const ENEMIES_PER_FRAME: usize = 8;
+
+// ---------------------------------------------------------------------------
+// Ortak 3B geometri (zemin / tavan / duvar)
+//
+// ---------------------------------------------------------------------------
+// Bütün yüzeyler tek bir perspektif modelinde hesaplanır:
+//
+//     ekran_y = ufuk + (göz_yüksekliği - dünya_z) * ölçek / derinlik
+//
+// `göz yüksekliği` duvar ortasındadır (duvarlar 1 dünya birimi yükseklikte),
+// `ölçek` ise ekran yüksekliğidir (odak uzaklığı = ekran yüksekliği).
+// Ufuk satırı dikey bakışla (pitch) kaydığı için zemin, tavan, duvarlar ve
+// düşman modelleri aynı anda hareket eder; aralarında boşluk veya kayma
+// oluşmaz.
+/// Göz yüksekliği (dünya birimi).
+const EYE_Z: f32 = 0.5;
+/// Duvar ve tavan yüksekliği (dünya birimi).
+const WALL_H: f32 = 1.0;
+/// Zemin düzlemi rengi (1 dünya birimlik karo).
+const FLOOR_BASE: u32 = 0x9C5F35;
+/// Dama deseninde ikinci zemin tonu.
+const FLOOR_ALT: u32 = 0x8B5330;
+/// Zemin ızgara çizgisi rengi.
+const FLOOR_GRID: u32 = 0x4A3626;
+/// Tavan düzlemi rengi (1 dünya birimlik karo).
+const CEIL_BASE: u32 = 0x3E5064;
+/// Dama deseninde ikinci tavan tonu.
+const CEIL_ALT: u32 = 0x35455A;
+/// Tavan ızgara çizgisi rengi.
+const CEIL_GRID: u32 = 0x28313E;
+/// Uzaklıkta sis rengine karışan arka plan tonu.
+const FOG_COLOR: u32 = 0x1E2836;
 
 // ---------------------------------------------------------------------------
 // Görsel efekt sabitleri
@@ -103,7 +135,8 @@ const KEY_SHIFT: u16 = 1 << 8;
 
 use crate::apps::fps_enemy_model::{EnemyModel, ENEMY_KINDS};
 use crate::apps::gfx3d::{
-    fast_atan2, fast_cos, fast_sin, fast_sqrt, Camera3D, PixelSink, RenderBudget, MAX_DEPTH,
+    fast_atan2, fast_cos, fast_floor, fast_sin, fast_sqrt, plane_depth, screen_y, Camera3D,
+    PixelSink, RenderBudget, MAX_DEPTH,
 };
 
 /// Framebuffer üzerine yazan `PixelSink` uygulaması.
@@ -198,6 +231,64 @@ fn metal_texel(x: usize, y: usize) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Ortak geometri yardımcıları
+// ---------------------------------------------------------------------------
+
+/// Rengi verilen çarpanla karartır (sis/gölge).
+#[inline(always)]
+fn scale_color(color: u32, factor: f32) -> u32 {
+    let r = (((color >> 16) & 0xFF) as f32 * factor).min(255.0) as u32;
+    let g = (((color >> 8) & 0xFF) as f32 * factor).min(255.0) as u32;
+    let b = ((color & 0xFF) as f32 * factor).min(255.0) as u32;
+    (r << 16) | (g << 8) | b
+}
+
+/// Mesafeye bağlı karartma çarpanı. Duvarlar, zemin ve tavan aynı sis
+/// eğrisini paylaşır; böylece derinlik ipuçları birbiriyle tutarlıdır.
+#[inline(always)]
+fn depth_shade(depth: f32) -> f32 {
+    (0.5 + 0.5 * (1.0 - (depth / MAX_DEPTH).clamp(0.0, 1.0))).min(1.0)
+}
+
+/// Zemin düzlemi (z = 0) dokusu: 1 dünya birimlik ızgara çizgileri ve dama
+/// deseni. Dünya koordinatlarından türetildiği için ızgara çizgileri duvar
+/// dipleriyle tam hizada çizilir.
+#[inline(always)]
+fn floor_texel(world_x: f32, world_y: f32, shade: f32) -> u32 {
+    let fx = fast_floor(world_x);
+    let fy = fast_floor(world_y);
+    let tx = world_x - fx;
+    let ty = world_y - fy;
+    let on_grid = tx < 0.035 || tx > 0.965 || ty < 0.035 || ty > 0.965;
+    let base = if on_grid {
+        FLOOR_GRID
+    } else if ((fx as i32) + (fy as i32)) & 1 == 0 {
+        FLOOR_BASE
+    } else {
+        FLOOR_ALT
+    };
+    scale_color(base, shade)
+}
+
+/// Tavan düzlemi (z = WALL_H) dokusu — zeminle aynı ızgara mantığı.
+#[inline(always)]
+fn ceiling_texel(world_x: f32, world_y: f32, shade: f32) -> u32 {
+    let fx = fast_floor(world_x);
+    let fy = fast_floor(world_y);
+    let tx = world_x - fx;
+    let ty = world_y - fy;
+    let on_grid = tx < 0.035 || tx > 0.965 || ty < 0.035 || ty > 0.965;
+    let base = if on_grid {
+        CEIL_GRID
+    } else if ((fx as i32) + (fy as i32)) & 1 == 0 {
+        CEIL_BASE
+    } else {
+        CEIL_ALT
+    };
+    scale_color(base, shade)
+}
+
+// ---------------------------------------------------------------------------
 // Sabitler ve yardımcı matematik
 // ---------------------------------------------------------------------------
 
@@ -242,6 +333,11 @@ struct Enemy {
     walk_phase: f32,
     /// Düşman türü (palet ve ölçek seçer).
     kind: u8,
+    /// Takip hızı (dalga zorluğuna göre ayarlanır).
+    speed: f32,
+    /// Boss düşman bayrağı (daha fazla can verir).
+    #[allow(dead_code)]
+    is_boss: bool,
 }
 
 const MAX_ENEMIES: usize = 8;
@@ -289,6 +385,14 @@ pub struct FpsGameApp {
     pub dir_y: f32,
     pub plane_x: f32,
     pub plane_y: f32,
+    /// Dikey bakış açısı (pitch): radyan, pozitif = aşağı, negatif = yukarı.
+    /// Clamp edilmiştir: -PI/3 ..= PI/3.
+    pub pitch: f32,
+    /// Hareket hızı vektörü (ivmeli hareket için).
+    pub vel_x: f32,
+    pub vel_y: f32,
+    /// Fare hassasiyeti (radyan/piksel).
+    pub mouse_sens: f32,
     pub health: u32,
     pub score: u32,
     pub ammo: u32,  // aktif silahın mermi sayısı
@@ -296,6 +400,8 @@ pub struct FpsGameApp {
     pub shots_fired: u32,
     pub hits: u32,
     pub shooting: bool,
+    /// Sol fare basılı tutulurken otomatik ateş (Wolfenstein tarzı).
+    pub mouse_fire_held: bool,
     pub shoot_timer: usize,
     result: GameResult,
 
@@ -366,6 +472,8 @@ impl FpsGameApp {
             facing: 0.0,
             walk_phase: 0.0,
             kind: 0,
+            speed: ENEMY_CHASE_SPEED,
+            is_boss: false,
         }; MAX_ENEMIES];
 
         // Başlangıç düşmanlarını harita üzerindeki boş hücrelere yerleştir.
@@ -392,6 +500,8 @@ impl FpsGameApp {
                         facing: fast_atan2(spawn_py - ey, spawn_px - ex),
                         walk_phase: 0.0,
                         kind: (n % ENEMY_KINDS.len()) as u8,
+                        speed: ENEMY_CHASE_SPEED,
+                        is_boss: false,
                     };
                     n += 1;
                 }
@@ -450,8 +560,16 @@ impl FpsGameApp {
             pos_y: 3.5,
             dir_x: 1.0,
             dir_y: 0.0,
+            // Bakış düzlemi: `dir`'e dik BİRİM vektör (ekranın sağ yönü).
+            // Uzunluğu görüş açısını belirlemez; açı odak uzaklığından
+            // (`render_h`) türetilir, böylece yatay ve dikey ölçek eşitlenir
+            // ve 1x1 dünya hücreleri ekranda kare görünür.
             plane_x: 0.0,
-            plane_y: 0.66,
+            plane_y: 1.0,
+            pitch: 0.0,
+            vel_x: 0.0,
+            vel_y: 0.0,
+            mouse_sens: MOUSE_SENS,
             health: 100,
             armor: 0,
             score: 0,
@@ -459,6 +577,7 @@ impl FpsGameApp {
             shots_fired: 0,
             hits: 0,
             shooting: false,
+            mouse_fire_held: false,
             shoot_timer: 0,
             result: GameResult::Menu,
             render_mode: RenderMode::Mode3D,
@@ -847,16 +966,29 @@ impl FpsGameApp {
         }
     }
 
-    /// Fare ile bakış açısını güncelle.
-    fn look(&mut self, dx: f32) {
-        // USB/PS2 raporu veya imleç yakalama sırasında tek turda çok büyük
-        // bir delta gelebilir. Bunu doğrudan açıya çevirmek yön vektörünü
-        // bozup raycaster'ı anlamsız değerlerle çalıştırabilir.
-        if !dx.is_finite() {
+    /// Pitch (dikey bakış) ile kaymış ufuk satırının ekran y koordinatı.
+    ///
+    /// Zemin, tavan, duvarlar ve düşman modelleri bu değeri paylaşır; hepsi
+    /// aynı anda kaydığı için dikey bakışta sahne bütünlüğü bozulmaz.
+    pub fn horizon_y(&self, view_h: usize) -> f32 {
+        (view_h as f32 / 2.0 - self.pitch * view_h as f32 * 0.5)
+            .clamp(view_h as f32 * 0.25, view_h as f32 * 0.75)
+    }
+
+    /// Fare ile bakış açısını günceller. dx = yatay (yaw), dy = dikey (pitch).
+    pub fn look(&mut self, dx: f32, dy: f32) {
+        if !dx.is_finite() || !dy.is_finite() {
             return;
         }
         let bounded_dx = dx.clamp(-128.0, 128.0);
-        self.rotate(-bounded_dx * MOUSE_SENS);
+        let bounded_dy = dy.clamp(-128.0, 128.0);
+        // Fare yönü ekran koordinatıdır: sağa hareket dx > 0, aşağı dy > 0.
+        // `rotate(+a)` bakışı sağa çevirir (ok tuşlarıyla aynı yön),
+        // pozitif pitch ise aşağı bakar; işaretler bu iki yönle uyumlu.
+        self.rotate(bounded_dx * self.mouse_sens);
+        // Dikey bakış (pitch): -PI/3 ..= PI/3 arasında clamp'lenir.
+        // Render sırasında ufuk satırı bu açıya göre yukarı/aşağı kaydırılır.
+        self.pitch = (self.pitch + bounded_dy * self.mouse_sens).clamp(-PI / 3.0, PI / 3.0);
     }
 
     /// Ses efektleri: ateş, adım, vurma.
@@ -1014,73 +1146,193 @@ impl FpsGameApp {
         let mut z_buffer: [f32; 1024] = [0.0; 1024];
         let w = render_w.min(1024);
 
-        // Wolfenstein tarzı net iki bölge: tavan ve zemin birbirinden belirgin
-        // olmalı; renkler yeterli kontrast sağlar ve gri görünümü önler.
-        let horizon = render_h / 2;
-        for y in 0..horizon {
+        // ------------------------------------------------------------------
+        // Ortak perspektif modeli
+        //
+        // Zemin (z = 0), tavan (z = WALL_H) ve duvarlar (0 <= z <= WALL_H)
+        // tek bir izdüşümde hesaplanır:
+        //
+        //     ekran_y = ufuk + (göz_yüksekliği - dünya_z) * ölçek / derinlik
+        //
+        // Ufuk satırı dikey bakışla (pitch) kayar; ölçek ekran yüksekliğidir.
+        // Böylece zemin ızgarası, duvar tabanları, tavan ve düşman modelleri
+        // aynı geometride buluşur — pitch değiştiğinde hepsi birlikte
+        // hareket eder, aralarında boşluk veya kayma kalmaz.
+        // ------------------------------------------------------------------
+        let horizon_f = self.horizon_y(render_h);
+        let horizon = horizon_f as usize;
+        let v_scale = render_h as f32;
+        // Odak uzaklığı dikey ölçekle aynıdır; yatay ve dikey dünya ölçeği
+        // böylece eşitlenir (izotropik izdüşüm, kare hücreler).
+        let focal = v_scale;
+        // Bir sütunun ışın parametresi: ekranın merkezinden odak uzaklığı
+        // kadar uzaklık. `plane` birim vektör olduğu için bu parametre doğrudan
+        // `lateral/depth` değerine karşılık gelir.
+        let column_cam_x =
+            |sx: f32, step: f32| -> f32 { (sx + step * 0.5 - w as f32 * 0.5) / focal };
+        // Zemin örnekleme adımı duvar sütun adımıyla aynıdır: aynı sütunda
+        // zemin ve duvar aynı ışını kullanır, böylece zemin ızgara çizgileri
+        // duvar kenarlarıyla tam hizalı çizilir. Çok geniş sahnelerde adım
+        // büyütülerek ışın/örnek sayısı azaltılır (retro-piksel görünümü
+        // zaten bu ölçekte hedefleniyor).
+        let column_step = if w >= 850 {
+            3
+        } else if w >= 500 {
+            2
+        } else {
+            1
+        };
+        let floor_step = column_step;
+        // Tavan dokusu dekoratif olduğu için daha kaba örneklenir.
+        let ceiling_step = if w >= 500 { 4 } else { 2 };
+
+        // Arka plan: ufuk sis rengi (kaplanmayan pikseller için).
+        fb.draw_rect(render_x, render_y, render_w, render_h, FOG_COLOR);
+
+        // Kırpma: kirli-dikdörtgen çiziminde sahnenin yalnızca değişen bölümü
+        // ekrana gider. Piksel başına kırpma hesabı yapmak yerine tüm sahne
+        // geçişleri burada bir kez hesaplanan dikdörtgene kırpılır; bu, yoğun
+        // zemin/tavan/duvar döngülerinde kare başına yüz binlerce kırpma
+        // hesabını ortadan kaldırır.
+        let clip = fb.clip();
+        let scene_x0 = render_x.max(clip.x0);
+        let scene_y0 = render_y.max(clip.y0);
+        let scene_x1 = (render_x + w).min(clip.x1);
+        let scene_y1 = (render_y + render_h).min(clip.y1);
+        // Görünüm koordinatlarındaki (0..render_h) geçerli satır aralığı.
+        let row_y0 = scene_y0.saturating_sub(render_y).min(render_h);
+        let row_y1 = scene_y1.saturating_sub(render_y).min(render_h);
+
+        // Tavan düzlemi (z = WALL_H): gözün 0,5 birim üstünde olduğu için
+        // ufuk satırının üstünde kalan satırlar tavanı gösterir.
+        // Aynı renkli bitişik sütun örnekleri tek yatay span'e birleştirilir
+        // (run-length): uzak tavan büyük tek renk blokları oluşturur ve
+        // kare başına çizim çağrısı sayısı dramatik düşer. Piksel çıktısı
+        // birebir aynıdır.
+        for y in row_y0..horizon.min(row_y1) {
             if budget.is_expired() {
                 cancelled = true;
                 break;
             }
-            // Maviye doğru gradyan: daha açık ve belirgin mavi-turuncu toni
-            let t = y as f32 / horizon.max(1) as f32;
-            let r = (35.0 + 30.0 * t) as u32; // 35..65
-            let g = (55.0 + 15.0 * t) as u32; // 55..70
-            let b = (90.0 + 10.0 * t) as u32; // 90..100
-            fb.draw_rect(
-                render_x,
-                render_y + y,
-                render_w,
-                1,
-                (r << 16) | (g << 8) | b,
-            );
+            let depth = plane_depth(horizon_f, v_scale, EYE_Z, WALL_H, y as f32 + 0.5);
+            if !depth.is_finite() || depth <= 0.0 {
+                continue;
+            }
+            let shade = depth_shade(depth);
+            let mut run_x = 0usize;
+            let mut run_cols = 0usize;
+            let mut run_color = 0u32;
+            for x in (0..w).step_by(ceiling_step) {
+                if x & 63 == 0 && budget.is_expired() {
+                    cancelled = true;
+                    break;
+                }
+                let camera_x = column_cam_x(x as f32, ceiling_step as f32);
+                let ray_x = self.dir_x + self.plane_x * camera_x;
+                let ray_y = self.dir_y + self.plane_y * camera_x;
+                let world_x = self.pos_x + ray_x * depth;
+                let world_y = self.pos_y + ray_y * depth;
+                let color = if depth > MAX_DEPTH {
+                    scale_color(CEIL_BASE, shade)
+                } else {
+                    ceiling_texel(world_x, world_y, shade)
+                };
+                if run_cols > 0 && color == run_color {
+                    run_cols += 1;
+                } else {
+                    if run_cols > 0 {
+                        let px0 = (render_x + run_x).max(scene_x0);
+                        let px1 = (render_x + run_x + run_cols * ceiling_step)
+                            .min(render_x + w)
+                            .min(scene_x1);
+                        if px1 > px0 {
+                            unsafe {
+                                fb.fill_scene_span(px0, render_y + y, px1 - px0, run_color);
+                            }
+                        }
+                    }
+                    run_x = x;
+                    run_cols = 1;
+                    run_color = color;
+                }
+            }
+            if !cancelled && run_cols > 0 {
+                let px0 = (render_x + run_x).max(scene_x0);
+                let px1 = (render_x + run_x + run_cols * ceiling_step)
+                    .min(render_x + w)
+                    .min(scene_x1);
+                if px1 > px0 {
+                    unsafe {
+                        fb.fill_scene_span(px0, render_y + y, px1 - px0, run_color);
+                    }
+                }
+            }
+            if cancelled {
+                break;
+            }
         }
+
         if !cancelled {
-            // Perspektif ızgaralı zemin: her örnek dünya hücrelerine yansıtılır.
-            for y in horizon..render_h {
+            // Zemin düzlemi (z = 0): her satır, ekrandaki derinliğine karşılık
+            // gelen dünya noktasına yansıtılır. Tavanla aynı run-length
+            // birleştirme uygulanır.
+            for y in horizon.max(row_y0)..row_y1 {
                 if budget.is_expired() {
                     cancelled = true;
                     break;
                 }
-                let t = (y - horizon) as f32 / horizon.max(1) as f32;
-                let r = (180.0 - 80.0 * t) as u32; // 180..100
-                let g = (100.0 - 20.0 * t) as u32; // 100..80
-                let b = (50.0 - 10.0 * t) as u32; // 50..40
-                let base_color = (r << 16) | (g << 8) | b;
-                let row_depth = (horizon + 1) as f32 / (y - horizon + 1) as f32 * 0.5;
-                for x in (0..render_w).step_by(8) {
+                let depth = plane_depth(horizon_f, v_scale, EYE_Z, 0.0, y as f32 + 0.5);
+                if !depth.is_finite() || depth <= 0.0 {
+                    continue;
+                }
+                let shade = depth_shade(depth);
+                let mut run_x = 0usize;
+                let mut run_cols = 0usize;
+                let mut run_color = 0u32;
+                for x in (0..w).step_by(floor_step) {
                     if x & 63 == 0 && budget.is_expired() {
                         cancelled = true;
                         break;
                     }
-                    let camera_x = 2.0 * (x as f32 + 4.0) / render_w as f32 - 1.0;
+                    let camera_x = column_cam_x(x as f32, floor_step as f32);
                     let ray_x = self.dir_x + self.plane_x * camera_x;
                     let ray_y = self.dir_y + self.plane_y * camera_x;
-                    let world_x = self.pos_x + ray_x * row_depth;
-                    let world_y = self.pos_y + ray_y * row_depth;
-                    let cell_x = world_x as i32;
-                    let cell_y = world_y as i32;
-                    let mut frac_x = world_x - cell_x as f32;
-                    let mut frac_y = world_y - cell_y as f32;
-                    if frac_x < 0.0 {
-                        frac_x += 1.0;
-                    }
-                    if frac_y < 0.0 {
-                        frac_y += 1.0;
-                    }
-                    let on_grid =
-                        frac_x < 0.035 || frac_x > 0.965 || frac_y < 0.035 || frac_y > 0.965;
-                    let tile_tint = if (cell_x + cell_y) & 1 == 0 {
-                        1.0
+                    let world_x = self.pos_x + ray_x * depth;
+                    let world_y = self.pos_y + ray_y * depth;
+                    let color = if depth > MAX_DEPTH {
+                        scale_color(FLOOR_BASE, shade)
                     } else {
-                        0.96
+                        floor_texel(world_x, world_y, shade)
                     };
-                    let color = if on_grid {
-                        0x553F30
+                    if run_cols > 0 && color == run_color {
+                        run_cols += 1;
                     } else {
-                        MinGuiCompositor::shade(base_color, (tile_tint * 100.0) as i32)
-                    };
-                    fb.draw_rect(render_x + x, render_y + y, 8.min(render_w - x), 1, color);
+                        if run_cols > 0 {
+                            let px0 = (render_x + run_x).max(scene_x0);
+                            let px1 = (render_x + run_x + run_cols * floor_step)
+                                .min(render_x + w)
+                                .min(scene_x1);
+                            if px1 > px0 {
+                                unsafe {
+                                    fb.fill_scene_span(px0, render_y + y, px1 - px0, run_color);
+                                }
+                            }
+                        }
+                        run_x = x;
+                        run_cols = 1;
+                        run_color = color;
+                    }
+                }
+                if !cancelled && run_cols > 0 {
+                    let px0 = (render_x + run_x).max(scene_x0);
+                    let px1 = (render_x + run_x + run_cols * floor_step)
+                        .min(render_x + w)
+                        .min(scene_x1);
+                    if px1 > px0 {
+                        unsafe {
+                            fb.fill_scene_span(px0, render_y + y, px1 - px0, run_color);
+                        }
+                    }
                 }
                 if cancelled {
                     break;
@@ -1095,15 +1347,16 @@ impl FpsGameApp {
         // Geniş pencerelerde her ikinci sütun aynı duvar geometrisini paylaşır.
         // Bu, DDA/f32 maliyetini yaklaşık yarıya indirirken küçük ekranlarda
         // tam çözünürlüklü görünümü korur.
-        let column_step = if w >= 800 { 2 } else { 1 };
         for x in (0..w).step_by(column_step) {
             if budget.is_expired() {
                 cancelled = true;
                 break;
             }
 
-            // Kamera x koordinatı (-1 ile 1 arası).
-            let camera_x = 2.0 * (x as f32) / (w as f32) - 1.0;
+            // Sütunun ışın parametresi (odak uzaklığına göre ölçekli). Sütunun
+            // ortası esas alınır; zemin ve tavan örnekleri de aynı ışını
+            // kullandığından yüzeyler birbirine tam oturur.
+            let camera_x = column_cam_x(x as f32, column_step as f32);
             let ray_dir_x = self.dir_x + self.plane_x * camera_x;
             let ray_dir_y = self.dir_y + self.plane_y * camera_x;
 
@@ -1189,13 +1442,20 @@ impl FpsGameApp {
                 *slot = perp_wall_dist;
             }
 
-            // Duvar yüksekliği: standart raycasting projeksiyonu. Ekran
-            // yüksekliği / mesafe; böylece yakın duvar büyük, uzak duvar
-            // küçük görünür ve tavan/zemin görünür kalır.
-            let line_h =
-                (render_h as f32 / perp_wall_dist.max(0.15)).min(render_h as f32 * 4.0) as usize;
-            let draw_start = (render_h / 2).saturating_sub(line_h / 2);
-            let draw_end = (render_h / 2).saturating_add(line_h / 2).min(render_h);
+            // Duvarın dikey sınırları ortak perspektif modelinden gelir:
+            // taban (z = 0) ve tepe (z = WALL_H) aynı formülle hesaplanır.
+            // Böylece duvar dibi zemindeki ızgara çizgileriyle aynı derinlikte
+            // buluşur ve duvar pitch ile birlikte (zeminden ayrılmadan) kayar.
+            let y_bottom = screen_y(horizon_f, v_scale, EYE_Z, 0.0, perp_wall_dist);
+            let y_top = screen_y(horizon_f, v_scale, EYE_Z, WALL_H, perp_wall_dist);
+            // Kırpma dikdörtgeniyle kesiştir: yalnızca gerçekten görünen
+            // satırlar ve sütunlar yazılır.
+            let draw_start = (y_top.max(0.0) as usize).max(row_y0).min(render_h);
+            let draw_end = (y_bottom.max(0.0) as usize).min(row_y1).min(render_h);
+            // Bu sütunun ekrandaki piksel aralığı (kırpılmış).
+            let col_px0 = (render_x + x).max(scene_x0);
+            let col_px1 = ((render_x + x + column_step).min(render_x + w)).min(scene_x1);
+            let col_visible = col_px1 > col_px0 && draw_end > draw_start;
 
             // Duvar tekstürü (Wolfenstein 3D tarzı desenli duvarlar).
             // Ray harita sınırından çıktıysa son örneği dışarı taşırma.
@@ -1210,49 +1470,48 @@ impl FpsGameApp {
             } else {
                 perp_wall_dist * ray_dir_x
             };
-            let int_part = tex_x_raw as i32 as f32;
-            let mut tex_x = tex_x_raw - int_part;
-            if tex_x < 0.0 {
-                tex_x += 1.0;
-            }
+            // Negatif koordinatlarda da doğru frac değeri (tabana doğru yuvarlama).
+            let tex_x = tex_x_raw - fast_floor(tex_x_raw);
             // Duvar tekstürü daha küçük, kapı daha büyük görünsün diye ölçek ayarı
             let tex_scale = if tile == TILE_DOOR { 0.5 } else { 64.0 };
             let tx = (tex_x * tex_scale) as usize % 8;
 
             // Duvar rengi (mesafeye göre gölgeli).
             // Yakındaki duvarlar canlı, uzaktakiler hâlâ ayırt edilebilir.
-            let shade = (0.5 + 0.5 * (1.0 - (perp_wall_dist / MAX_DEPTH).clamp(0.0, 1.0))).min(1.0);
-            let apply_shade = |color: u32| -> u32 {
-                let r = (((color >> 16) & 0xFF) as f32 * shade) as u32;
-                let g = (((color >> 8) & 0xFF) as f32 * shade) as u32;
-                let b = ((color & 0xFF) as f32 * shade) as u32;
-                (r << 16) | (g << 8) | b
-            };
+            let shade = depth_shade(perp_wall_dist);
+            // Kapı açıklığı sütun başına bir kez sorgulanır (eski kod her
+            // piksel satırında kapı listesinde doğrusal arama yapıyordu).
+            let door_open = tile == TILE_DOOR && self.door_is_open(map_x, map_y);
 
-            // Dikey çizgi olarak duvarı çiz (tekstürlü).
-            if draw_start < draw_end && draw_end > 0 && draw_start < render_h {
-                let ds = draw_start.min(render_h);
-                let de = draw_end.min(render_h);
-                for yy in ds..de {
-                    if budget.is_expired() {
+            // Dikey çizgi olarak duvarı çiz (tekstürlü). Pikseller kırpma
+            // garantili `fill_scene_span` ile yazılır; satır başına zaman
+            // bütçesi denetimi 16 satırda bire düşürülerek `rdtsc` maliyeti
+            // azaltılır.
+            if col_visible {
+                let span_w = col_px1 - col_px0;
+                for yy in draw_start..draw_end {
+                    if yy & 15 == 0 && budget.is_expired() {
                         cancelled = true;
                         break;
                     }
-                    // Tekstür y koordinatı (0.0..1.0) — duvarda dikey örnekleme.
-                    let ty_f = (yy - ds) as f32 / (de - ds).max(1) as f32;
+                    // Tekstür y koordinatı (0.0 = üst, 1.0 = alt) dünya
+                    // yüksekliğinden türetilir; duvar ekran kenarından taşsa
+                    // bile doku esnemez, yalnızca kırpılır.
+                    let world_z = EYE_Z + (horizon_f - yy as f32) * perp_wall_dist / v_scale;
+                    let ty_f = (1.0 - world_z / WALL_H).clamp(0.0, 1.0);
                     // Duvar metni: hücre türüne göre procedural doku, vuruş
                     // konumundan (tex_x, ty_f) örnekleme yapılır.
                     let base_color = wall_texel(tile, tex_x, ty_f);
                     let wall_color = match tile {
-                        TILE_DOOR if self.door_is_open(map_x, map_y) => {
+                        TILE_DOOR if door_open => {
                             // Açık kapı: parlak yeşil geçiş + koyu çerçeve.
                             if tx == 0 || tx == 7 || ty_f < 0.06 || ty_f > 0.94 {
-                                apply_shade(0x307040)
+                                scale_color(0x307040, shade)
                             } else {
-                                apply_shade(0x40C060)
+                                scale_color(0x40C060, shade)
                             }
                         }
-                        _ => apply_shade(base_color),
+                        _ => scale_color(base_color, shade),
                     };
                     // Yan yüzeyi kanal bazlı karart; packed RGB değerini bölmek
                     // renk kanallarını bozuyordu ve duvarı görünmez yapıyordu.
@@ -1264,13 +1523,9 @@ impl FpsGameApp {
                     } else {
                         wall_color
                     };
-                    fb.draw_rect(
-                        render_x + x,
-                        render_y + yy,
-                        column_step.min(w - x),
-                        1,
-                        wall_color,
-                    );
+                    unsafe {
+                        fb.fill_scene_span(col_px0, render_y + yy, span_w, wall_color);
+                    }
                 }
             }
             if cancelled {
@@ -1374,7 +1629,13 @@ impl FpsGameApp {
             plane_y: self.plane_y,
             eye_z: 0.5,
             v_scale: view_h as f32,
-            horizon_y: view_h as f32 / 2.0,
+            // Yatay odak dikey odakla aynı: izdüşüm izotropik olur ve model
+            // duvar/zemin ile aynı ışında buluşur.
+            focal_x: view_h as f32,
+            // Dikey bakış (pitch) düşman modeli için de horizon'u kaydırır.
+            // Aynı yardımcı kullanıldığı için model ile duvar/zemin hep aynı
+            // ufukta buluşur.
+            horizon_y: self.horizon_y(view_h),
             view_w: view_w as f32,
         };
         let model = EnemyModel {
@@ -2249,11 +2510,18 @@ impl FpsGameApp {
         }
     }
 
-    /// Fare hareketi ile bakış.
-    pub fn handle_mouse_look(&mut self, dx: f32) {
+    /// Fare hareketi ile bakış. dx = yatay, dy = dikey.
+    pub fn handle_mouse_look(&mut self, dx: f32, dy: f32) {
         if self.result == GameResult::Playing {
-            self.look(dx);
+            // Biriken büyük imleç sıçramaları oyunu çevirmesin; gerçek FPS
+            // mouse-look hissi için tek karelik deltayı sınırlıyoruz.
+            self.look(dx.clamp(-96.0, 96.0), dy.clamp(-64.0, 64.0));
         }
+    }
+
+    /// Fare butonunun mevcut durumunu oyun döngüsüne aktarır.
+    pub fn set_mouse_button(&mut self, pressed: bool) {
+        self.mouse_fire_held = pressed;
     }
 
     /// Fare tıklaması ile ateş.
@@ -2299,40 +2567,61 @@ impl FpsGameApp {
             return true;
         }
 
-        // --- Çok tuşlu hareket ve dönüş ---
+        // Ateş tuşunu her fizik karesinde değerlendir. Böylece oyuncu
+        // tıklamayı sürdürürken silah gecikmesi kadar hızlı ve kesintisiz ateş
+        // eder; tek tıklama davranışı da korunur.
+        if self.mouse_fire_held && self.shoot_timer == 0 && !self.is_reloading {
+            let delay = if self.weapon == WEAPON_SHOTGUN {
+                SHOTGUN_FIRE_DELAY
+            } else {
+                PISTOL_FIRE_DELAY
+            };
+            self.shoot_timer = delay;
+            self.shooting = true;
+            self.muzzle_flash_timer = MUZZLE_FLASH_TICKS;
+            let hit = self.shoot();
+            if hit {
+                self.play_sound(audio_dev, SoundKind::Hit);
+            } else if self.ammo_per_weapon[self.weapon as usize] == 0 {
+                self.start_reload();
+                self.play_sound(audio_dev, SoundKind::Click);
+            } else {
+                self.play_sound(audio_dev, SoundKind::Shoot);
+            }
+        }
+
+        // --- Çok tuşlu hareket ve dönüş (ivmeli hareket) ---
         if self.key_mask != 0 {
             if budget.is_expired() {
                 cancelled = true;
             } else {
-                let mut dx = 0.0f32;
-                let mut dy = 0.0f32;
-
                 let move_speed = if self.key_mask & KEY_SHIFT != 0 {
                     SPRINT_SPEED
                 } else {
                     WALK_SPEED
                 };
+                const ACCEL: f32 = 0.09;
+                const FRICTION: f32 = 0.82;
+
+                // İstenen hareket yönünü hesapla.
+                let mut target_dx = 0.0f32;
+                let mut target_dy = 0.0f32;
+
                 if self.key_mask & KEY_W != 0 {
-                    dx += self.dir_x * move_speed;
-                    dy += self.dir_y * move_speed;
+                    target_dx += self.dir_x * move_speed;
+                    target_dy += self.dir_y * move_speed;
                 }
                 if self.key_mask & KEY_S != 0 {
-                    dx -= self.dir_x * move_speed;
-                    dy -= self.dir_y * move_speed;
+                    target_dx -= self.dir_x * move_speed;
+                    target_dy -= self.dir_y * move_speed;
                 }
                 if self.key_mask & KEY_A != 0 {
-                    dx += self.dir_y * move_speed;
-                    dy -= self.dir_x * move_speed;
+                    target_dx += self.dir_y * move_speed;
+                    target_dy -= self.dir_x * move_speed;
                 }
                 if self.key_mask & KEY_D != 0 {
-                    dx -= self.dir_y * move_speed;
-                    dy += self.dir_x * move_speed;
-                }
-
-                if dx != 0.0 && dy != 0.0 {
-                    let inv_sqrt2 = core::f32::consts::FRAC_1_SQRT_2;
-                    dx *= inv_sqrt2;
-                    dy *= inv_sqrt2;
+                    target_dx -= self.dir_y * move_speed;
+                    target_dy += self.dir_x * move_speed;
                 }
 
                 let mut forward = 0.0f32;
@@ -2342,11 +2631,37 @@ impl FpsGameApp {
                 if self.key_mask & KEY_DOWN != 0 {
                     forward -= move_speed;
                 }
-                dx += forward * self.dir_x;
-                dy += forward * self.dir_y;
+                target_dx += forward * self.dir_x;
+                target_dy += forward * self.dir_y;
 
-                self.move_player(dx, dy);
-                self.moving = dx != 0.0 || dy != 0.0;
+                // Köşegen hareketi normalize et.
+                if target_dx != 0.0 && target_dy != 0.0 {
+                    let inv_sqrt2 = core::f32::consts::FRAC_1_SQRT_2;
+                    target_dx *= inv_sqrt2;
+                    target_dy *= inv_sqrt2;
+                }
+
+                // İvme uygula: mevcut hızı hedef hızına doğru kaydır.
+                self.vel_x += (target_dx - self.vel_x) * ACCEL;
+                self.vel_y += (target_dy - self.vel_y) * ACCEL;
+
+                // Sürünme (friction): tuş bırakıldığında yavaşla.
+                if target_dx == 0.0 && target_dy == 0.0 {
+                    self.vel_x *= FRICTION;
+                    self.vel_y *= FRICTION;
+                    if self.vel_x.abs() < 0.001 {
+                        self.vel_x = 0.0;
+                    }
+                    if self.vel_y.abs() < 0.001 {
+                        self.vel_y = 0.0;
+                    }
+                }
+
+                // Hareketi uygula (çarpışma kontrolü ile).
+                if self.vel_x != 0.0 || self.vel_y != 0.0 {
+                    self.move_player(self.vel_x, self.vel_y);
+                }
+                self.moving = self.vel_x != 0.0 || self.vel_y != 0.0;
 
                 if self.key_mask & KEY_LEFT != 0 {
                     self.rotate(-ROT_SPEED);
@@ -2356,6 +2671,25 @@ impl FpsGameApp {
                 }
 
                 self.key_mask = 0;
+            }
+        } else {
+            // Tuş basılı değilse sürünme uygula.
+            if budget.is_expired() {
+                cancelled = true;
+            } else {
+                const FRICTION: f32 = 0.82;
+                self.vel_x *= FRICTION;
+                self.vel_y *= FRICTION;
+                if self.vel_x.abs() < 0.001 {
+                    self.vel_x = 0.0;
+                }
+                if self.vel_y.abs() < 0.001 {
+                    self.vel_y = 0.0;
+                }
+                if self.vel_x != 0.0 || self.vel_y != 0.0 {
+                    self.move_player(self.vel_x, self.vel_y);
+                }
+                self.moving = self.vel_x != 0.0 || self.vel_y != 0.0;
             }
         }
 
@@ -2487,15 +2821,28 @@ impl FpsGameApp {
                     let prev_x = e.x;
                     let prev_y = e.y;
                     if dist > ENEMY_ATTACK_DIST && dist < ENEMY_CHASE_RADIUS {
-                        let step = ENEMY_CHASE_SPEED;
+                        let step = e.speed;
                         let nx = e.x + (dx / dist) * step;
                         let ny = e.y + (dy / dist) * step;
+
+                        // Düşman duvarı aşmaya çalışır: önce doğrudan hareket,
+                        // engel varsa eksen bazlı kayma (duvar boyunca sürünme).
+                        let mut moved = false;
                         if !self.is_wall(nx, e.y) {
                             e.x = nx;
-                        }
-                        if !self.is_wall(e.x, ny) {
+                            moved = true;
+                        } else if !self.is_wall(e.x, ny) {
+                            // X ekseni engelliyse Y ekseninde dene (duvar boyunca kayma).
                             e.y = ny;
+                            moved = true;
+                        } else if !self.is_wall(nx, ny) {
+                            // İkisi de engelse köşegen dene.
+                            e.x = nx;
+                            e.y = ny;
+                            moved = true;
                         }
+                        // Hiçbiri mümkün değilse düşman yerinde bekler (duvarın arkasında takılır).
+                        let _ = moved;
                     } else if dist <= ENEMY_ATTACK_DIST && e.attack_timer == 0 {
                         should_attack = true;
                     }
@@ -2534,6 +2881,12 @@ impl FpsGameApp {
                 if self.wave_timer == 0 {
                     self.wave = self.wave.saturating_add(1);
                     self.wave_timer = 180;
+
+                    // Dalga zorluğu: ilerleyen dallarda daha fazla ve daha hızlı düşman.
+                    let wave = self.wave;
+                    let enemy_speed = ENEMY_CHASE_SPEED + (wave as f32 * 0.005).clamp(0.0, 0.02);
+                    let spawn_count = (8 + wave * 2).clamp(8, MAX_ENEMIES);
+
                     let spawn_points = [
                         (2.5, 2.5),
                         (17.5, 2.5),
@@ -2543,9 +2896,13 @@ impl FpsGameApp {
                         (15.5, 17.5),
                         (2.5, 9.5),
                         (9.5, 14.5),
+                        (14.5, 9.5),
+                        (5.5, 14.5),
+                        (14.5, 5.5),
+                        (5.5, 5.5),
                     ];
                     for (i, e) in self.enemies.iter_mut().take(self.enemy_count).enumerate() {
-                        if !e.alive {
+                        if !e.alive && i < spawn_count {
                             // Oyuncuya en uzak doğma noktasını seç ki üstüne binmesinler.
                             let mut best = spawn_points[i % spawn_points.len()];
                             let mut best_d = -1.0_f32;
@@ -2559,6 +2916,8 @@ impl FpsGameApp {
                                 }
                             }
                             let (sx, sy) = best;
+                            // Her 5. dalgada "boss" düşman (tür 2 = iri, daha fazla can).
+                            let is_boss = wave % 5 == 0 && i == 0;
                             *e = Enemy {
                                 x: sx,
                                 y: sy,
@@ -2567,8 +2926,18 @@ impl FpsGameApp {
                                 attack_timer: 0,
                                 facing: fast_atan2(self.pos_y - sy, self.pos_x - sx),
                                 walk_phase: 0.0,
-                                kind: ((self.wave + i) % ENEMY_KINDS.len()) as u8,
+                                kind: if is_boss {
+                                    2 // iri boss düşman
+                                } else {
+                                    ((wave + i) % ENEMY_KINDS.len()) as u8
+                                },
+                                speed: enemy_speed,
+                                is_boss,
                             };
+                            if is_boss {
+                                // walk_phase üzerinden boss bayrağı saklayabiliriz,
+                                // ama şimdilik sadece görsel olarak farklıdır (tür 2).
+                            }
                         }
                     }
                 } else {
@@ -2581,8 +2950,10 @@ impl FpsGameApp {
             if self.health == 0 {
                 crate::boot::console::serial_print("[FPS-GAME] Oyun sonu: Can tükendi (Lost)\n");
                 self.result = GameResult::Lost;
-            } else if self.wave >= 8 {
-                crate::boot::console::serial_print("[FPS-GAME] Oyun sonu: 8 dalga geçildi (Won)\n");
+            } else if self.wave >= 15 {
+                crate::boot::console::serial_print(
+                    "[FPS-GAME] Oyun sonu: 15 dalga geçildi (Won)\n",
+                );
                 self.result = GameResult::Won;
             }
         }

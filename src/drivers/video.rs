@@ -827,6 +827,55 @@ impl Framebuffer {
         }
     }
 
+    /// 3B sahne çizimi için kırpmasız hızlı piksel yazımı.
+    ///
+    /// `x`, `y` mutlak ekran koordinatıdır. Kırpma denetimi çağırana aittir:
+    /// çağıran pikselin aktif kırpma bölgesi (`clip()`) içinde kaldığını tek
+    /// seferde doğrulamalıdır. Yalnızca tampon sınır taşması denetlenir —
+    /// bu, zemin/tavan/duvar gibi piksel başına çağrılan yoğun çizimlerde
+    /// `put_pixel`'in küme başına kırpma hesabından kaçınmayı sağlar.
+    ///
+    /// # Safety
+    /// `x`/`y` kırpma bölgesi içinde olmalı; aksi halde backbuffer'a
+    /// istenmeyen bölgeye yazılır (ekrana yansımaz ama komşu pencere
+    /// içeriğini bozabilir).
+    #[inline(always)]
+    pub unsafe fn put_scene_pixel(&mut self, x: usize, y: usize, color: u32) {
+        let offset = y * self.width + x;
+        if offset < BACKBUFFER_LEN {
+            unsafe {
+                BACKBUFFER[offset] = rgb(color);
+            }
+        }
+    }
+
+    /// 3B sahne çizimi için kırpmasız hızlı yatay span dolgusu.
+    /// `put_scene_pixel` ile aynı sözleşme: kırpma çağırana aittir,
+    /// yalnızca satır/tampon sınırları denetlenir.
+    ///
+    /// # Safety
+    /// `[x, x+len)` aralığı ve `y` satırı aktif kırpma bölgesi içinde
+    /// kalmalı; aksi halde `put_scene_pixel` ile aynı risk geçerlidir.
+    #[inline(always)]
+    pub unsafe fn fill_scene_span(&mut self, x: usize, y: usize, len: usize, color: u32) {
+        if len == 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        let len = len.min(self.width - x);
+        let offset = y * self.width + x;
+        if offset.saturating_add(len) > BACKBUFFER_LEN {
+            return;
+        }
+        let c = rgb(color);
+        unsafe {
+            let slice = core::slice::from_raw_parts_mut(
+                (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(offset),
+                len,
+            );
+            slice.fill(c);
+        }
+    }
+
     /// 1px genişliğinde dikey renk dilimi. Kırpma bir kez hesaplanır ve
     /// sütun doğrudan arka tampona yazılır; piksel başına `draw_rect`
     /// çağırmanın kırpma/çağrı maliyeti olmadan raycasting duvarlarını

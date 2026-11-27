@@ -172,6 +172,10 @@ impl RenderBudget for NoBudget {
 
 /// Kamera durumu. İki oyun da aynı izdüşümü paylaşır: yanal konum `tan`
 /// cinsinden, dikey konum ise göz yüksekliğine göre ölçeklenir.
+///
+/// `plane` **birim** dik vektördür (ekranın sağ yönü). Işın parametreleştirmesi
+/// bu vektörle yapılır: bir sütunun ışını `dir + plane * ((x - w/2) / focal_x)`.
+/// Böylece duvar/zemin ışınları ile model izdüşümü aynı geometride buluşur.
 #[derive(Clone, Copy)]
 pub struct Camera3D {
     pub pos_x: f32,
@@ -179,13 +183,16 @@ pub struct Camera3D {
     /// Bakış yönü (birim vektör).
     pub dir_x: f32,
     pub dir_y: f32,
-    /// Bakış düzlemi (dir'e dik; uzunluğu görüş açısını belirler).
+    /// Bakış düzlemi (dir'e dik birim vektör; ekranın sağ yönü).
     pub plane_x: f32,
     pub plane_y: f32,
     /// Göz yüksekliği (dünya birimi).
     pub eye_z: f32,
     /// Dikey ölçek: bir birim yükseklik, derinlik başına bu kadar piksel.
     pub v_scale: f32,
+    /// Yatay odak uzaklığı (piksel). `v_scale` ile eşitlenirse izdüşüm
+    /// izotropiktir (kare hücreler kare görünür).
+    pub focal_x: f32,
     /// Ufuk satırı (ekran y, mutlak).
     pub horizon_y: f32,
     /// Görüntü alanı genişliği (ekran x ölçeklendirmesi).
@@ -201,6 +208,27 @@ pub struct ProjVertex {
     pub y: f32,
     /// Kamera derinliği (z-buffer değerleriyle aynı birimde).
     pub depth: f32,
+}
+
+/// Dünya yüksekliğinden ekran y koordinatı (perspektif izdüşüm).
+///
+/// [`project_point`] ile birebir aynı formülü kullanır. Duvar, zemin ve tavan
+/// çizimleri bu yardımcıyı kullandığında tüm yüzeyler aynı geometride
+/// buluşur (tabandan tavana, zeminden duvar diplerine kadar).
+#[inline(always)]
+pub fn screen_y(horizon_y: f32, v_scale: f32, eye_z: f32, world_z: f32, depth: f32) -> f32 {
+    horizon_y + (eye_z - world_z) * v_scale / depth
+}
+
+/// Yatay bir düzlemde (`plane_z` sabit) verilen ekran satırının dünya
+/// derinliği.
+///
+/// Düzlem gözün altındaysa (`plane_z < eye_z`) satır ufuk satırının altında,
+/// üstündeyse (`plane_z > eye_z`) üstünde olmalıdır; işaret bu koşulu
+/// kendiliğinden sağlar, böylece zemin ve tavan aynı formülle hesaplanır.
+#[inline(always)]
+pub fn plane_depth(horizon_y: f32, v_scale: f32, eye_z: f32, plane_z: f32, screen_y: f32) -> f32 {
+    (eye_z - plane_z) * v_scale / (screen_y - horizon_y)
 }
 
 /// Ekrana hazır yüzey (dört köşe + düz gölge rengi).
@@ -314,7 +342,10 @@ pub fn project_point(cam: &Camera3D, wx: f32, wy: f32, wz: f32) -> Option<ProjVe
     }
     let lateral = rel_x * cam.plane_x + rel_y * cam.plane_y;
     let cam_x = lateral / depth;
-    let x = (cam_x + 1.0) * 0.5 * cam.view_w;
+    // Yatay ölçek odak uzaklığıyla yapılır; böylece ekran x'i ile ışın
+    // parametresi birebir örtüşür (duvar/zemin sütunları ile modeller aynı
+    // noktaya düşer).
+    let x = cam.view_w * 0.5 + cam_x * cam.focal_x;
     let y = cam.horizon_y + (cam.eye_z - wz) * cam.v_scale / depth;
     Some(ProjVertex { x, y, depth })
 }

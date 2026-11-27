@@ -41,13 +41,13 @@ const CAM_H: f32 = 1.25;
 /// Aracın çarpışma yarıçapı.
 const CAR_RADIUS: f32 = 0.42;
 /// Azami ileri hız (metre/s).
-const MAX_SPEED: f32 = 24.0;
+const MAX_SPEED: f32 = 28.0;
 /// Azami geri hız (metre/s).
 const MAX_REVERSE: f32 = 6.0;
 /// Gaz ivmesi (m/s²).
-const ACCEL: f32 = 4.6;
+const ACCEL: f32 = 7.5;
 /// Fren ivmesi (m/s²).
-const BRAKE: f32 = 9.0;
+const BRAKE: f32 = 13.5;
 /// El freni ivmesi (m/s²).
 const HANDBRAKE: f32 = 11.0;
 /// Rölanti direnci (m/s²).
@@ -61,7 +61,7 @@ const TURN_R_MIN: f32 = 4.2;
 /// Hıza bağlı dönüş yarıçapı artış katsayısı (yüksek hızda geniş yay).
 const TURN_R_SPEED_K: f32 = 0.030;
 /// Direksiyon kolunun dönme hızı (komut birimi/s).
-const STEER_RATE: f32 = 2.4;
+const STEER_RATE: f32 = 2.8;
 /// Kavşak dönüş yayı yarıçapı (metre).
 const TURN_ARC_R: f32 = 2.5;
 /// Kavşakta dönüş hızı (metre/s).
@@ -1944,7 +1944,7 @@ impl CityDriveApp {
         // Geniş pencerelerde sprite derinlik testi de tam görünürlük alanını
         // kapsasın; 512 sütunluk tampon yüksek çözünürlükte araçları kırpıyordu.
         let mut zbuf = [MAX_VIEW; 1024];
-        let col_step = if win_w >= 900 { 2 } else { 1 };
+        let col_step = if win_w >= 500 { 2 } else { 1 };
         for col in (0..win_w.min(1024)).step_by(col_step) {
             if budget.is_expired() {
                 return false;
@@ -2253,11 +2253,15 @@ impl CityDriveApp {
             pos_y: self.car_y,
             dir_x,
             dir_y,
-            plane_x: -dir_y * PLANE_LEN,
-            plane_y: dir_x * PLANE_LEN,
+            // `plane` birim dik vektördür; görüş açısı `focal_x` ile
+            // belirlenir. Bu, araçların şehir ızgarasıyla aynı geometride
+            // buluşmasını sağlar (önceki eşleme birebir korunmuştur).
+            plane_x: -dir_y,
+            plane_y: dir_x,
             eye_z: 1.15,
             horizon_y: horizon as f32,
             v_scale: focal,
+            focal_x: PLANE_LEN * win_w as f32 * 0.5,
             view_w: win_w as f32,
         };
         let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;

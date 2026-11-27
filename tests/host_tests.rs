@@ -597,6 +597,12 @@ mod host_gui_tests;
 #[path = "host_fps_enemy_tests.rs"]
 mod host_fps_enemy_tests;
 
+// FPS 3B sahnesi izdüşüm tutarlılığı: zemin/tavan/duvar/düşman aynı
+// perspektif modelini paylaşıyor mu?
+#[cfg(test)]
+#[path = "host_fps_projection_tests.rs"]
+mod host_fps_projection_tests;
+
 // Toast bildirim sözleşmesi: tür başına renk/ikon/süre, otomatik kapanma,
 // Esc ile kapatma, duraklatma ve gerçek ilerleme göstergesi.
 #[cfg(test)]

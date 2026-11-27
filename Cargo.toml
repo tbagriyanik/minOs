@@ -37,7 +37,7 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["with-all
 # brotli-decompressor — HTTP `Content-Encoding: br` için RFC 7932 çözücüsü.
 # `default-features = false` ile `no_std` modunda derlenir; bellek yönetimi
 # `src/drivers/brotli.rs` içindeki `Vec` tabanlı `Allocator` ile yapılır.
-brotli-decompressor = { version = "6", default-features = false }
+brotli-decompressor = { version = "6.3.1", default-features = false }
 
 bitflags = { version = "2.10.0", default-features = false }
 heapless = { version = "0.9.3", default-features = false }

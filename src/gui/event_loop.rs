@@ -5784,7 +5784,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             16 => {
                                 // FPS 3D oyun: fare ile bakış, WASD hareket, ateş.
-                                // Fare butonu değiştiyse ateş et (focus bağımsızğı)
+                                // Buton durumunu her değişimde aktar; oyun kendi
+                                // fizik karesinde basılı ateşi sürdürür.
+                                apps.fps_3d_app
+                                    .as_mut()
+                                    .unwrap()
+                                    .set_mouse_button(mouse.left_button);
                                 if mouse.left_button != state.last_buttons.0 {
                                     let changed = apps
                                         .fps_3d_app
@@ -9979,12 +9984,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // redraws when another window has focus.
         if mouse_moved && app_is_focused(&compositor, 16) {
             let dx = mouse.x as f32 - state.last_mouse_x as f32;
-            if dx.abs() > 0.0 {
-                apps.fps_3d_app.as_mut().unwrap().handle_mouse_look(dx);
+            let dy = mouse.y as f32 - state.last_mouse_y as f32;
+            if dx.abs() > 0.0 || dy.abs() > 0.0 {
+                apps.fps_3d_app.as_mut().unwrap().handle_mouse_look(dx, dy);
             }
             if apps.fps_3d_app.as_ref().is_some_and(|g| g.is_playing()) {
                 mouse.x = (width as i32) / 2;
                 mouse.y = (height as i32) / 2;
+            }
+        }
+
+        // FPS silahı için butonun seviye bilgisini her turda tazele. Mouse
+        // olayları pencere sınırında/odak değişiminde atlanabilse bile bırakma
+        // güvenilir biçimde işlenir ve otomatik ateş takılı kalmaz.
+        if app_is_focused(&compositor, 16) {
+            if let Some(game) = apps.fps_3d_app.as_mut() {
+                game.set_mouse_button(mouse.left_button);
             }
         }
         // Delta hesaplandıktan sonra referans konumunu güncelle. Önceki sıra

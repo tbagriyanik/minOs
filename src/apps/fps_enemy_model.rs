@@ -30,6 +30,7 @@ pub const ROLE_EYE: u8 = 6;
 
 /// Modeldeki bir kutunun yerel tanımı.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub struct ModelPart {
     /// Yerel merkez: x = sağ/sol, y = ileri/geri, z = yukarı.
     pub cx: f32,
@@ -46,6 +47,7 @@ pub struct ModelPart {
 }
 
 /// Düşman türleri: (gövde rengi, kafa rengi, uzuv rengi, ölçek).
+#[allow(dead_code)]
 pub const ENEMY_KINDS: [(u32, u32, u32, f32); 3] = [
     (0xB03A6A, 0xF2B09A, 0x501C30, 1.00), // 0: sıradan düşman
     (0x2E7D32, 0xE8C79A, 0x1B5E20, 0.92), // 1: hızlı düşman
@@ -53,6 +55,7 @@ pub const ENEMY_KINDS: [(u32, u32, u32, f32); 3] = [
 ];
 
 /// Humanoid model (yaklaşık 0.70 birim boy, 1.0 birimlik duvarın altında).
+#[allow(dead_code)]
 pub static ENEMY_MODEL: [ModelPart; 8] = [
     // Gövde
     ModelPart {
@@ -145,9 +148,11 @@ pub static ENEMY_MODEL: [ModelPart; 8] = [
 ];
 
 /// Azami yüzey sayısı (8 parça × 6 yüzey).
+#[allow(dead_code)]
 const MAX_MODEL_FACES: usize = 64;
 
 /// Düşman modeli için gölgelendirme parametreleri.
+#[allow(dead_code)]
 pub const ENEMY_SHADING: Shading = Shading::new((0.35, -0.30, 0.88), 0.30, 0.58, 0.22, 0.45, 20.0);
 
 // ---------------------------------------------------------------------------
@@ -156,6 +161,7 @@ pub const ENEMY_SHADING: Shading = Shading::new((0.35, -0.30, 0.88), 0.30, 0.58,
 
 /// Çizilecek düşman modeli.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub struct EnemyModel {
     /// Dünya konumu.
     pub x: f32,
@@ -173,6 +179,7 @@ pub struct EnemyModel {
 /// Model kutuları üretilir, `gfx3d` ile perspektif izdüşüme taşınır, düz
 /// gölgelendirme ile aydınlatılır ve derinlik tamponuna göre kırpılır.
 /// Bütçe aşılırsa `false` döner.
+#[allow(dead_code)]
 pub fn draw_enemy_model(
     sink: &mut dyn PixelSink,
     cam: &Camera3D,

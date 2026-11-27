@@ -38,6 +38,7 @@ fn camera() -> Camera3D {
         plane_y: 1.0,
         eye_z: 0.5,
         v_scale: 240.0,
+        focal_x: 160.0,
         horizon_y: 120.0,
         view_w: 320.0,
     }

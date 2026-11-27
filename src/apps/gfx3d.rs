@@ -158,6 +158,7 @@ pub trait RenderBudget {
 }
 
 /// Bütçe aşımını hiç takip etmeyen yardımcı (testler için).
+#[allow(dead_code)]
 pub struct NoBudget;
 
 impl RenderBudget for NoBudget {
@@ -216,6 +217,7 @@ pub struct ProjVertex {
 /// çizimleri bu yardımcıyı kullandığında tüm yüzeyler aynı geometride
 /// buluşur (tabandan tavana, zeminden duvar diplerine kadar).
 #[inline(always)]
+#[allow(dead_code)]
 pub fn screen_y(horizon_y: f32, v_scale: f32, eye_z: f32, world_z: f32, depth: f32) -> f32 {
     horizon_y + (eye_z - world_z) * v_scale / depth
 }
@@ -227,6 +229,7 @@ pub fn screen_y(horizon_y: f32, v_scale: f32, eye_z: f32, world_z: f32, depth: f
 /// üstündeyse (`plane_z > eye_z`) üstünde olmalıdır; işaret bu koşulu
 /// kendiliğinden sağlar, böylece zemin ve tavan aynı formülle hesaplanır.
 #[inline(always)]
+#[allow(dead_code)]
 pub fn plane_depth(horizon_y: f32, v_scale: f32, eye_z: f32, plane_z: f32, screen_y: f32) -> f32 {
     (eye_z - plane_z) * v_scale / (screen_y - horizon_y)
 }

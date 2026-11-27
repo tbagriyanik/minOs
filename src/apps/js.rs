@@ -2789,6 +2789,23 @@ impl JsRuntime {
             match base {
                 "Math" => match method {
                     "abs" => return JsValue::Number(self.eval_val(args).to_i64().abs()),
+                    "sign" => {
+                        let n = self.eval_val(args).to_i64();
+                        return JsValue::Number(if n > 0 {
+                            1
+                        } else if n < 0 {
+                            -1
+                        } else {
+                            0
+                        });
+                    }
+                    "clamp" => {
+                        let parts = split_top_level_comma(args);
+                        let val = self.eval_val(parts.first().unwrap_or(&"0")).to_i64();
+                        let min = self.eval_val(parts.get(1).unwrap_or(&"0")).to_i64();
+                        let max = self.eval_val(parts.get(2).unwrap_or(&"0")).to_i64();
+                        return JsValue::Number(val.max(min).min(max));
+                    }
                     "floor" | "ceil" | "round" => {
                         return JsValue::Number(self.eval_val(args).to_i64())
                     }
@@ -2836,6 +2853,168 @@ impl JsRuntime {
                     "parse" => {
                         let raw = self.eval_val(args).to_str();
                         return self.eval_val(&raw);
+                    }
+                    _ => {}
+                },
+                "String" => match method {
+                    "fromCharCode" => {
+                        let parts = split_top_level_comma(args);
+                        let mut chars = String::new();
+                        for part in parts {
+                            let code = self.eval_val(part).to_i64();
+                            if (0..=0x10FFFF).contains(&code) {
+                                chars.push(char::from_u32(code as u32).unwrap_or('?'));
+                            }
+                        }
+                        return JsValue::String(chars);
+                    }
+                    "charAt" => {
+                        let s = self.eval_val(base).to_str();
+                        let pos = self.eval_val(args).to_i64().max(0) as usize;
+                        if pos < s.chars().count() {
+                            let mut idx = 0;
+                            for ch in s.chars() {
+                                if idx == pos {
+                                    return JsValue::String(ch.to_string());
+                                }
+                                idx += ch.len_utf8();
+                            }
+                        }
+                        return JsValue::String(String::new());
+                    }
+                    "charCodeAt" => {
+                        let s = self.eval_val(base).to_str();
+                        let pos = self.eval_val(args).to_i64().max(0) as usize;
+                        if let Some(ch) = s.chars().nth(pos) {
+                            return JsValue::Number(ch as i64);
+                        }
+                        return JsValue::Number(0);
+                    }
+                    "concat" => {
+                        let s = self.eval_val(base).to_str();
+                        let mut result = s.to_string();
+                        for arg in args.split(',') {
+                            result.push_str(&self.eval_val(arg).to_str());
+                        }
+                        return JsValue::String(result);
+                    }
+                    "includes" => {
+                        let s = self.eval_val(base).to_str();
+                        let needle = self.eval_val(args).to_str();
+                        return JsValue::Bool(s.contains(&needle));
+                    }
+                    "indexOf" => {
+                        let s = self.eval_val(base).to_str();
+                        let needle = self.eval_val(args).to_str();
+                        if let Some(pos) = s.find(&needle) {
+                            return JsValue::Number(pos as i64);
+                        }
+                        return JsValue::Number(-1);
+                    }
+                    "lastIndexOf" => {
+                        let s = self.eval_val(base).to_str();
+                        let needle = self.eval_val(args).to_str();
+                        if let Some(pos) = s.rfind(&needle) {
+                            return JsValue::Number(pos as i64);
+                        }
+                        return JsValue::Number(-1);
+                    }
+                    "startsWith" => {
+                        let s = self.eval_val(base).to_str();
+                        let pattern = self.eval_val(args).to_str();
+                        return JsValue::Bool(s.starts_with(&pattern));
+                    }
+                    "endsWith" => {
+                        let s = self.eval_val(base).to_str();
+                        let pattern = self.eval_val(args).to_str();
+                        return JsValue::Bool(s.ends_with(&pattern));
+                    }
+                    "trim" => {
+                        let s = self.eval_val(base).to_str();
+                        let trimmed = s.trim().to_string();
+                        return JsValue::String(trimmed);
+                    }
+                    "trimStart" => {
+                        let s = self.eval_val(base).to_str();
+                        let trimmed = s.trim_start().to_string();
+                        return JsValue::String(trimmed);
+                    }
+                    "trimEnd" => {
+                        let s = self.eval_val(base).to_str();
+                        let trimmed = s.trim_end().to_string();
+                        return JsValue::String(trimmed);
+                    }
+                    "toUpperCase" => {
+                        let s = self.eval_val(base).to_str();
+                        return JsValue::String(s.to_uppercase());
+                    }
+                    "toLowerCase" => {
+                        let s = self.eval_val(base).to_str();
+                        return JsValue::String(s.to_lowercase());
+                    }
+                    "replace" => {
+                        let s = self.eval_val(base).to_str();
+                        let parts: Vec<&str> = args.splitn(2, ",").collect();
+                        if parts.len() >= 2 {
+                            let find = parts[0].trim();
+                            let replace_with = parts[1].trim();
+                            let result = s.replace(find, replace_with);
+                            return JsValue::String(result);
+                        }
+                        return JsValue::String(s);
+                    }
+                    "split" => {
+                        let s = self.eval_val(base).to_str();
+                        let separator: &str = if args.is_empty() {
+                            ","
+                        } else {
+                            &self.eval_val(args).to_str()
+                        };
+                        let parts: Vec<&str> = s.split(separator).collect();
+                        // Return string representation of first part or empty
+                        if !parts.is_empty() {
+                            return JsValue::String(parts[0].to_string());
+                        }
+                        return JsValue::String(String::new());
+                    }
+                    "substr" => {
+                        let s = self.eval_val(base).to_str();
+                        let start = self.eval_val(args).to_i64() as usize;
+                        let length = args
+                            .split(',')
+                            .nth(1)
+                            .map_or(0, |l| self.eval_val(l).to_i64() as usize);
+                        let end = start.saturating_add(length);
+                        if end <= s.len() {
+                            return JsValue::String(s[start..end].to_string());
+                        }
+                        return JsValue::String(s[start..].to_string());
+                    }
+                    "substring" => {
+                        let s = self.eval_val(base).to_str();
+                        let start = self.eval_val(args).to_i64() as usize;
+                        let end = args
+                            .split(',')
+                            .nth(1)
+                            .map_or(s.len(), |l| self.eval_val(l).to_i64() as usize);
+                        let end = if end > s.len() { s.len() } else { end };
+                        if start < s.len() {
+                            return JsValue::String(s[start..end].to_string());
+                        }
+                        return JsValue::String(String::new());
+                    }
+                    "match" => {
+                        let _s = self.eval_val(base).to_str();
+                        let _pattern = self.eval_val(args).to_str();
+                        return JsValue::Null;
+                    }
+                    "search" => {
+                        let s = self.eval_val(base).to_str();
+                        let pattern = self.eval_val(args).to_str();
+                        if let Some(pos) = s.find(&pattern) {
+                            return JsValue::Number(pos as i64);
+                        }
+                        return JsValue::Number(-1);
                     }
                     _ => {}
                 },

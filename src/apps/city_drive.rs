@@ -2202,7 +2202,11 @@ impl CityDriveApp {
             return None;
         }
         let lateral = rel_x * plane_x + rel_y * plane_y;
-        let cam_x = lateral / depth;
+        // Duvar izdüşümüyle aynı kamera x'i: ışın `plane * PLANE_LEN * cxf`
+        // kullandığından yatay koordinat PLANE_LEN'e bölünür. Bu olmadan
+        // ödüller ve işaretçiler duvarların ~PLANE_LEN² oranında
+        // sıkışmış/kenara kaymış görünürdü.
+        let cam_x = lateral / (depth * PLANE_LEN);
         if cam_x < -1.0 || cam_x > 1.0 {
             return None;
         }
@@ -2258,10 +2262,17 @@ impl CityDriveApp {
             // buluşmasını sağlar (önceki eşleme birebir korunmuştur).
             plane_x: -dir_y,
             plane_y: dir_x,
-            eye_z: 1.15,
+            // Kamera yüksekliği duvar izdüşümüyle aynı olmalı (CAM_H);
+            // aksi halde araçlar yerden hafif yukarıda "süzülür".
+            eye_z: CAM_H,
             horizon_y: horizon as f32,
             v_scale: focal,
-            focal_x: PLANE_LEN * win_w as f32 * 0.5,
+            // Duvar ışınları `plane` vektörünü PLANE_LEN ile ölçekler
+            // (`ray = dir + plane_unit * PLANE_LEN * cxf`). Sprite
+            // izdüşümünün aynı ekran x'ini üretmesi için odak uzaklığı
+            // PLANE_LEN'e BÖLÜNMELİ; çarpılması sprite'ları yatayda
+            // merkeze doğru ~2 kat sıkıştırıyordu.
+            focal_x: win_w as f32 * 0.5 / PLANE_LEN,
             view_w: win_w as f32,
         };
         let is_night = self.time_of_day > NIGHT_START || self.time_of_day < 0.28;

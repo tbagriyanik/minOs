@@ -1236,6 +1236,23 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 style.opacity = n.clamp(0.0, 1.0);
             }
         }
+        "filter" => {
+            // CSS filter: blur(), brightness(), contrast(), saturate(),
+            // sepia(), hue-rotate(), invert()
+            style.filter = Some(val.to_string());
+        }
+        "aspect-ratio" => {
+            // CSS aspect-ratio: birimli sayı veya percentages
+            style.aspect_ratio = Some(val.to_string());
+        }
+        "mask-image" => {
+            // CSS mask-image: url() veya svg()
+            style.mask_image = Some(val.to_string());
+        }
+        "clip-path" => {
+            // CSS clip-path: function() with shapes
+            style.clip_path = Some(val.to_string());
+        }
         "list-style-type" => {
             if val.eq_ignore_ascii_case("none") {
                 style.list_style_type = 0;

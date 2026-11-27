@@ -463,7 +463,7 @@ pub enum BackgroundSize {
 }
 
 /// Bir öğenin ya da sayfanın arka planında gösterilen çözülmüş görsel.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BackgroundImage {
     /// Önbellek ve yeniden çözümleme anahtarı.
     pub url: String,
@@ -554,6 +554,16 @@ pub struct ElementStyle {
     pub transition_property: Option<String>,
     /// CSS opacity degeri (1 = tam).
     pub opacity: f32,
+    /// CSS filter effetti (blur, brightness, contrast, saturate, sepia, hue-rotate, invert).
+    pub filter: Option<String>,
+    /// CSS aspect-ratio property (ornek: 16/9, 4/3, 100%).
+    pub aspect_ratio: Option<String>,
+    /// CSS mask-image property.
+    pub mask_image: Option<String>,
+    /// CSS clip-path property.
+    pub clip_path: Option<String>,
+    /// CSS container-type.
+    pub container_type: Option<String>,
     /// CSS Grid: sütun izleri (grid-template-columns).
     pub grid_template_columns: Vec<GridTrack>,
     /// CSS Grid: satir izleri (grid-template-rows).
@@ -667,6 +677,11 @@ impl ElementStyle {
             margin_top: 0,
             grid_template_areas: Vec::new(),
             grid_area: None,
+            filter: None,
+            aspect_ratio: None,
+            mask_image: None,
+            clip_path: None,
+            container_type: None,
         }
     }
 

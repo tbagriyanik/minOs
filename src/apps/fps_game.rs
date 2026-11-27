@@ -2563,6 +2563,12 @@ impl FpsGameApp {
         let budget = TimeBudget::new(budget_ms);
         let mut cancelled = false;
 
+        // Tuş maskesi her karede tek seferde tüketilir. Önceki sürümde
+        // `key_mask = 0` yalnızca bütçe dolmadığında çalışıyordu; iptal
+        // durumunda basılı bitler sonraki karelere "takılı" kalıyor ve
+        // oyuncu tuşu bırakmasına rağmen hareket etmeye devam ediyordu.
+        let key_mask = core::mem::take(&mut self.key_mask);
+
         if self.result != GameResult::Playing {
             return true;
         }
@@ -2590,72 +2596,66 @@ impl FpsGameApp {
             }
         }
 
-        // --- Çok tuşlu hareket ve dönüş (ivmeli hareket) ---
-        if self.key_mask != 0 {
+        // --- Çok tuşlu hareket ve dönüş ---
+        if key_mask != 0 {
             if budget.is_expired() {
                 cancelled = true;
             } else {
-                let move_speed = if self.key_mask & KEY_SHIFT != 0 {
+                let move_speed = if key_mask & KEY_SHIFT != 0 {
                     SPRINT_SPEED
                 } else {
                     WALK_SPEED
                 };
-                const ACCEL: f32 = 0.09;
-                const FRICTION: f32 = 0.82;
-
                 // İstenen hareket yönünü hesapla.
                 let mut target_dx = 0.0f32;
                 let mut target_dy = 0.0f32;
 
-                if self.key_mask & KEY_W != 0 {
+                if key_mask & KEY_W != 0 {
                     target_dx += self.dir_x * move_speed;
                     target_dy += self.dir_y * move_speed;
                 }
-                if self.key_mask & KEY_S != 0 {
+                if key_mask & KEY_S != 0 {
                     target_dx -= self.dir_x * move_speed;
                     target_dy -= self.dir_y * move_speed;
                 }
-                if self.key_mask & KEY_A != 0 {
+                if key_mask & KEY_A != 0 {
                     target_dx += self.dir_y * move_speed;
                     target_dy -= self.dir_x * move_speed;
                 }
-                if self.key_mask & KEY_D != 0 {
+                if key_mask & KEY_D != 0 {
                     target_dx -= self.dir_y * move_speed;
                     target_dy += self.dir_x * move_speed;
                 }
 
                 let mut forward = 0.0f32;
-                if self.key_mask & KEY_UP != 0 {
+                if key_mask & KEY_UP != 0 {
                     forward += move_speed;
                 }
-                if self.key_mask & KEY_DOWN != 0 {
+                if key_mask & KEY_DOWN != 0 {
                     forward -= move_speed;
                 }
                 target_dx += forward * self.dir_x;
                 target_dy += forward * self.dir_y;
 
-                // Köşegen hareketi normalize et.
-                if target_dx != 0.0 && target_dy != 0.0 {
-                    let inv_sqrt2 = core::f32::consts::FRAC_1_SQRT_2;
-                    target_dx *= inv_sqrt2;
-                    target_dy *= inv_sqrt2;
+                // Hız vektörünü büyüklüğüne göre sınırla. Eski kontrol
+                // `dx != 0 && dy != 0` koşuluyla köşegen normalize
+                // ediyordu; bu yüzden çapraz bir yöne bakarken düz ileri
+                // hareket ~%29 yavaşlıyordu ("ilerleyemiyor" hissi).
+                // Artık bileşen sayısından bağımsız olarak hız asla
+                // move_speed'i aşmaz.
+                let len_sq = target_dx * target_dx + target_dy * target_dy;
+                if len_sq > move_speed * move_speed {
+                    let inv = move_speed / fast_sqrt(len_sq);
+                    target_dx *= inv;
+                    target_dy *= inv;
                 }
 
-                // İvme uygula: mevcut hızı hedef hızına doğru kaydır.
-                self.vel_x += (target_dx - self.vel_x) * ACCEL;
-                self.vel_y += (target_dy - self.vel_y) * ACCEL;
-
-                // Sürünme (friction): tuş bırakıldığında yavaşla.
-                if target_dx == 0.0 && target_dy == 0.0 {
-                    self.vel_x *= FRICTION;
-                    self.vel_y *= FRICTION;
-                    if self.vel_x.abs() < 0.001 {
-                        self.vel_x = 0.0;
-                    }
-                    if self.vel_y.abs() < 0.001 {
-                        self.vel_y = 0.0;
-                    }
-                }
+                // Standart FPS kontrolü: hız hedefe anında eşitlenir.
+                // Eski ivme+sürtünme modeli (~0.4 sn ivmelenme, ~0.5 sn
+                // kayma) "tuş bırakınca hâlâ hareket" ve "ağır his"
+                // şikayetinin kaynağıydı.
+                self.vel_x = target_dx;
+                self.vel_y = target_dy;
 
                 // Hareketi uygula (çarpışma kontrolü ile).
                 if self.vel_x != 0.0 || self.vel_y != 0.0 {
@@ -2663,33 +2663,21 @@ impl FpsGameApp {
                 }
                 self.moving = self.vel_x != 0.0 || self.vel_y != 0.0;
 
-                if self.key_mask & KEY_LEFT != 0 {
+                if key_mask & KEY_LEFT != 0 {
                     self.rotate(-ROT_SPEED);
                 }
-                if self.key_mask & KEY_RIGHT != 0 {
+                if key_mask & KEY_RIGHT != 0 {
                     self.rotate(ROT_SPEED);
                 }
-
-                self.key_mask = 0;
             }
         } else {
-            // Tuş basılı değilse sürünme uygula.
+            // Tuş basılı değilse hız anında sıfırlanır; artık kayma yok.
             if budget.is_expired() {
                 cancelled = true;
             } else {
-                const FRICTION: f32 = 0.82;
-                self.vel_x *= FRICTION;
-                self.vel_y *= FRICTION;
-                if self.vel_x.abs() < 0.001 {
-                    self.vel_x = 0.0;
-                }
-                if self.vel_y.abs() < 0.001 {
-                    self.vel_y = 0.0;
-                }
-                if self.vel_x != 0.0 || self.vel_y != 0.0 {
-                    self.move_player(self.vel_x, self.vel_y);
-                }
-                self.moving = self.vel_x != 0.0 || self.vel_y != 0.0;
+                self.vel_x = 0.0;
+                self.vel_y = 0.0;
+                self.moving = false;
             }
         }
 

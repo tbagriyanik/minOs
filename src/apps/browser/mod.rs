@@ -971,6 +971,8 @@ pub struct BrowserApp {
     pub js_alert: Option<String>,
     pub js_vars: Vec<(String, String)>,
     pub js_functions: Vec<(String, String)>,
+    /// Tarayıcı sekmeleri.
+    pub tabs: Vec<BrowserTab>,
     pub bookmarks_extra: Vec<crate::apps::browser::types::Bookmark>,
     pub download_path: Option<alloc::string::String>,
     pub download_data: Option<Vec<u8>>,
@@ -1017,6 +1019,31 @@ pub enum DownloadStatus {
     Completed,
     Failed,
     Cancelled,
+}
+
+/// A browser tab representing a browsing context.
+#[derive(Clone, Debug)]
+pub struct BrowserTab {
+    /// Tab URL (minos://, http://, https://, etc.)
+    pub url: [u8; 128],
+    /// URL length
+    pub url_len: usize,
+    /// Page title
+    pub title: [u8; 64],
+    /// Page title length
+    pub title_len: usize,
+    /// Favicon (optional)
+    pub favicon: Option<Arc<BackgroundImage>>,
+    /// Whether the page is loading
+    pub loading: bool,
+    /// Whether the page can go back in history
+    pub can_go_back: bool,
+    /// Whether the page can go forward in history
+    pub can_go_forward: bool,
+    /// Whether the tab is pinned
+    pub pinned: bool,
+    /// Whether the tab is muted (audio)
+    pub muted: bool,
 }
 
 /// A form autofill entry: field name -> value for a domain.
@@ -1321,6 +1348,7 @@ impl BrowserApp {
             devtools: DevToolsState::new(),
             downloads: Vec::new(),
             form_autofill: FormAutofill::new(),
+            tabs: Vec::new(),
         };
         app.set_url(b"minos://help");
         app.navigate();

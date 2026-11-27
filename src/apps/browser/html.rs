@@ -1364,6 +1364,34 @@ pub fn render_html_to_lines(
             let text_attr = extract_attr(attrs, b"text");
             let link_attr = extract_attr(attrs, b"link");
 
+            // Viewport meta tag'i işlemesi
+            // <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            let mut viewport_width: Option<usize> = None;
+            let mut viewport_height: Option<usize> = None;
+            if name_attr.is_some_and(|n| n.eq_ignore_ascii_case("viewport")) {
+                let content_attr = extract_attr(attrs, b"content");
+                if let Some(content) = content_attr {
+                    // width=device-width veya width=number
+                    if let Some(rest) = content.strip_prefix("width=") {
+                        let width_val = rest.trim();
+                        if width_val.eq_ignore_ascii_case("device-width") {
+                            viewport_width = None; // cihaz genişliği kullan
+                        } else if let Ok(w) = width_val.parse::<usize>() {
+                            viewport_width = Some(w);
+                        }
+                    }
+                    // height=device-height veya height=number
+                    if let Some(rest) = content.strip_prefix("height=") {
+                        let height_val = rest.trim();
+                        if height_val.eq_ignore_ascii_case("device-height") {
+                            viewport_height = None; // cihaz yüksekliği kullan
+                        } else if let Ok(h) = height_val.parse::<usize>() {
+                            viewport_height = Some(h);
+                        }
+                    }
+                }
+            }
+
             // Seçici bağlamı: ata zinciri + önceki kardeşler.
             let node_brief =
                 make_node_brief(tag_name_str, attrs, class_attr, id_attr, dom_stack.last());
@@ -1374,8 +1402,10 @@ pub fn render_html_to_lines(
                 ancestors: &ancestors,
                 prev_sibs,
             };
+            let viewport_w = viewport_width.unwrap_or(wrap_width_px);
+            let viewport_h = viewport_height.unwrap_or(768);
             let mut matched =
-                match_css_style_ctx(&css_rules, &elem_ctx, style_attr, wrap_width_px, 768);
+                match_css_style_ctx(&css_rules, &elem_ctx, style_attr, viewport_w, viewport_h);
 
             // CSS Grid modu: kelimeyi aktif öğenin hücresine ekle.
             if in_grid && !word_buf.is_empty() {
@@ -1906,6 +1936,338 @@ pub fn render_html_to_lines(
                             );
                         }
                         word_buf.push('☐'); // Checkbox simgesi
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("file")) {
+                        // File input - dosya seçici
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('⎈'); // File simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('⎈');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("hidden")) {
+                        // Hidden input - görmezden gelinir, içeriği gösterme
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("button")) {
+                        // Button input - tıklanabilir düğme
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('◉'); // Button simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('◉');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("submit")) {
+                        // Submit input - form gönderme düğmesi
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('⊡'); // Submit simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('⊡');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("reset")) {
+                        // Reset input - form sıfırlama düğmesi
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('↻'); // Reset simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('↻');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("number")) {
+                        // Number input - sayısal değer
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('⁊'); // Number simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('⁊');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("email")) {
+                        // Email input - e-posta adresi
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('✉'); // Email simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('✉');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("tel")) {
+                        // Tel input - telefon numarası
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('☎'); // Tel simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('☎');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("date")) {
+                        // Date input - tarih seçici
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('📅'); // Date simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('📅');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("search")) {
+                        // Search input - arama alanı
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('🔍'); // Search simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('🔍');
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("range")) {
+                        // Range input - slidermenü
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('▶'); // Range simgesi
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('▶'); // Range simgesi
+                    } else {
+                        // Bilinmeyen type için varsayılan text davranışı
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                false,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('"');
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('"');
                     }
                 } else if eq_ascii(name, b"textarea") {
                     // <textarea>: Çok satırlı text input
@@ -1941,6 +2303,10 @@ pub fn render_html_to_lines(
                     word_buf.push('\n');
                 } else if eq_ascii(name, b"select") {
                     // <select>: Dropdown liste
+                    let multiple = extract_attr(attrs, b"multiple").is_some();
+                    let _size = extract_attr(attrs, b"size")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(1);
                     if !word_buf.is_empty() {
                         flush_word(
                             out_lines,
@@ -1962,14 +2328,25 @@ pub fn render_html_to_lines(
                             max_lines,
                         );
                     }
-                    word_buf.push('▼'); // Dropdown simgesi
+                    if multiple {
+                        word_buf.push('▼'); // Multiple dropdown simgesi
+                    } else {
+                        word_buf.push('▼'); // Regular dropdown simgesi
+                    }
                 } else if eq_ascii(name, b"option") {
                     // <option>: Dropdown seçenekleri
-                    let option_label = extract_attr(attrs, b"value")
+                    let option_value = extract_attr(attrs, b"value")
                         .or_else(|| extract_attr(attrs, b"label"))
                         .unwrap_or("option");
+                    let selected = extract_attr(attrs, b"selected").is_some();
                     word_buf.push(' ');
-                    word_buf.push_str(option_label);
+                    // Selected seçeneği için farklı bir simge
+                    if selected {
+                        word_buf.push('✓'); // Selected option
+                    } else {
+                        word_buf.push(' ');
+                    }
+                    word_buf.push_str(option_value);
                 } else if eq_ascii(name, b"label") {
                     // <label>: Form etiketi
                     let label_text = extract_attr(attrs, b"for")
@@ -2001,6 +2378,10 @@ pub fn render_html_to_lines(
                         if !ch.is_control() {
                             word_buf.push(ch);
                         }
+                    }
+                    // Binding simgesi: if for attr was present, show connection icon
+                    if !label_text.is_empty() {
+                        word_buf.push('↔'); // Label-input binding
                     }
                 } else if eq_ascii(name, b"form") {
                     // <form>: Form elementi (basit gösterim)
@@ -2059,7 +2440,9 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"label") {
                     // <label> kapanıyor, normal moduna
                 } else if eq_ascii(name, b"form") {
-                    // <form> kapanıyor
+                    // <form>: Form elementi - submit butonları için basit işaretleme
+                    // Form gönderme durumu kaydedilebilir; submit butonları
+                    // on_click tetiklenir quando form gönderimi sağlar
                 } else if eq_ascii(name, b"header")
                     | eq_ascii(name, b"nav")
                     | eq_ascii(name, b"main")

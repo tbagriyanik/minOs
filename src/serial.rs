@@ -28,7 +28,10 @@ pub fn print(message: &str) {
     if is_boot_message(message) {
         let now = crate::boot::time::monotonic_ms();
         let previous = LAST_BOOT_MESSAGE_MS.swap(now, Ordering::AcqRel);
-        if previous != 0 {
+        // init_timebase() TSC_CYCLES_PER_US'i yeniden ayarladığında
+        // monotonic_ms() geriye sıçrayabilir; o durumda önceki damga
+        // gelecekte kalır ve bekleme döngüsü hiç bitmez.
+        if previous != 0 && now >= previous {
             let target = previous.saturating_add(BOOT_MESSAGE_INTERVAL_MS);
             while crate::boot::time::monotonic_ms() < target {
                 core::hint::spin_loop();

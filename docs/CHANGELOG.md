@@ -11,7 +11,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - **Oyunlar:** Dama, Mayın Tarlası ve Satranç sekmelerine 8-top bilardo eklendi; gölgeli 3D top çizimi, nişan çizgisi, güç çubuğu ve basit AI içeriyor.
 - **Şehir Sürüş:** Harita 72×72 hücreye genişletildi; sürüş/geri vites ayarları, geri kamera görünümü ve derinlik testli ağaç çizimi eklendi.
 - **Web Tarayıcısı:** Fare ve dokunma girdileri için temel DOM olay dağıtımı, olay verileri ve olay dinleyicilerini kaldırma desteği eklendi.
-- **Kalite doğrulaması:** Host test paketi 575 teste çıktı (575 geçti / 0 hata); `cargo clippy -- -D warnings` uyarısız tamamlandı.
+- **Kalite doğrulaması:** Host test paketi 578 teste çıktı (578 geçti / 0 hata); `cargo clippy -- -D warnings` uyarısız tamamlandı.
 
 ### Düzeltmeler · Pencere yırtılması ve parça parça güncelleme
 
@@ -53,7 +53,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
   - **Çift fare kaynağı:** BIOS legacy USB emülasyonu devrede kaldığında aynı fare hem xHCI'den hem 8042'den geliyordu (çift girdi → jitle). Artık legacy devir tamamlanamazsa PS/2 fare yolu (`ps2::disable_mouse`) otomatik kapatılır; klavye etkilenmez.
   - **Ekran yırtılması:** kare başına iki ayrı LFB yazımı (içerik + imleç) tek yazıma indirildi ve yazma öncesi dikey-blank beklemesi eklendi. `vsync_wait()` artık donanım vblank bildirmiyorsa (ör. VirtualBox VBoxVGA) bir kez yoklayıp tamamen devre dışı kalıyor — her karede boşuna spin yapıp fare gecikmesi üretmiyor.
   - **Hızlı açılış profili:** Limine menüsüne **minOs Fast Boot** girdisi (`live full fast`) eklendi; açılışta çalışan bellek/süreç/Ring3 test bataryası atlanır, açılış süresi belirgin şekilde kısalır.
-- Host test paketi 575 test içerir (575 geçti / 0 hata).
+- Host test paketi 578 test içerir (578 geçti / 0 hata).
 ## v2.5.0
 
 - **Masaüstü UI/UX cilası ve performans:** Tüm uygulamalarda tekerlekle global yumuşak kaydırma (`Window::scroll_anim`, tarayıcı kendi sistemiyle hariç; sürükleme/track tıklaması animasyonu iptal eder); pencere açılışında 140 ms'lik yukarı kayma, başlat menüsü/bağlam menüsü/Alt+Tab/takvim/ses popup'larında kısa açılış animasyonları ve toast'larda slide-in/out (`gui::anim` easing yardımcıları, `*_open_ms` zaman damgaları, animasyon karelerinde `dirty_tracker` ile sınırlı yeniden çizim); görev çubuğu/tepsi öğelerinde 700 ms gecikmeli tooltip balonları (`gui::tooltip`); tüm metin alanlarında merkezileştirilmiş imleç yanıp sönmesi (`textedit::caret_visible`); başlık çubuğu hover'ında içerik render'ının atlanması (chrome-only repaint); metin çiziminde 256 girişli doğrudan eşlemeli glyph önbelleği ve `text_width`'teki çift aramanın tek `glyph()` çağrısına indirilmesi; kullanılmayan `gui::renderer` ikiz render yolu kaldırıldı.

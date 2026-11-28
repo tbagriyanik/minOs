@@ -44,44 +44,19 @@ fn estimate_tsc_cycles_per_us() -> u64 {
     1_000
 }
 
-/// TSC frekansını PIT kanal 2 ile kalibre eder.
+/// TSC frekansını kalibre eder.
+///
+/// CPUID leaf 0x15/0x16'den TSC frekans tahminini alır. PIT kanal 2 ile
+/// port-polling kalibrasyonu QEMU'da takılma riski taşıdığı (PIT çıkışı
+/// port 0x61 bit 5'ini set etmeyebilir) çıkarılmıştır; CPUID estime
+/// `monotonic_ms()` için yeterince doğrudur.
 pub fn init_timebase() -> bool {
-    let fallback_cycles_per_us = estimate_tsc_cycles_per_us();
+    let cycles_per_us = estimate_tsc_cycles_per_us();
     unsafe {
-        TSC_CYCLES_PER_US = fallback_cycles_per_us;
+        TSC_CYCLES_PER_US = cycles_per_us;
     }
-    unsafe {
-        let mut port61: u8;
-        core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
-        let saved = port61;
-        port61 = (port61 & !0x03) | 0x01;
-        core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") port61, options(nomem, nostack, preserves_flags));
-        // PIT kanal 2 mode 0, 65536 sayım ≈ 54.9 ms.
-        core::arch::asm!("out dx, al", in("dx") 0x43u16, in("al") 0xB0u8, options(nomem, nostack, preserves_flags));
-        core::arch::asm!("out dx, al", in("dx") 0x42u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
-        core::arch::asm!("out dx, al", in("dx") 0x42u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
-        let start = read_cpu_cycles();
-        let timeout_cycles = fallback_cycles_per_us.saturating_mul(1_000_000);
-        let mut ready = false;
-        for _ in 0..10_000_000 {
-            core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
-            if port61 & 0x20 != 0 {
-                ready = true;
-                break;
-            }
-            if read_cpu_cycles().wrapping_sub(start) >= timeout_cycles {
-                break;
-            }
-            core::hint::spin_loop();
-        }
-        if ready {
-            let elapsed = read_cpu_cycles().wrapping_sub(start).max(1);
-            TSC_CYCLES_PER_US = (elapsed / 54_925).max(1);
-        }
-        core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") saved, options(nomem, nostack, preserves_flags));
-        TIMEBASE_READY.store(true, Ordering::Release);
-        ready
-    }
+    TIMEBASE_READY.store(true, Ordering::Release);
+    true
 }
 
 pub fn is_ready() -> bool {
@@ -89,6 +64,11 @@ pub fn is_ready() -> bool {
 }
 
 pub fn monotonic_ms() -> u64 {
+    // Zaman tabanı kurulmadan önce TSC_CYCLES_PER_US=1 olduğundan
+    // okuma astronomik değer üretir; hazır olana dek 0 döndür.
+    if !is_ready() {
+        return 0;
+    }
     let cycles_per_us = unsafe { TSC_CYCLES_PER_US }.max(1);
     read_cpu_cycles() / cycles_per_us / 1_000
 }

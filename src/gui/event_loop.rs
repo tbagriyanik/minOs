@@ -648,11 +648,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     // Oyun bütçesi sabitleri
     const GAME_UPDATE_BUDGET_MS: u64 = 50;
     const GAME_FPS_LIMIT_MS: u64 = 33;
-    const FPS3D_FPS_LIMIT_MS: u64 = 16;
+    const FPS3D_FPS_LIMIT_MS: u64 = 33;
+    // Odaklanmamış oyun pencerelerinin kare işaretleme aralığı. Ağır
+    // sahne çizimleri (şehir ~100 ms/kare) odaklı uygulamanın thread'ini
+    // aç bırakmasın diye arka plandaki oyunlar ~7 Hz ile tazelenir;
+    // girdi/etkileşim kaynaklı kirler bundan bağımsız çalışır.
+    const BACKGROUND_GAME_REPAINT_MS: u64 = 150;
     // Oyun tick zamanları (döngü içinde kullanılır)
     let mut last_game_tick_ms: u64 = monotonic_ms();
     let mut last_fps3d_tick_ms: u64 = monotonic_ms();
     let mut last_city_tick_ms: u64 = monotonic_ms();
+    let mut last_fps3d_repaint_ms: u64 = monotonic_ms();
+    let mut last_city_repaint_ms: u64 = monotonic_ms();
 
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
@@ -724,6 +731,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         .unwrap_or(false)
     {
         open_app(&mut compositor, &mut apps, &fs_mgr.vfs, 17);
+        // Komut satırıyla otomatik açılan şehir doğrudan sürüşe başlar;
+        // menüde beklemek performans testi senaryosunu engellerdi.
+        if let Some(city) = apps.city_drive_app.as_mut() {
+            city.state = apps::city_drive::CityState::Driving;
+            city.reset_world();
+        }
         serial_print("[BOOT] city=1: sehir surusu otomatik acildi.\n");
     }
 
@@ -976,6 +989,16 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         let l = gui::MinGuiCompositor::tray_layout(width, height);
 
         let tb_y = l.tb_y;
+
+        // Tam ekran pencere açıkken görev çubuğu gizlenir; tepsi ve
+        // sekme tıklamaları da bu karede yutulur (görünmez düğme
+        // tıklanmasın).
+        let taskbar_hidden = compositor.windows.iter().flatten().any(|w| {
+            w.is_open
+                && !w.is_minimized
+                && w.is_fullscreen
+                && w.workspace == compositor.active_workspace
+        });
 
         // RTC saatini islem dongusu sayisina gore degil, gecen gercek zamana gore yenile.
 
@@ -2653,7 +2676,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // E) Sistem tepsisi dugmeleri
 
-            if !consumed {
+            if !consumed && !taskbar_hidden {
                 if gui::in_rect(mx, my, l.start) {
                     compositor.is_start_menu_open = !compositor.is_start_menu_open;
 
@@ -2748,7 +2771,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             let tab_h = gui::MinGuiCompositor::taskbar_tab_rect_at(0, tb_y).3;
 
-            if !consumed && my >= tb_y + 5 && my < tb_y + 5 + tab_h {
+            if !consumed && !taskbar_hidden && my >= tb_y + 5 && my < tb_y + 5 + tab_h {
                 let open_count = compositor
                     .windows
                     .iter()
@@ -3197,7 +3220,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         compositor.focus_window(idx);
 
                         if dbl {
-                            compositor.toggle_maximize(idx, width, height);
+                            // Başlık çubuğu çift tıklama: tam ekran
+                            // aç/kapat (görev çubuğu dahil tüm ekran).
+                            compositor.toggle_fullscreen(idx, width, height);
 
                             state.dragging_win = None;
 
@@ -3211,7 +3236,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             state.last_title_click_ms = now_ms;
 
-                            if !win.is_maximized {
+                            if !win.is_maximized && !win.is_fullscreen {
                                 state.dragging_win = Some(idx);
 
                                 state.drag_offset_x = mx.saturating_sub(wx);
@@ -10415,7 +10440,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
             // Tam ekran yerine yalnızca oyun penceresi bölgesi kirli
             // işaretlenir; kirli-dikdörtgen çizimi masaüstünü atlar.
-            track_app_window_dirty(&mut compositor, 16);
+            // Pencere odaklı değilse (örn. şehir sürüşü ön plandayken)
+            // ağır sahne çizimi seyreltilir.
+            let repaint_now = crate::monotonic_ms();
+            if app_is_focused(&compositor, 16)
+                || repaint_now.wrapping_sub(last_fps3d_repaint_ms) >= BACKGROUND_GAME_REPAINT_MS
+            {
+                track_app_window_dirty(&mut compositor, 16);
+                last_fps3d_repaint_ms = repaint_now;
+            }
         }
 
         // Şehir sürüşü: araç fiziği, trafik hareketi ve motor sesi.
@@ -10445,7 +10478,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     {
                         watchdog::heartbeat(idx, 17);
                     }
-                    track_app_window_dirty(&mut compositor, 17);
+                    if app_is_focused(&compositor, 17)
+                        || now_ms.wrapping_sub(last_city_repaint_ms) >= BACKGROUND_GAME_REPAINT_MS
+                    {
+                        track_app_window_dirty(&mut compositor, 17);
+                        last_city_repaint_ms = now_ms;
+                    }
                 } else {
                     crate::serial_print("[CITY] Guard recovery: oyun hata verdi, kapatılıyor\n");
                     if let Some(idx) = compositor
@@ -10544,7 +10582,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         state.game_sound_until_ms =
                             crate::monotonic_ms().saturating_add(duration_ms as u64);
                     }
-                    state.force_render = true;
                 }
             }
         }
@@ -10555,14 +10592,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             state.game_sound_until_ms = 0;
         }
 
-        // FPS 3D oyun ses efektleri.
+        // FPS 3D oyun ses efektleri. Ses tek başına piksel değiştirmez;
+        // force_render ile tam ekran flush'a düşürmek yerine oyun
+        // penceresinin zaten kirli işaretli bölgesel yenilemesi yeterlidir.
+        // Aksi halde sürekli ses olayları (ateş/adım/saldırı) tam ekran
+        // kopyalarını arka arkaya tetikleyip masaüstünü kilitler.
         if fps3d_open {
             if let Some((freq, _duration)) = apps::fps_game::FpsGameApp::sound_tone(
                 apps.fps_3d_app.as_mut().unwrap().take_sound(),
             ) {
                 if !audio_dev.is_muted && audio_dev.volume_left > 0 && freq > 0 {
                     audio_dev.set_pc_speaker_tone(freq);
-                    state.force_render = true;
                 }
             }
         }

@@ -2410,6 +2410,7 @@ impl BilliardsGame {
                     if speed < BILLIARDS_MIN_SPEED {
                         ball.vx = 0.0;
                         ball.vy = 0.0;
+                        ball.angle = 0.0; // Durmuş top şerit desenini döndürmesin
                     }
 
                     changed = true;

@@ -624,7 +624,7 @@ impl SystemSettings {
             volume: 75,
             is_muted: false,
             mouse_speed: 5,
-            double_click_ms: 300,
+            double_click_ms: 500,
             reverse_scroll: false,
             reduced_motion: false,
             transparent_windows: false,

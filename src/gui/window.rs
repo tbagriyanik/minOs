@@ -102,6 +102,11 @@ pub struct Window {
     pub is_open: bool,
     /// Whether window is maximized to full screen.
     pub is_maximized: bool,
+    /// Whether window covers the entire screen including the taskbar
+    /// (true fullscreen, e.g. title-bar double-click).
+    pub is_fullscreen: bool,
+    /// Geometry + maximized state saved before entering fullscreen.
+    pub fs_restore: Option<(usize, usize, usize, usize, bool)>,
     /// Sanal masaüstü (workspace) indeksi; yalnızca `active_workspace`'teki
     /// pencereler çizilir ve etkileşir.
     pub workspace: usize,
@@ -184,6 +189,8 @@ impl Window {
             is_minimized: false,
             is_open,
             is_maximized: false,
+            is_fullscreen: false,
+            fs_restore: None,
             workspace: 0,
             restore: None,
             z: 0,
@@ -420,7 +427,7 @@ impl Window {
     /// # Returns
     /// The detected resize edge, or `None` if not in a resize area.
     pub fn resize_edge_at(&self, mx: usize, my: usize) -> Option<ResizeEdge> {
-        if !self.is_open || self.is_minimized || self.is_maximized {
+        if !self.is_open || self.is_minimized || self.is_maximized || self.is_fullscreen {
             return None;
         }
         // Title bar controls take precedence; resize grips don't overlap them.

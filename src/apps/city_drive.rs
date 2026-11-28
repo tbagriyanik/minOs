@@ -1903,6 +1903,15 @@ impl CityDriveApp {
         if view_h < 64 {
             return true;
         }
+
+        // Menü ekranı: 3D dünyayı çizme, sadece menüyü göster (FPS oyunundaki gibi).
+        // Bu sayede ilk ekranda dünya kırpık/parçalı görünmez.
+        if self.state == CityState::Menu {
+            fb.draw_rect(win_x, top, win_w, view_h, 0x080B10);
+            self.render_menu(fb, win_x, top, win_w, view_h);
+            return true;
+        }
+
         let horizon = top + view_h / 2;
         let camera_dir = self.camera_direction();
         let dir_x = cos(camera_dir);
@@ -2003,11 +2012,13 @@ impl CityDriveApp {
         // azaltir.
         let cam_h_focal = CAM_H * focal;
         let inv_w = 2.0 / win_w as f32;
-        // Zemin izgarisi 4 px'lik satirlarla cizilir: zemin rengi
-        // uzaklikla puruzsuz degistigi ve serit isaretleri yatay
-        // seritler halinde genis yer kapladigi icin dikey cozunurluk
-        // kaybi gormezden gelinebilir; hucre sayisi ~4 kat duser.
-        for row in (horizon..top + view_h).step_by(4) {
+        // Zemin izgarisi mesafeye gore kademelendirilir: on planda 2 px
+        // (pürüzsüz, aliassiz), ufka dogru 8 px'e kadar büyür. Uzaklikla
+        // renk puruzsuz degistigi ve piksel yogunlugu dustugu icin
+        // goruntu kaybi olmaz; sabit 2 px butceyi asiyordu.
+        let mut row = horizon;
+        let ground_end = top + view_h;
+        while row < ground_end {
             if budget.is_expired() {
                 {
                     city_profile_dump(&__marks, __t0, win_w, win_h);
@@ -2016,14 +2027,16 @@ impl CityDriveApp {
             }
             let dy = (row as f32 + 2.0) - horizon as f32;
             if dy <= 0.0 {
+                row += 2;
                 continue;
             }
             let dist = cam_h_focal / dy;
             if dist > MAX_VIEW {
+                row += 8;
                 continue;
             }
-            let cell = 8usize;
-            let cell_h = 4usize;
+            let cell = ((dist * 0.30) as usize).clamp(2, 8);
+            let cell_h = cell;
             // Ayni renkli bitisik hucreleri yatay calistirmada birlestir:
             // duzlük yol/sehir manzarasinda hucre basina draw_rect cagrisi
             // yerine satir basina birkac cagri yeterlidir.
@@ -2063,9 +2076,9 @@ impl CityDriveApp {
         // Geniş pencerelerde sprite derinlik testi de tam görünürlük alanını
         // kapsasın; 512 sütunluk tampon yüksek çözünürlükte araçları kırpıyordu.
         let mut zbuf = [MAX_VIEW; 1024];
-        // 760 px genislikte 2 px'lik sutunlar TCG'de ~40 ms tutuyordu;
-        // 3 px'lik sutunlar butceye sigar.
-        let col_step = if win_w >= 500 { 3 } else { 1 };
+        // 2 px'lik sutunlar duvar dokusunu belirginlestirir; zemin
+        // esdeger kaynaklara indigi icin butceye sigar.
+        let col_step = if win_w >= 500 { 2 } else { 1 };
         for col in (0..win_w.min(1024)).step_by(col_step) {
             if budget.is_expired() {
                 {
@@ -2185,18 +2198,26 @@ impl CityDriveApp {
             let inv_storey = 1.0 / STOREY_H;
             let inv_scale = 1.0 / scale;
             let horizon_f = horizon as f32;
-            for row in row_start..row_end {
-                if (row & 15) == 0 && budget.is_expired() {
+            // Satirlar ikiserli bantlar halinde islenir: pencere/kat
+            // desenleri bandin ortasindaki satirdan orneklenir, ayni
+            // renkli bantlar tek draw_rect'te birlesir. Bu, 2 px'lik
+            // sutunlarla duvarlari tam cozunurlukte cizerken satir
+            // basina hesaplama maliyetini yarıya indirir.
+            let mut band = row_start;
+            let mut run_end = row_start;
+            while band < row_end {
+                if (band & 15) == 0 && budget.is_expired() {
                     {
                         city_profile_dump(&__marks, __t0, win_w, win_h);
                         return false;
                     }
                 }
-                let z = CAM_H + (horizon_f - row as f32) * inv_scale;
+                let probe = (band + 1).min(row_end - 1);
+                let z = CAM_H + (horizon_f - probe as f32) * inv_scale;
                 let z_storey = z * inv_storey;
                 let storey_f = fractf(z_storey);
                 let storey_idx = floorf(z_storey) as i32;
-                let is_top_row = row == row_start;
+                let is_top_row = band == row_start;
 
                 let row_color = if is_top_row && storeys > 0.0 {
                     // Tavan/cati cizgisi (en ust satir).
@@ -2213,7 +2234,7 @@ impl CityDriveApp {
                     let window_col =
                         wall_u > 0.22 && wall_u < 0.42 || wall_u > 0.58 && wall_u < 0.78;
                     let lit = is_night
-                        && ((hit_x * 13 + hit_y * 7 + row as i32 * 3 + storey_idx * 11) % 7) == 0;
+                        && ((hit_x * 13 + hit_y * 7 + probe as i32 * 3 + storey_idx * 11) % 7) == 0;
                     if in_window_band && window_col && window_x {
                         if lit {
                             lit_color
@@ -2225,17 +2246,22 @@ impl CityDriveApp {
                     }
                 };
 
+                let band_end = (band + 2).min(row_end);
                 if run_color == Some(row_color) {
+                    run_end = band_end;
+                    band = band_end;
                     continue;
                 }
                 if let Some(c) = run_color {
-                    fb.draw_rect(win_x + col, run_start, col_step, row - run_start, c);
+                    fb.draw_rect(win_x + col, run_start, col_step, run_end - run_start, c);
                 }
-                run_start = row;
+                run_start = band;
+                run_end = band_end;
                 run_color = Some(row_color);
+                band = band_end;
             }
             if let Some(c) = run_color {
-                fb.draw_rect(win_x + col, run_start, col_step, row_end - run_start, c);
+                fb.draw_rect(win_x + col, run_start, col_step, run_end - run_start, c);
             }
         }
 
@@ -2937,6 +2963,52 @@ impl CityDriveApp {
         }
     }
 
+    /// Başlangıç menüsü: tam ekran ortalanmış kutu, başlık ve kontroller.
+    /// 3D dünya çizilmez; yalnızca menü katmanı gösterilir.
+    fn render_menu(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
+        let title = crate::gui::ui_text("ŞEHİR SÜRÜŞÜ", "CITY DRIVE");
+        let sub = crate::gui::ui_text("[Enter] ile sürüşe başla", "Press [Enter] to start driving");
+        let controls = crate::gui::ui_text(
+            "W/S gaz-fren · A/D direksiyon · Space el freni",
+            "W/S throttle-brake · A/D steer · C camera · Space handbrake",
+        );
+        let goal = crate::gui::ui_text(
+            "Ödülleri topla, yakıtını koru, drift yap, tur tamamla!",
+            "Collect prizes, manage fuel, drift, complete laps!",
+        );
+        let cx = win_x + win_w / 2;
+        let cy = win_y + win_h / 2;
+        let bw = 340.min(win_w.saturating_sub(20));
+        let bh = 150.min(win_h.saturating_sub(20));
+        fb.draw_rect(cx - bw / 2 + 4, cy - bh / 2 + 5, bw, bh, 0x080B10);
+        fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, bh, 0x101923);
+        fb.draw_rect_outline(cx - bw / 2, cy - bh / 2, bw, bh, 0x4DABF7);
+        fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, 4, 0x4DABF7);
+        MinGuiCompositor::draw_string(
+            fb,
+            cx - MinGuiCompositor::text_width(title, 2) / 2,
+            cy - bh / 2 + 18,
+            title,
+            Color::ACCENT_BLUE,
+        );
+        for (i, line) in [sub, controls, goal].iter().enumerate() {
+            MinGuiCompositor::draw_string(
+                fb,
+                cx - MinGuiCompositor::text_width(line, 1) / 2,
+                cy - bh / 2 + 58 + i * 22,
+                line,
+                Color::TEXT_MAIN,
+            );
+        }
+    }
+
     /// HUD: hız göstergesi, dönüş yarıçapı, skor, mini harita, kontrol ipuçları.
     fn render_hud(
         &self,
@@ -3174,46 +3246,10 @@ impl CityDriveApp {
         }
 
         // Menü / duraklatma katmanı.
+        // Menü durumu render_content_with_budget'ta erken dönüşle işlenir,
+        // burada yalnızca Duraklatılmış ve Sürüş durumları var.
         match self.state {
-            CityState::Menu => {
-                let title = crate::gui::ui_text("ŞEHİR SÜRÜŞÜ", "CITY DRIVE");
-                let sub = crate::gui::ui_text(
-                    "[Enter] ile sürüşe başla",
-                    "Press [Enter] to start driving",
-                );
-                let controls = crate::gui::ui_text(
-                    "W/S gaz-fren · A/D direksiyon · Space el freni",
-                    "W/S throttle-brake · A/D steer · C camera · Space handbrake",
-                );
-                let goal = crate::gui::ui_text(
-                    "Ödülleri topla, yakıtını koru, drift yap, tur tamamla!",
-                    "Collect prizes, manage fuel, drift, complete laps!",
-                );
-                let cx = win_x + win_w / 2;
-                let cy = win_y + win_h / 2;
-                let bw = 340.min(win_w.saturating_sub(20));
-                let bh = 150.min(win_h.saturating_sub(20));
-                fb.draw_rect(cx - bw / 2 + 4, cy - bh / 2 + 5, bw, bh, 0x080B10);
-                fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, bh, 0x101923);
-                fb.draw_rect_outline(cx - bw / 2, cy - bh / 2, bw, bh, 0x4DABF7);
-                fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, 4, 0x4DABF7);
-                MinGuiCompositor::draw_string(
-                    fb,
-                    cx - MinGuiCompositor::text_width(title, 2) / 2,
-                    cy - bh / 2 + 18,
-                    title,
-                    Color::ACCENT_BLUE,
-                );
-                for (i, line) in [sub, controls, goal].iter().enumerate() {
-                    MinGuiCompositor::draw_string(
-                        fb,
-                        cx - MinGuiCompositor::text_width(line, 1) / 2,
-                        cy - bh / 2 + 58 + i * 22,
-                        line,
-                        Color::TEXT_MAIN,
-                    );
-                }
-            }
+            CityState::Menu => {}
             CityState::Paused => {
                 let title = crate::gui::ui_text("DURAKLATILDI", "PAUSED");
                 let sub =

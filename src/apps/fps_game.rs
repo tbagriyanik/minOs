@@ -770,34 +770,38 @@ impl FpsGameApp {
         self.pointer_y = py;
 
         // Göreceli hareket doğal 1:1 dönüş sağlar.
-        if dx != 0.0 || dy != 0.0 {
+        let moved = dx != 0.0 || dy != 0.0;
+        if moved {
             self.look(dx, dy);
         }
 
-        // Kenar sürükleme: imleç pencerenin kenar bölgesindeyse bakış sabit
-        // hızda döner (mutlak işaretçide imleç ekran kenarına dayanınca
-        // hareket olayı üretilmediği için bu yedek yol gerekir).
-        let sw = screen_w as f32;
-        let sh = screen_h as f32;
-        let edge_w = EDGE_ZONE.min(sw * 0.15);
-        let edge_h = EDGE_ZONE.min(sh * 0.15);
-        let mut turn = 0.0f32;
-        let mut pitch_turn = 0.0f32;
-        if px <= edge_w {
-            turn -= EDGE_TURN_RATE * dt * (1.0 - px / edge_w);
-        } else if px >= sw - edge_w {
-            turn += EDGE_TURN_RATE * dt * (1.0 - (sw - px) / edge_w);
-        }
-        if py <= edge_h {
-            pitch_turn -= EDGE_TURN_RATE * dt * (1.0 - py / edge_h);
-        } else if py >= sh - edge_h {
-            pitch_turn += EDGE_TURN_RATE * dt * (1.0 - (sh - py) / edge_h);
-        }
-        if turn != 0.0 {
-            self.rotate(turn);
-        }
-        if pitch_turn != 0.0 {
-            self.pitch = (self.pitch + pitch_turn).clamp(-PI / 3.0, PI / 3.0);
+        // Kenar sürükleme: yalnızca imleç hareket ediyorken etkin.
+        // Mutlak işaretçi (tablet) ekran kenarına dayandığında hareket
+        // olayı üretmediği için bu yedek yol gerekir; ancak imleç
+        // duruyken sürekli dönüşe yol açmamalı.
+        if moved {
+            let sw = screen_w as f32;
+            let sh = screen_h as f32;
+            let edge_w = EDGE_ZONE.min(sw * 0.15);
+            let edge_h = EDGE_ZONE.min(sh * 0.15);
+            let mut turn = 0.0f32;
+            let mut pitch_turn = 0.0f32;
+            if px <= edge_w {
+                turn -= EDGE_TURN_RATE * dt * (1.0 - px / edge_w);
+            } else if px >= sw - edge_w {
+                turn += EDGE_TURN_RATE * dt * (1.0 - (sw - px) / edge_w);
+            }
+            if py <= edge_h {
+                pitch_turn -= EDGE_TURN_RATE * dt * (1.0 - py / edge_h);
+            } else if py >= sh - edge_h {
+                pitch_turn += EDGE_TURN_RATE * dt * (1.0 - (sh - py) / edge_h);
+            }
+            if turn != 0.0 {
+                self.rotate(turn);
+            }
+            if pitch_turn != 0.0 {
+                self.pitch = (self.pitch + pitch_turn).clamp(-PI / 3.0, PI / 3.0);
+            }
         }
     }
 
@@ -1531,6 +1535,7 @@ impl FpsGameApp {
         // A slow plane pass must not starve walls and enemies. Give each
         // render layer its own share so later layers still get drawn when
         // an earlier one is incomplete.
+        let __t0 = crate::monotonic_ms();
         let planes_budget_ms = budget_ms / 4;
         let walls_budget_ms = budget_ms / 2;
         let sprites_budget_ms = budget_ms.saturating_sub(planes_budget_ms + walls_budget_ms);
@@ -1548,6 +1553,7 @@ impl FpsGameApp {
             row_end,
             &TimeBudget::new(planes_budget_ms),
         );
+        let __m1 = crate::monotonic_ms();
         let walls_complete = self.render_walls(
             fb,
             win_x,
@@ -1562,6 +1568,7 @@ impl FpsGameApp {
             row_end,
             &TimeBudget::new(walls_budget_ms),
         );
+        let __m2 = crate::monotonic_ms();
         let sprites_complete = self.render_sprites(
             fb,
             win_x,
@@ -1578,7 +1585,39 @@ impl FpsGameApp {
             row_end,
             &TimeBudget::new(sprites_budget_ms),
         );
+        let __m3 = crate::monotonic_ms();
         let cancelled = !(planes_complete && walls_complete && sprites_complete);
+
+        // FPS3D-PROFILE: asama surelerini seri porta yazar (donma ayiklama).
+        let __tot = __m3.saturating_sub(__t0);
+        static mut __LAST_PR: u64 = 0;
+        if __tot > 60 {
+            let __now = crate::monotonic_ms();
+            unsafe {
+                if __now.wrapping_sub(__LAST_PR) > 1500 {
+                    __LAST_PR = __now;
+                    crate::boot::console::serial_print("[FPS3D-PROFILE] planes=");
+                    crate::boot::console::serial_print_dec(__m1.saturating_sub(__t0));
+                    crate::boot::console::serial_print(" walls=");
+                    crate::boot::console::serial_print_dec(__m2.saturating_sub(__m1));
+                    crate::boot::console::serial_print(" sprites=");
+                    crate::boot::console::serial_print_dec(__m3.saturating_sub(__m2));
+                    crate::boot::console::serial_print(" total=");
+                    crate::boot::console::serial_print_dec(__tot);
+                    crate::boot::console::serial_print(" iw=");
+                    crate::boot::console::serial_print_dec(iw as u64);
+                    crate::boot::console::serial_print(" ih=");
+                    crate::boot::console::serial_print_dec(ih as u64);
+                    crate::boot::console::serial_print(" scale=");
+                    crate::boot::console::serial_print_dec(scale as u64);
+                    crate::boot::console::serial_print(" win=");
+                    crate::boot::console::serial_print_dec(win_w as u64);
+                    crate::boot::console::serial_print("x");
+                    crate::boot::console::serial_print_dec(win_h as u64);
+                    crate::boot::console::serial_print("\n");
+                }
+            }
+        }
 
         if !cancelled {
             // Ateş/hasar ekran çerçevesi.

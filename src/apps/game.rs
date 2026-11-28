@@ -1596,16 +1596,23 @@ impl GameApp {
             // malzeme çerçevesinde sabittir; dünya normalini malzeme
             // çerçevesine çevirmek için eksen etrafında -açı döndürürüz.
             let speed = fast_sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+            // Durmuş top kanonik dinlenme yöneliminde çizilir: işaretler
+            // (şerit kutbu, numara, çap noktası) yukarı bakar ve top
+            // "hâlâ dönüyor" gibi görünmez.
+            let at_rest = speed <= 0.0001;
             let (ux, uy) = if speed > 0.0001 {
                 (ball.vx / speed, ball.vy / speed)
             } else {
                 (ball.roll_ux, ball.roll_uy)
             };
-            let ax = -uy;
-            let ay = ux;
-            let roll_sin = fast_sin(ball.angle);
-            let roll_cos = fast_cos(ball.angle);
-            let one_minus_cos = 1.0 - roll_cos;
+            let (ax, ay) = if at_rest { (0.0f32, 1.0f32) } else { (-uy, ux) };
+            let (roll_sin, roll_cos, one_minus_cos) = if at_rest {
+                (0.0f32, -1.0f32, 2.0f32)
+            } else {
+                let s = fast_sin(ball.angle);
+                let c = fast_cos(ball.angle);
+                (s, c, 1.0 - c)
+            };
 
             // Şerit bandının simetri ekseni (kutup) dünya uzayında:
             // başlangıçta dikey olan eksen, top yuvarlandıkça eğilir.

@@ -181,482 +181,505 @@ impl MinGuiCompositor {
         let mx = mouse.x as usize;
         let my = mouse.y as usize;
 
+        // Tam ekran pencere görev çubuğunu örter; şerit bu karede
+        // çizilmez (açılır menüler ve ipuçları etkilenmez).
+        let taskbar_hidden = self.windows.iter().flatten().any(|w| {
+            w.is_open && !w.is_minimized && w.is_fullscreen && w.workspace == self.active_workspace
+        });
+
         // Tooltip hover raporu kare başına sıfırlanır; aşağıdaki hover
         // hesapları bu karede görülen öğeleri yeniden bildirir.
         self.tooltip_frame_begin();
 
         // Görev Çubuğu Zemin (gradyan)
-        fb.draw_vgradient(
-            0,
-            tb_y,
-            fb.width,
-            scaled_taskbar_h(),
-            Color::TASKBAR_BG,
-            Self::shade(Color::TASKBAR_BG, 8),
-        );
-        fb.draw_rounded_rect_alpha(
-            0,
-            tb_y,
-            fb.width,
-            scaled_taskbar_h(),
-            0,
-            Color::TASKBAR_BG,
-            224,
-        );
-        fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
-
-        // Tepsi öğeleri için ortak hover / basılı / açık-panel geri bildirimi.
-        // Böylece yalnızca metnin renk değiştirmesi yerine tıklanabilir alanın
-        // tamamı görünür olur; açık takvim ve ses panelinin sahibi de belli olur.
-        let tray_items = [
-            (l.kbd, false, ui_text("Klavye düzeni", "Keyboard layout")),
-            (l.network, false, ui_text("Ağ durumu", "Network status")),
-            (
-                l.volume,
-                self.is_volume_popup_open,
-                ui_text("Ses düzeyi", "Volume"),
-            ),
-            (
-                l.minimize_all,
-                false,
-                ui_text("Tüm pencereleri küçült", "Minimize all windows"),
-            ),
-            (
-                l.clock,
-                self.is_calendar_open,
-                ui_text("Tarih ve saat", "Date and time"),
-            ),
-        ];
-        for (rect, panel_open, tip) in tray_items {
-            if rect.2 == 0 {
-                continue;
-            }
-            let hovered = in_rect(mx, my, rect);
-            if hovered {
-                self.tooltip_offer(rect, tip);
-            }
-            if !hovered && !panel_open {
-                continue;
-            }
-            let pressed = hovered && mouse.left_button;
-            let bg = if pressed {
-                Self::shade(Color::TITLE_BAR, -12)
-            } else {
-                Self::shade(Color::TITLE_BAR, 16)
-            };
-            fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);
-            if panel_open {
-                fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 8, Color::ACCENT_BLUE);
-            }
-        }
-
-        // Başlat Menüsü Butonu
-        let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
-        if start_hover {
-            self.tooltip_offer(l.start, ui_text("Başlat menüsü", "Start menu"));
-        }
-        let start_bg = Color::ACCENT_BLUE;
-        Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
-        // Kedi ikonu + "minOs" metni buton içinde yatay olarak ortalanır;
-        // metin buton kenarlarına yapışmaz veya taşmaz.
-        {
-            let label = "minOs";
-            let text_w = Self::text_width(label, 1);
-            let icon_w = Self::icon_size();
-            let inner_gap = sp(8);
-            let block_w = icon_w + inner_gap + text_w;
-            let block_x = l.start.0 + l.start.2.saturating_sub(block_w) / 2;
-            let icon_y = tb_y + scaled_taskbar_h().saturating_sub(icon_w) / 2;
-            let text_h = Self::text_height();
-            let text_y = tb_y + scaled_taskbar_h().saturating_sub(text_h) / 2;
-            Self::draw_cat_icon(fb, block_x, icon_y);
-            Self::draw_string_shadow(
-                fb,
-                block_x + icon_w + inner_gap,
-                text_y,
-                label,
-                Self::text_on(start_bg),
-                Color::SHADOW,
-                1,
+        if !taskbar_hidden {
+            fb.draw_vgradient(
+                0,
+                tb_y,
+                fb.width,
+                scaled_taskbar_h(),
+                Color::TASKBAR_BG,
+                Self::shade(Color::TASKBAR_BG, 8),
             );
-        }
+            fb.draw_rounded_rect_alpha(
+                0,
+                tb_y,
+                fb.width,
+                scaled_taskbar_h(),
+                0,
+                Color::TASKBAR_BG,
+                224,
+            );
+            fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
 
-        // Uygulama Sekmeleri (Yuvarlatılmış 5px) — font ölçeğine göre büyür.
-        let open_count = self
-            .windows
-            .iter()
-            .filter(|slot| {
-                slot.is_some_and(|win| win.is_open && win.workspace == self.active_workspace)
-            })
-            .count();
-        let (tab_start, tab_width, tab_step, shown_tabs, tab_slots) =
-            Self::taskbar_tabs_layout(fb.width, fb.height, open_count);
-        let mut tab_slot = 0usize;
-        for win in self.windows.iter().flatten() {
-            if win.is_open && win.workspace == self.active_workspace {
-                if tab_slot >= shown_tabs {
-                    break;
+            // Tepsi öğeleri için ortak hover / basılı / açık-panel geri bildirimi.
+            // Böylece yalnızca metnin renk değiştirmesi yerine tıklanabilir alanın
+            // tamamı görünür olur; açık takvim ve ses panelinin sahibi de belli olur.
+            let tray_items = [
+                (l.kbd, false, ui_text("Klavye düzeni", "Keyboard layout")),
+                (l.network, false, ui_text("Ağ durumu", "Network status")),
+                (
+                    l.volume,
+                    self.is_volume_popup_open,
+                    ui_text("Ses düzeyi", "Volume"),
+                ),
+                (
+                    l.minimize_all,
+                    false,
+                    ui_text("Tüm pencereleri küçült", "Minimize all windows"),
+                ),
+                (
+                    l.clock,
+                    self.is_calendar_open,
+                    ui_text("Tarih ve saat", "Date and time"),
+                ),
+            ];
+            for (rect, panel_open, tip) in tray_items {
+                if rect.2 == 0 {
+                    continue;
                 }
-                let tab_x = tab_start + tab_slot * tab_step;
-                let (_, _, tw, th) = MinGuiCompositor::taskbar_tab_rect_at(tab_x, tb_y);
-                let tw = tw.min(tab_width);
-                let rect = (tab_x, tb_y + 5, tw, th);
-                let active = win.is_focused && !win.is_minimized;
-                let base = if active {
-                    Color::TITLE_BAR
-                } else {
-                    Color::TITLE_BAR_INACTIVE
-                };
                 let hovered = in_rect(mx, my, rect);
-                // Sekme ipucu: uygulama başlığı + bu çalışma alanındaki açık
-                // pencere sayısı + çalışma alanı numarası (çok satırlı).
-                // Kullanıcı uygulamalarında (statik metin yok) yalnızca
-                // sayaç satırı gösterilir.
                 if hovered {
-                    let title = Self::window_title(win.app_id as usize, ui_english());
-                    let count = self
-                        .windows
-                        .iter()
-                        .flatten()
-                        .filter(|w| {
-                            w.app_id == win.app_id
-                                && w.is_open
-                                && w.workspace == self.active_workspace
-                        })
-                        .count();
-                    let mut tip = alloc::string::String::new();
-                    if !title.is_empty() {
-                        tip.push_str(title);
-                        tip.push('\n');
-                    }
-                    if count > 1 {
-                        tip.push_str(&alloc::format!(
-                            "{} {} · {} {}",
-                            count,
-                            ui_text("açık pencere", "open windows"),
-                            ui_text("Çalışma Alanı", "Workspace"),
-                            self.active_workspace + 1
-                        ));
-                    } else {
-                        tip.push_str(&alloc::format!(
-                            "{} {}",
-                            ui_text("Çalışma Alanı", "Workspace"),
-                            self.active_workspace + 1
-                        ));
-                    }
-                    self.tooltip_offer_text(rect, &tip);
+                    self.tooltip_offer(rect, tip);
                 }
-                let bg = if hovered { Self::shade(base, 20) } else { base };
+                if !hovered && !panel_open {
+                    continue;
+                }
+                let pressed = hovered && mouse.left_button;
+                let bg = if pressed {
+                    Self::shade(Color::TITLE_BAR, -12)
+                } else {
+                    Self::shade(Color::TITLE_BAR, 16)
+                };
                 fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);
-                fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
-                if active {
-                    fb.draw_rounded_rect(
-                        rect.0 + 2,
-                        rect.1 + 2,
-                        3,
-                        rect.3 - 4,
-                        1,
+                if panel_open {
+                    fb.draw_rounded_rect_outline(
+                        rect.0,
+                        rect.1,
+                        rect.2,
+                        rect.3,
+                        8,
                         Color::ACCENT_BLUE,
                     );
                 }
-                let tab_text_color = if win.is_minimized {
-                    Color::TEXT_MUTED
-                } else {
-                    Color::TEXT_MAIN
-                };
-                let loc_tab = Self::window_tab_title(win.app_id as usize, ui_english());
-                let tab_title = if !loc_tab.is_empty() {
-                    loc_tab
-                } else {
-                    win.tab_title
-                };
+            }
+
+            // Başlat Menüsü Butonu
+            let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
+            if start_hover {
+                self.tooltip_offer(l.start, ui_text("Başlat menüsü", "Start menu"));
+            }
+            let start_bg = Color::ACCENT_BLUE;
+            Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
+            // Kedi ikonu + "minOs" metni buton içinde yatay olarak ortalanır;
+            // metin buton kenarlarına yapışmaz veya taşmaz.
+            {
+                let label = "minOs";
+                let text_w = Self::text_width(label, 1);
+                let icon_w = Self::icon_size();
+                let inner_gap = sp(8);
+                let block_w = icon_w + inner_gap + text_w;
+                let block_x = l.start.0 + l.start.2.saturating_sub(block_w) / 2;
+                let icon_y = tb_y + scaled_taskbar_h().saturating_sub(icon_w) / 2;
                 let text_h = Self::text_height();
-                let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
-                if tw >= sp(58) {
-                    Self::draw_icon_by_index(
-                        fb,
-                        tab_x + 5,
-                        text_y,
-                        Self::window_icon_index(win.app_id as usize),
-                    );
+                let text_y = tb_y + scaled_taskbar_h().saturating_sub(text_h) / 2;
+                Self::draw_cat_icon(fb, block_x, icon_y);
+                Self::draw_string_shadow(
+                    fb,
+                    block_x + icon_w + inner_gap,
+                    text_y,
+                    label,
+                    Self::text_on(start_bg),
+                    Color::SHADOW,
+                    1,
+                );
+            }
+
+            // Uygulama Sekmeleri (Yuvarlatılmış 5px) — font ölçeğine göre büyür.
+            let open_count = self
+                .windows
+                .iter()
+                .filter(|slot| {
+                    slot.is_some_and(|win| win.is_open && win.workspace == self.active_workspace)
+                })
+                .count();
+            let (tab_start, tab_width, tab_step, shown_tabs, tab_slots) =
+                Self::taskbar_tabs_layout(fb.width, fb.height, open_count);
+            let mut tab_slot = 0usize;
+            for win in self.windows.iter().flatten() {
+                if win.is_open && win.workspace == self.active_workspace {
+                    if tab_slot >= shown_tabs {
+                        break;
+                    }
+                    let tab_x = tab_start + tab_slot * tab_step;
+                    let (_, _, tw, th) = MinGuiCompositor::taskbar_tab_rect_at(tab_x, tb_y);
+                    let tw = tw.min(tab_width);
+                    let rect = (tab_x, tb_y + 5, tw, th);
+                    let active = win.is_focused && !win.is_minimized;
+                    let base = if active {
+                        Color::TITLE_BAR
+                    } else {
+                        Color::TITLE_BAR_INACTIVE
+                    };
+                    let hovered = in_rect(mx, my, rect);
+                    // Sekme ipucu: uygulama başlığı + bu çalışma alanındaki açık
+                    // pencere sayısı + çalışma alanı numarası (çok satırlı).
+                    // Kullanıcı uygulamalarında (statik metin yok) yalnızca
+                    // sayaç satırı gösterilir.
+                    if hovered {
+                        let title = Self::window_title(win.app_id as usize, ui_english());
+                        let count = self
+                            .windows
+                            .iter()
+                            .flatten()
+                            .filter(|w| {
+                                w.app_id == win.app_id
+                                    && w.is_open
+                                    && w.workspace == self.active_workspace
+                            })
+                            .count();
+                        let mut tip = alloc::string::String::new();
+                        if !title.is_empty() {
+                            tip.push_str(title);
+                            tip.push('\n');
+                        }
+                        if count > 1 {
+                            tip.push_str(&alloc::format!(
+                                "{} {} · {} {}",
+                                count,
+                                ui_text("açık pencere", "open windows"),
+                                ui_text("Çalışma Alanı", "Workspace"),
+                                self.active_workspace + 1
+                            ));
+                        } else {
+                            tip.push_str(&alloc::format!(
+                                "{} {}",
+                                ui_text("Çalışma Alanı", "Workspace"),
+                                self.active_workspace + 1
+                            ));
+                        }
+                        self.tooltip_offer_text(rect, &tip);
+                    }
+                    let bg = if hovered { Self::shade(base, 20) } else { base };
+                    fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 8, bg);
+                    fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
+                    if active {
+                        fb.draw_rounded_rect(
+                            rect.0 + 2,
+                            rect.1 + 2,
+                            3,
+                            rect.3 - 4,
+                            1,
+                            Color::ACCENT_BLUE,
+                        );
+                    }
+                    let tab_text_color = if win.is_minimized {
+                        Color::TEXT_MUTED
+                    } else {
+                        Color::TEXT_MAIN
+                    };
+                    let loc_tab = Self::window_tab_title(win.app_id as usize, ui_english());
+                    let tab_title = if !loc_tab.is_empty() {
+                        loc_tab
+                    } else {
+                        win.tab_title
+                    };
+                    let text_h = Self::text_height();
+                    let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
+                    if tw >= sp(58) {
+                        Self::draw_icon_by_index(
+                            fb,
+                            tab_x + 5,
+                            text_y,
+                            Self::window_icon_index(win.app_id as usize),
+                        );
+                        Self::draw_string_clipped(
+                            fb,
+                            tab_x + sp(30),
+                            text_y,
+                            tab_title,
+                            tab_text_color,
+                            (
+                                tab_x + sp(28),
+                                rect.1,
+                                rect.2.saturating_sub(sp(32)),
+                                rect.3,
+                            ),
+                        );
+                    } else {
+                        Self::draw_icon_by_index(
+                            fb,
+                            tab_x + tw.saturating_sub(Self::icon_size()) / 2,
+                            text_y,
+                            Self::window_icon_index(win.app_id as usize),
+                        );
+                    }
+                    tab_slot += 1;
+                }
+            }
+            if tab_slots > shown_tabs {
+                let badge_x = tab_start + shown_tabs * tab_step;
+                let (_, _, _, tab_h) = MinGuiCompositor::taskbar_tab_rect_at(badge_x, tb_y);
+                let badge_w = tab_width.min(
+                    Self::tray_left_bound(fb.width, fb.height)
+                        .saturating_sub(sp(4))
+                        .saturating_sub(badge_x),
+                );
+                if badge_w > 0 {
+                    let badge = (badge_x, tb_y + 5, badge_w, tab_h);
+                    fb.draw_rounded_rect(badge.0, badge.1, badge.2, badge.3, 8, Color::ACCENT_BLUE);
+                    let mut hidden = TextBuf::new();
+                    hidden.push_byte(b'+');
+                    hidden.push_usize(open_count.saturating_sub(shown_tabs));
+                    let text_w = Self::text_width(hidden.as_str(), 1);
+                    let text_h = Self::text_height();
                     Self::draw_string_clipped(
                         fb,
-                        tab_x + sp(30),
-                        text_y,
-                        tab_title,
-                        tab_text_color,
-                        (
-                            tab_x + sp(28),
-                            rect.1,
-                            rect.2.saturating_sub(sp(32)),
-                            rect.3,
-                        ),
-                    );
-                } else {
-                    Self::draw_icon_by_index(
-                        fb,
-                        tab_x + tw.saturating_sub(Self::icon_size()) / 2,
-                        text_y,
-                        Self::window_icon_index(win.app_id as usize),
+                        badge.0 + badge.2.saturating_sub(text_w) / 2,
+                        badge.1 + badge.3.saturating_sub(text_h) / 2,
+                        hidden.as_str(),
+                        Self::text_on(Color::ACCENT_BLUE),
+                        badge,
                     );
                 }
-                tab_slot += 1;
             }
-        }
-        if tab_slots > shown_tabs {
-            let badge_x = tab_start + shown_tabs * tab_step;
-            let (_, _, _, tab_h) = MinGuiCompositor::taskbar_tab_rect_at(badge_x, tb_y);
-            let badge_w = tab_width.min(
-                Self::tray_left_bound(fb.width, fb.height)
-                    .saturating_sub(sp(4))
-                    .saturating_sub(badge_x),
-            );
-            if badge_w > 0 {
-                let badge = (badge_x, tb_y + 5, badge_w, tab_h);
-                fb.draw_rounded_rect(badge.0, badge.1, badge.2, badge.3, 8, Color::ACCENT_BLUE);
-                let mut hidden = TextBuf::new();
-                hidden.push_byte(b'+');
-                hidden.push_usize(open_count.saturating_sub(shown_tabs));
-                let text_w = Self::text_width(hidden.as_str(), 1);
-                let text_h = Self::text_height();
-                Self::draw_string_clipped(
+
+            // Sanal masaüstü göstergesi: sekmelerin kapladığı alan ile tepsi
+            // arasında yer kalırsa tıklanabilir "Masaüstü n/N" etiketi çizilir.
+            // Workspace badge: drawn as a clickable "Workspace n/N" label when
+            // room remains between the tabs and the tray.
+            if let Some((bx, by, bw, bh)) = self.workspace_badge_rect(fb.width, fb.height) {
+                if in_rect(mx, my, (bx, by, bw, bh)) {
+                    fb.draw_rounded_rect(bx, by, bw, bh, 8, Self::shade(Color::TITLE_BAR, 16));
+                }
+                let mut ws = TextBuf::new();
+                ws.push_str(ui_text("Masaüstü ", "Workspace "));
+                ws.push_usize(self.active_workspace + 1);
+                ws.push_byte(b'/');
+                ws.push_usize(Self::MAX_WORKSPACES);
+                Self::draw_string_shadow(
                     fb,
-                    badge.0 + badge.2.saturating_sub(text_w) / 2,
-                    badge.1 + badge.3.saturating_sub(text_h) / 2,
-                    hidden.as_str(),
-                    Self::text_on(Color::ACCENT_BLUE),
-                    badge,
+                    bx,
+                    by,
+                    ws.as_str(),
+                    Color::TEXT_MAIN,
+                    Color::SHADOW,
+                    1,
                 );
             }
-        }
 
-        // Sanal masaüstü göstergesi: sekmelerin kapladığı alan ile tepsi
-        // arasında yer kalırsa tıklanabilir "Masaüstü n/N" etiketi çizilir.
-        // Workspace badge: drawn as a clickable "Workspace n/N" label when
-        // room remains between the tabs and the tray.
-        if let Some((bx, by, bw, bh)) = self.workspace_badge_rect(fb.width, fb.height) {
-            if in_rect(mx, my, (bx, by, bw, bh)) {
-                fb.draw_rounded_rect(bx, by, bw, bh, 8, Self::shade(Color::TITLE_BAR, 16));
-            }
-            let mut ws = TextBuf::new();
-            ws.push_str(ui_text("Masaüstü ", "Workspace "));
-            ws.push_usize(self.active_workspace + 1);
-            ws.push_byte(b'/');
-            ws.push_usize(Self::MAX_WORKSPACES);
-            Self::draw_string_shadow(fb, bx, by, ws.as_str(), Color::TEXT_MAIN, Color::SHADOW, 1);
-        }
-
-        // Sistem Tepsisi: saat, ses, Ethernet, tema ve klavye düzeni.
-        // 1. Klavye / Dil Düğmesi (l.kbd)
-        let kbd_tag = kbd.layout_tag();
-        let kbd_col = match kbd.layout {
-            crate::drivers::keyboard::KeyboardLayout::TurkishQ => Color::ACCENT_RED,
-            crate::drivers::keyboard::KeyboardLayout::EnglishUS => Color::ACCENT_BLUE,
-        };
-        let kbd_hover = in_rect(mx, my, l.kbd);
-        // Klavye resmi: kısa etiket yerine sade bir klavye simgesi.
-        let keyboard_icon = if kbd_hover {
-            Color::TEXT_MAIN
-        } else {
-            Color::TEXT_MUTED
-        };
-        fb.draw_rounded_rect(
-            l.kbd.0 + sp(6),
-            l.kbd.1 + sp(6),
-            sp(18),
-            sp(14),
-            2,
-            keyboard_icon,
-        );
-        for row in 0..2 {
-            for col in 0..5 {
-                fb.draw_rect(
-                    l.kbd.0 + sp(9) + col * sp(3),
-                    l.kbd.1 + sp(9) + row * sp(3),
-                    sp(2),
-                    sp(1),
-                    Color::TASKBAR_BG,
-                );
-            }
-        }
-        fb.draw_rect(
-            l.kbd.0 + sp(11),
-            l.kbd.1 + sp(17),
-            sp(8),
-            sp(1),
-            Color::TASKBAR_BG,
-        );
-        Self::draw_string(
-            fb,
-            l.kbd.0 + sp(30),
-            tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
-            kbd_tag,
-            kbd_col,
-        );
-
-        // 3. Ses Düğmesi (l.volume) - Yalnızca ses aygıtı varsa çiz
-        if l.volume.2 > 0 {
-            let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
-            let icon_color = if is_muted {
-                Color::ACCENT_RED
-            } else if vol_hover {
-                Color::TEXT_MAIN
-            } else {
-                Color::ACCENT_GREEN
+            // Sistem Tepsisi: saat, ses, Ethernet, tema ve klavye düzeni.
+            // 1. Klavye / Dil Düğmesi (l.kbd)
+            let kbd_tag = kbd.layout_tag();
+            let kbd_col = match kbd.layout {
+                crate::drivers::keyboard::KeyboardLayout::TurkishQ => Color::ACCENT_RED,
+                crate::drivers::keyboard::KeyboardLayout::EnglishUS => Color::ACCENT_BLUE,
             };
-            // Hoparlör gövdesi ve ses dalgaları.
-            fb.draw_rect(
-                l.volume.0 + sp(8),
-                l.volume.1 + sp(11),
-                sp(4),
-                sp(6),
-                icon_color,
-            );
-            fb.draw_rect(
-                l.volume.0 + sp(12),
-                l.volume.1 + sp(8),
-                sp(3),
-                sp(12),
-                icon_color,
-            );
-            if !is_muted && volume > 0 {
-                fb.draw_rect(
-                    l.volume.0 + sp(17),
-                    l.volume.1 + sp(10),
-                    sp(1),
-                    sp(8),
-                    icon_color,
-                );
-                if volume > 35 {
-                    fb.draw_rect(
-                        l.volume.0 + sp(20),
-                        l.volume.1 + sp(8),
-                        sp(1),
-                        sp(12),
-                        icon_color,
-                    );
-                }
-                if volume > 70 {
-                    fb.draw_rect(
-                        l.volume.0 + sp(23),
-                        l.volume.1 + sp(6),
-                        sp(1),
-                        sp(16),
-                        icon_color,
-                    );
-                }
-            } else {
-                fb.draw_rect(
-                    l.volume.0 + sp(17),
-                    l.volume.1 + sp(9),
-                    sp(2),
-                    sp(2),
-                    icon_color,
-                );
-                fb.draw_rect(
-                    l.volume.0 + sp(20),
-                    l.volume.1 + sp(16),
-                    sp(2),
-                    sp(2),
-                    icon_color,
-                );
-            }
-        }
-        // Ethernet simgesi yalnızca e1000 aygıtı başarıyla başlatıldıysa görünür.
-        if ethernet_available && l.network.2 > 0 {
-            let net_hover = in_rect(mx, my, l.network);
-            let linked = crate::drivers::e1000::link_up();
-            let c = if linked {
-                if net_hover {
-                    Color::TEXT_MAIN
-                } else {
-                    Color::ACCENT_GREEN
-                }
+            let kbd_hover = in_rect(mx, my, l.kbd);
+            // Klavye resmi: kısa etiket yerine sade bir klavye simgesi.
+            let keyboard_icon = if kbd_hover {
+                Color::TEXT_MAIN
             } else {
                 Color::TEXT_MUTED
             };
-            // Ethernet jakı: gövde, pinler, kablo ve bağlantı durumu ışığı.
-            fb.draw_rounded_rect_outline(
-                l.network.0 + sp(3),
-                l.network.1 + sp(6),
-                sp(14),
+            fb.draw_rounded_rect(
+                l.kbd.0 + sp(6),
+                l.kbd.1 + sp(6),
+                sp(18),
                 sp(14),
                 2,
-                c,
+                keyboard_icon,
             );
-            fb.draw_rect(l.network.0 + sp(6), l.network.1 + sp(12), sp(8), sp(6), c);
-            fb.draw_rect(l.network.0 + sp(7), l.network.1 + sp(9), sp(2), sp(4), c);
-            fb.draw_rect(l.network.0 + sp(11), l.network.1 + sp(9), sp(2), sp(4), c);
-            fb.draw_rect(l.network.0 + sp(9), l.network.1 + sp(19), sp(2), sp(2), c);
-            fb.draw_rect(l.network.0 + sp(20), l.network.1 + sp(7), sp(3), sp(3), c);
+            for row in 0..2 {
+                for col in 0..5 {
+                    fb.draw_rect(
+                        l.kbd.0 + sp(9) + col * sp(3),
+                        l.kbd.1 + sp(9) + row * sp(3),
+                        sp(2),
+                        sp(1),
+                        Color::TASKBAR_BG,
+                    );
+                }
+            }
+            fb.draw_rect(
+                l.kbd.0 + sp(11),
+                l.kbd.1 + sp(17),
+                sp(8),
+                sp(1),
+                Color::TASKBAR_BG,
+            );
             Self::draw_string(
                 fb,
-                l.network.0 + sp(28),
+                l.kbd.0 + sp(30),
                 tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
-                "eth0",
-                c,
+                kbd_tag,
+                kbd_col,
             );
-        }
 
-        // 4. "Masaüstünü Göster" şeridi (en sağda ince alan)
-        if l.desktop.2 > 0 {
-            let desktop_hover = in_rect(mx, my, l.desktop);
-            // Yalnızca etkin sanal masaüstü pencere durumunu yansıtır.
-            // Only the active virtual desktop's window state is reflected.
-            let all_minimized = self
-                .windows
-                .iter()
-                .flatten()
-                .filter(|w| w.workspace == self.active_workspace)
-                .all(|w| !w.is_open || w.is_minimized);
-            let line_color = if all_minimized || desktop_hover {
-                Color::ACCENT_BLUE
-            } else {
-                Self::shade(Color::BORDER, 12)
-            };
-            if desktop_hover || all_minimized {
+            // 3. Ses Düğmesi (l.volume) - Yalnızca ses aygıtı varsa çiz
+            if l.volume.2 > 0 {
+                let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
+                let icon_color = if is_muted {
+                    Color::ACCENT_RED
+                } else if vol_hover {
+                    Color::TEXT_MAIN
+                } else {
+                    Color::ACCENT_GREEN
+                };
+                // Hoparlör gövdesi ve ses dalgaları.
                 fb.draw_rect(
-                    l.desktop.0,
-                    tb_y,
-                    l.desktop.2,
-                    scaled_taskbar_h(),
-                    Self::shade(Color::TITLE_BAR, 10),
+                    l.volume.0 + sp(8),
+                    l.volume.1 + sp(11),
+                    sp(4),
+                    sp(6),
+                    icon_color,
+                );
+                fb.draw_rect(
+                    l.volume.0 + sp(12),
+                    l.volume.1 + sp(8),
+                    sp(3),
+                    sp(12),
+                    icon_color,
+                );
+                if !is_muted && volume > 0 {
+                    fb.draw_rect(
+                        l.volume.0 + sp(17),
+                        l.volume.1 + sp(10),
+                        sp(1),
+                        sp(8),
+                        icon_color,
+                    );
+                    if volume > 35 {
+                        fb.draw_rect(
+                            l.volume.0 + sp(20),
+                            l.volume.1 + sp(8),
+                            sp(1),
+                            sp(12),
+                            icon_color,
+                        );
+                    }
+                    if volume > 70 {
+                        fb.draw_rect(
+                            l.volume.0 + sp(23),
+                            l.volume.1 + sp(6),
+                            sp(1),
+                            sp(16),
+                            icon_color,
+                        );
+                    }
+                } else {
+                    fb.draw_rect(
+                        l.volume.0 + sp(17),
+                        l.volume.1 + sp(9),
+                        sp(2),
+                        sp(2),
+                        icon_color,
+                    );
+                    fb.draw_rect(
+                        l.volume.0 + sp(20),
+                        l.volume.1 + sp(16),
+                        sp(2),
+                        sp(2),
+                        icon_color,
+                    );
+                }
+            }
+            // Ethernet simgesi yalnızca e1000 aygıtı başarıyla başlatıldıysa görünür.
+            if ethernet_available && l.network.2 > 0 {
+                let net_hover = in_rect(mx, my, l.network);
+                let linked = crate::drivers::e1000::link_up();
+                let c = if linked {
+                    if net_hover {
+                        Color::TEXT_MAIN
+                    } else {
+                        Color::ACCENT_GREEN
+                    }
+                } else {
+                    Color::TEXT_MUTED
+                };
+                // Ethernet jakı: gövde, pinler, kablo ve bağlantı durumu ışığı.
+                fb.draw_rounded_rect_outline(
+                    l.network.0 + sp(3),
+                    l.network.1 + sp(6),
+                    sp(14),
+                    sp(14),
+                    2,
+                    c,
+                );
+                fb.draw_rect(l.network.0 + sp(6), l.network.1 + sp(12), sp(8), sp(6), c);
+                fb.draw_rect(l.network.0 + sp(7), l.network.1 + sp(9), sp(2), sp(4), c);
+                fb.draw_rect(l.network.0 + sp(11), l.network.1 + sp(9), sp(2), sp(4), c);
+                fb.draw_rect(l.network.0 + sp(9), l.network.1 + sp(19), sp(2), sp(2), c);
+                fb.draw_rect(l.network.0 + sp(20), l.network.1 + sp(7), sp(3), sp(3), c);
+                Self::draw_string(
+                    fb,
+                    l.network.0 + sp(28),
+                    tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
+                    "eth0",
+                    c,
                 );
             }
-            // Ayrıştırıcı çizgi
-            fb.draw_rect(
-                l.desktop.0,
-                tb_y + sp(6),
-                1,
-                scaled_taskbar_h().saturating_sub(sp(12)),
-                line_color,
+
+            // 4. "Masaüstünü Göster" şeridi (en sağda ince alan)
+            if l.desktop.2 > 0 {
+                let desktop_hover = in_rect(mx, my, l.desktop);
+                // Yalnızca etkin sanal masaüstü pencere durumunu yansıtır.
+                // Only the active virtual desktop's window state is reflected.
+                let all_minimized = self
+                    .windows
+                    .iter()
+                    .flatten()
+                    .filter(|w| w.workspace == self.active_workspace)
+                    .all(|w| !w.is_open || w.is_minimized);
+                let line_color = if all_minimized || desktop_hover {
+                    Color::ACCENT_BLUE
+                } else {
+                    Self::shade(Color::BORDER, 12)
+                };
+                if desktop_hover || all_minimized {
+                    fb.draw_rect(
+                        l.desktop.0,
+                        tb_y,
+                        l.desktop.2,
+                        scaled_taskbar_h(),
+                        Self::shade(Color::TITLE_BAR, 10),
+                    );
+                }
+                // Ayrıştırıcı çizgi
+                fb.draw_rect(
+                    l.desktop.0,
+                    tb_y + sp(6),
+                    1,
+                    scaled_taskbar_h().saturating_sub(sp(12)),
+                    line_color,
+                );
+            }
+
+            // 5. Saat Düğmesi (l.clock)
+            let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;
+            let mut clock = TextBuf::new();
+            clock.push_u2(now.hour as u32);
+            clock.push_byte(b':');
+            clock.push_u2(now.minute as u32);
+            clock.push_byte(b':');
+            clock.push_u2(now.second as u32);
+            Self::draw_string(
+                fb,
+                l.clock.0 + sp(8),
+                tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
+                clock.as_str(),
+                if clock_hover {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::TEXT_MAIN
+                },
             );
+
+            // 6. "Minimize All" Düğmesi (ince mavi dikey çizgi - saat solunda)
+            // Not: "Masaüstünü Göster" şeridi (l.desktop) ile aynı dikdörtgeni
+            // paylaşır; çizim yukarıdaki 4. adımda tek noktadan yapılır, burada
+            // ikinci kez çizilmez (çift çizgi/çakışma olmasın).
         }
-
-        // 5. Saat Düğmesi (l.clock)
-        let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;
-        let mut clock = TextBuf::new();
-        clock.push_u2(now.hour as u32);
-        clock.push_byte(b':');
-        clock.push_u2(now.minute as u32);
-        clock.push_byte(b':');
-        clock.push_u2(now.second as u32);
-        Self::draw_string(
-            fb,
-            l.clock.0 + sp(8),
-            tb_y + (scaled_taskbar_h().saturating_sub(Self::text_height())) / 2,
-            clock.as_str(),
-            if clock_hover {
-                Color::ACCENT_BLUE
-            } else {
-                Color::TEXT_MAIN
-            },
-        );
-
-        // 6. "Minimize All" Düğmesi (ince mavi dikey çizgi - saat solunda)
-        // Not: "Masaüstünü Göster" şeridi (l.desktop) ile aynı dikdörtgeni
-        // paylaşır; çizim yukarıdaki 4. adımda tek noktadan yapılır, burada
-        // ikinci kez çizilmez (çift çizgi/çakışma olmasın).
 
         // Akıllı tepsi ağı simgesi
 

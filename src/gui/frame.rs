@@ -226,6 +226,60 @@ pub fn render_full_frame(
 
     let (order, count) = compositor.draw_order();
 
+    // Tamamen üstündeki opak bir pencere tarafından kaplanan pencerelerin
+    // çizimi atlanır: alttaki ağır uygulama içeriği (örn. oyun arkasındaki
+    // şehir sürüşü) zaten üstteki pencerenin pikselleriyle örtülür ve her
+    // karede yeniden rasterize edilmesi tek iş parçacığını boğar.
+    // Saydam pencere modu, sürüklenen (yarı saydam) veya açılış
+    // animasyonundaki örtüler kapsama garantisi vermediğinden sayılmaz.
+    let mut occluded = [false; gui::MAX_WINDOWS];
+    if !crate::gui::transparent_windows() {
+        let now_ms = crate::monotonic_ms();
+        let mouse_x = mouse.x.max(0) as usize;
+        let mouse_y = mouse.y.max(0) as usize;
+        for front in 0..count {
+            let Some(covered) = compositor.windows[order[front]] else {
+                continue;
+            };
+            // Gölge ve yuvarlatma taşması için 12 px pay bırakılır.
+            let need_x0 = covered.x.saturating_sub(12);
+            let need_y0 = covered.y.saturating_sub(12);
+            let need_x1 = covered.x.saturating_add(covered.width).saturating_add(12);
+            let need_y1 = covered.y.saturating_add(covered.height).saturating_add(12);
+            let mut covered_by_top = false;
+            for &cover_idx in order.iter().skip(front + 1).take(count - front - 1) {
+                let Some(cover) = compositor.windows[cover_idx] else {
+                    continue;
+                };
+                // Açılış animasyonunda örtü aşağı kayar; konumu henüz
+                // kesin değil.
+                if cover.open_ms != 0
+                    && now_ms.wrapping_sub(cover.open_ms) < gui::window::OPEN_ANIM_MS
+                {
+                    continue;
+                }
+                // Sürüklenen pencerenin gövdesi yarı saydam çizilir.
+                let cover_dragging = mouse.left_button
+                    && mouse_x >= cover.x
+                    && mouse_y >= cover.y
+                    && mouse_x < cover.x.saturating_add(cover.width)
+                    && mouse_y < cover.y.saturating_add(crate::gui::scaled_titlebar_h());
+                if cover_dragging {
+                    continue;
+                }
+                if cover.x <= need_x0
+                    && cover.y <= need_y0
+                    && cover.x.saturating_add(cover.width) >= need_x1
+                    && cover.y.saturating_add(cover.height) >= need_y1
+                {
+                    covered_by_top = true;
+                    break;
+                }
+            }
+            occluded[order[front]] = covered_by_top;
+        }
+    }
+
     for &idx in order.iter().take(count) {
         if let Some(win) = compositor.windows[idx] {
             if !win.is_open || win.is_minimized {
@@ -254,6 +308,13 @@ pub fn render_full_frame(
                 || win.x.saturating_add(win.width) == win.x
                 || win.y.saturating_add(win.height) == win.y
             {
+                continue;
+            }
+
+            // Üstteki opak pencere tarafından tamamen kaplanıyorsa bu
+            // karenin çizimi atlanır; üstteki pencere zaten o bölgeyi
+            // yeniden boyayacak.
+            if occluded[idx] {
                 continue;
             }
 
@@ -529,7 +590,7 @@ pub fn render_full_frame(
                 16 => {
                     // FPS çizimi ana döngüyü uzun süre bloke etmemeli; yarım
                     // kalan karede oyun çözünürlüğü otomatik olarak düşürür.
-                    const FPS3D_RENDER_BUDGET_MS: u64 = 32;
+                    const FPS3D_RENDER_BUDGET_MS: u64 = 24;
                     if let Some(fps3d) = fps_3d.as_mut() {
                         let render_completed = fps3d.render_content_with_budget(
                             fb,
@@ -549,10 +610,11 @@ pub fn render_full_frame(
                 }
 
                 17 => {
-                    // Şehir sürüşü: raycasting şehir + zemin izdüşümü. Aynı
-                    // şekilde 80 ms bütçe kullanılır (yavaş sanal ortamlarda
-                    // yarım kare, boş ekrandan iyidir).
-                    let city_budget: u64 = 80;
+                    // Şehir sürüşü: raycasting şehir + zemin izdüşümü. 95 ms
+                    // bütçe tam çözünürlüklü katmanların (2 px duvar
+                    // sütunları, 6 px zemin hücreleri) bütçeye sığmasını
+                    // sağlar; aşan kare yine kısmi çizilir.
+                    let city_budget: u64 = 95;
                     if let Some(city_app) = city.as_mut() {
                         city_app.render_content_with_budget(fb, rx, ry, rw, rh, city_budget);
                     }
@@ -570,8 +632,8 @@ pub fn render_full_frame(
             // render bütçeleri vardır; genel 24 ms eşiği onlarda yanlış
             // pozitif üretirdi. Eşik uygulamanın fiilen verilen bütçesi.
             let app_budget_ms = match app_id {
-                16 => 32,
-                17 => 80,
+                16 => 24,
+                17 => 95,
                 _ => RENDER_BUDGET_MS,
             };
             if render_elapsed_ms > app_budget_ms && idx < gui::MAX_WINDOWS {
@@ -588,7 +650,12 @@ pub fn render_full_frame(
                     crate::serial_print_dec(render_elapsed_ms);
                     crate::serial_print(" ms > ");
                     crate::serial_print_dec(app_budget_ms);
-                    crate::serial_print(" ms)\n");
+                    crate::serial_print(" ms) cpu_ms=");
+                    let cpu_ms = app_render_cycles[idx]
+                        / unsafe { crate::boot::time::TSC_CYCLES_PER_US }
+                        / 1_000;
+                    crate::serial_print_dec(cpu_ms);
+                    crate::serial_print("\n");
                 }
             }
 

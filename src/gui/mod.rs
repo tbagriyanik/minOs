@@ -762,8 +762,51 @@ impl MinGuiCompositor {
         false
     }
 
+    /// Pencereyi tam ekrana alır veya önceki haline döndürür.
+    /// Tam ekran, görev çubuğu dahil tüm ekranı kaplar; çıkışta
+    /// kaydedilen geometri ve maximize durumu birebir geri yüklenir.
+    pub fn toggle_fullscreen(&mut self, idx: usize, screen_w: usize, screen_h: usize) {
+        if let Some(ref mut win) = self.windows[idx] {
+            if win.is_fullscreen {
+                if let Some((x, y, w, h, m)) = win.fs_restore.take() {
+                    win.x = x;
+                    win.y = y;
+                    win.width = w;
+                    win.height = h;
+                    win.is_maximized = m;
+                }
+                win.is_fullscreen = false;
+            } else {
+                win.fs_restore = Some((win.x, win.y, win.width, win.height, win.is_maximized));
+                win.x = 0;
+                win.y = 0;
+                win.width = screen_w;
+                win.height = screen_h;
+                win.is_maximized = false;
+                win.is_fullscreen = true;
+            }
+        }
+    }
+
+    /// Tam ekrandaki pencerenin kayıtlı geometrisini geri yükler
+    /// (snap/minimize gibi başka geçişler tam ekrandan çıkarken kullanır).
+    fn exit_fullscreen(win: &mut Window) {
+        if win.is_fullscreen {
+            if let Some((x, y, w, h, m)) = win.fs_restore.take() {
+                win.x = x;
+                win.y = y;
+                win.width = w;
+                win.height = h;
+                win.is_maximized = m;
+            }
+            win.is_fullscreen = false;
+        }
+    }
+
     pub fn toggle_maximize(&mut self, idx: usize, screen_w: usize, screen_h: usize) {
         if let Some(ref mut win) = self.windows[idx] {
+            // Tam ekrandan maximize'a geçiş: önce tam ekrandan çık.
+            Self::exit_fullscreen(win);
             if win.is_maximized {
                 if let Some((x, y, w, h)) = win.restore {
                     win.x = x;
@@ -792,6 +835,7 @@ impl MinGuiCompositor {
         screen_h: usize,
     ) {
         if let Some(ref mut win) = self.windows[idx] {
+            Self::exit_fullscreen(win);
             let usable_h = screen_h.saturating_sub(scaled_taskbar_h());
             if !win.is_maximized && win.restore.is_none() {
                 win.restore = Some((win.x, win.y, win.width, win.height));

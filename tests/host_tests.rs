@@ -630,6 +630,9 @@ pub mod mzram_compress;
 #[path = "../src/drivers/input_queue.rs"]
 pub mod input_queue;
 
+#[path = "../src/drivers/mouse.rs"]
+pub mod mouse;
+
 #[cfg(test)]
 #[path = "host_mzram_tests.rs"]
 mod host_mzram_tests;

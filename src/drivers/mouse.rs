@@ -1,6 +1,9 @@
 pub struct MouseState {
     pub x: i32,
     pub y: i32,
+    look_dx: i32,
+    look_dy: i32,
+    relative_motion: bool,
     pub left_button: bool,
     pub right_button: bool,
     pub middle_button: bool,
@@ -26,6 +29,9 @@ impl MouseState {
         Self {
             x: 100,
             y: 100,
+            look_dx: 0,
+            look_dy: 0,
+            relative_motion: false,
             left_button: false,
             right_button: false,
             middle_button: false,
@@ -51,6 +57,7 @@ impl MouseState {
     /// Yüksek çözünürlüklü ekranlarda (1920x1080 ve üzeri) takılmayı önlemek ve
     /// pürüzsüz akıcılık sağlamak için çözünürlük tabanlı dinamik ölçekleme ve balistik ivmelenme uygular.
     pub fn update_packet_i32(&mut self, flags: u8, dx: i32, dy: i32, max_w: i32, max_h: i32) {
+        self.relative_motion = true;
         let raw_left = (flags & 0x01) != 0;
         self.right_button = (flags & 0x02) != 0;
         self.middle_button = (flags & 0x04) != 0;
@@ -101,12 +108,17 @@ impl MouseState {
             scaled.clamp(-MAX_STEP, MAX_STEP)
         };
 
-        self.x += scale(dx);
-        self.y -= scale(dy); // PS/2 ve ters Y uyumluluğu
+        let scaled_dx = scale(dx);
+        let scaled_dy = scale(dy);
+        self.look_dx = self.look_dx.saturating_add(scaled_dx);
+        self.look_dy = self.look_dy.saturating_sub(scaled_dy);
+        self.x += scaled_dx;
+        self.y -= scaled_dy; // PS/2 ve ters Y uyumluluğu
 
         if self.x < 0 {
             self.x = 0;
         }
+
         if self.y < 0 {
             self.y = 0;
         }
@@ -124,6 +136,27 @@ impl MouseState {
         } else {
             self.left_button = raw_left;
         }
+    }
+
+    /// Mutlak konum bildiren tablet/fare girdisini uygular.
+    pub fn set_absolute_position(&mut self, x: i32, y: i32) {
+        self.x = x;
+        self.y = y;
+        self.look_dx = 0;
+        self.look_dy = 0;
+        self.relative_motion = false;
+    }
+
+    /// Biriken göreli fare hareketini tüketir; dönüş için Y ekran yönündedir.
+    pub fn take_look_delta(&mut self) -> (i32, i32) {
+        let delta = (self.look_dx, self.look_dy);
+        self.look_dx = 0;
+        self.look_dy = 0;
+        delta
+    }
+
+    pub fn has_relative_motion(&self) -> bool {
+        self.relative_motion
     }
 
     pub fn process_touch_event(&mut self, touching: bool, now_ms: u64) {

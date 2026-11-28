@@ -38,7 +38,7 @@ pub fn frame_interval_ms(is_interacting: bool, animating: bool, vsync: bool) -> 
 
 /// Uygulama çizimi için kare bütçesi (ms). Normal uygulamalar için
 /// 24 ms sınırlaması yeterlidir; FPS 3D raycasting oyunu için (ID=16)
-/// alt satırda özel 80 ms bütçe kullanılır — bkz. render_full_frame.
+/// 32 ms bütçe ve tamamlanmayan karelerde çözünürlük düşürme uygulanır.
 const RENDER_BUDGET_MS: u64 = 24;
 
 // Ortak yardımcılar `crate::desktop::helpers` ve `crate::boot::cpu` içinde yaşar.
@@ -527,16 +527,23 @@ pub fn render_full_frame(
                 }
 
                 16 => {
-                    // FPS 3D raycasting render'ı QEMU/VM gibi yavaş ortamlarda
-                    // Duvar raycast'inin ortasında kesilmesi yarım duvar
-                    // bırakabildiği için 3D sahneye geniş bir bütçe verilir.
-                    let fps3d_budget: u64 = 160;
+                    // FPS çizimi ana döngüyü uzun süre bloke etmemeli; yarım
+                    // kalan karede oyun çözünürlüğü otomatik olarak düşürür.
+                    const FPS3D_RENDER_BUDGET_MS: u64 = 32;
                     if let Some(fps3d) = fps_3d.as_mut() {
-                        let render_completed =
-                            fps3d.render_content_with_budget(fb, rx, ry, rw, rh, fps3d_budget);
+                        let render_completed = fps3d.render_content_with_budget(
+                            fb,
+                            rx,
+                            ry,
+                            rw,
+                            rh,
+                            FPS3D_RENDER_BUDGET_MS,
+                        );
                         if render_completed {
                             let frame_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
                             fps3d.record_completed_frame(frame_ms);
+                        } else {
+                            fps3d.record_incomplete_frame();
                         }
                     }
                 }
@@ -563,7 +570,7 @@ pub fn render_full_frame(
             // render bütçeleri vardır; genel 24 ms eşiği onlarda yanlış
             // pozitif üretirdi. Eşik uygulamanın fiilen verilen bütçesi.
             let app_budget_ms = match app_id {
-                16 => 160,
+                16 => 32,
                 17 => 80,
                 _ => RENDER_BUDGET_MS,
             };

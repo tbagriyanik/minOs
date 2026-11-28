@@ -4,9 +4,8 @@
 //! izleme (raycasting) ile, zemin/tavan düzlem atma (plane casting) ile,
 //! düşman ve eşyalar ise billboard sprite olarak çizilir.
 //!
-//! Girdi tarafında fare mutlak (absolute) konum bildirir; bu yüzden bakış
-//! yönü konum farkından hesaplanır ve imleç ekran kenarına dayandığında
-//! "kenar sürükleme" ile dönmeye devam eder (`update_pointer`).
+//! Göreli fare hareketi birikimli olarak, mutlak işaretçi hareketi ise
+//! konum farkıyla bakış yönüne çevrilir.
 
 use crate::apps::fps_level::{self, Level, KEY_BLUE, KEY_RED, KEY_YELLOW};
 use crate::apps::fps_sprites::{self, Sprites};
@@ -34,16 +33,16 @@ const EYE_Z: f32 = 0.5;
 const PLAYER_RADIUS: f32 = 0.22;
 
 /// Yürüyüş hızı (dünya birimi / 60fps kare).
-const WALK_SPEED: f32 = 0.052;
+const WALK_SPEED: f32 = 0.075;
 /// Koşu hızı.
-const SPRINT_SPEED: f32 = 0.088;
+const SPRINT_SPEED: f32 = 0.12;
 /// Ok tuşlarıyla dönüş hızı (radyan / 60fps kare).
 const ROT_SPEED: f32 = 0.040;
 /// Fare hassasiyeti (radyan / piksel).
-const MOUSE_SENS: f32 = 0.0030;
-/// Kenar sürükleme hızı (radyan / 60fps kare). İmleç ekran kenarına
+const MOUSE_SENS: f32 = 0.0060;
+/// Kenar sürükleme hızı (radyan/saniye). İmleç ekran kenarına
 /// dayandığında bakış bu hızda dönmeye devam eder.
-const EDGE_TURN_RATE: f32 = 0.030;
+const EDGE_TURN_RATE: f32 = 1.8;
 /// Kenar bölgesi (piksel).
 const EDGE_ZONE: f32 = 48.0;
 
@@ -101,7 +100,7 @@ const fn build_shade_lut() -> [u32; 32] {
     let mut i = 0;
     while i < 32 {
         // 0 = en yakın (parlak), 31 = en uzak (koyu).
-        let f = (255 - (i * 196) / 31) as u32;
+        let f = (255 - (i * 143) / 31) as u32;
         lut[i] = (f << 16) | (f << 8) | f;
         i += 1;
     }
@@ -306,6 +305,7 @@ pub struct FpsGameApp {
     pointer_x: f32,
     pointer_y: f32,
     pointer_valid: bool,
+    last_pointer_update_ms: u64,
     /// Önceki kareden bu kareye geçen süre (ms).
     last_update_ms: u64,
 
@@ -442,6 +442,7 @@ impl FpsGameApp {
             pointer_x: 0.0,
             pointer_y: 0.0,
             pointer_valid: false,
+            last_pointer_update_ms: 0,
             last_update_ms: 0,
             last_shot_tick: 0,
             last_step_tick: 0,
@@ -712,6 +713,20 @@ impl FpsGameApp {
         self.pitch = (self.pitch + bounded_dy * self.mouse_sens).clamp(-PI / 3.0, PI / 3.0);
     }
 
+    /// Göreli fare hareketini, kareler arasında birikmiş olsa da kayıpsız uygular.
+    pub fn handle_mouse_motion(&mut self, mut dx: i32, mut dy: i32) {
+        if self.result != GameResult::Playing {
+            return;
+        }
+        while dx != 0 || dy != 0 {
+            let step_x = dx.clamp(-160, 160);
+            let step_y = dy.clamp(-120, 120);
+            self.look(step_x as f32, step_y as f32);
+            dx -= step_x;
+            dy -= step_y;
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Girdi
     // -----------------------------------------------------------------------
@@ -723,6 +738,14 @@ impl FpsGameApp {
     /// İmleç ekran kenarına dayandığında hareket olayı gelmez; bu durumda
     /// "kenar sürükleme" ile bakış sabit bir hızda dönmeye devam eder.
     pub fn update_pointer(&mut self, px: f32, py: f32, screen_w: usize, screen_h: usize) {
+        let now = crate::monotonic_ms();
+        let dt = if self.last_pointer_update_ms == 0 {
+            1.0 / 60.0
+        } else {
+            now.saturating_sub(self.last_pointer_update_ms).min(50) as f32 / 1000.0
+        };
+        self.last_pointer_update_ms = now;
+
         if self.result != GameResult::Playing {
             self.pointer_x = px;
             self.pointer_y = py;
@@ -756,14 +779,14 @@ impl FpsGameApp {
         let mut turn = 0.0f32;
         let mut pitch_turn = 0.0f32;
         if px <= edge_w {
-            turn -= EDGE_TURN_RATE * (1.0 - px / edge_w);
+            turn -= EDGE_TURN_RATE * dt * (1.0 - px / edge_w);
         } else if px >= sw - edge_w {
-            turn += EDGE_TURN_RATE * (1.0 - (sw - px) / edge_w);
+            turn += EDGE_TURN_RATE * dt * (1.0 - (sw - px) / edge_w);
         }
         if py <= edge_h {
-            pitch_turn -= EDGE_TURN_RATE * (1.0 - py / edge_h);
+            pitch_turn -= EDGE_TURN_RATE * dt * (1.0 - py / edge_h);
         } else if py >= sh - edge_h {
-            pitch_turn += EDGE_TURN_RATE * (1.0 - (sh - py) / edge_h);
+            pitch_turn += EDGE_TURN_RATE * dt * (1.0 - (sh - py) / edge_h);
         }
         if turn != 0.0 {
             self.rotate(turn);
@@ -1395,9 +1418,9 @@ impl FpsGameApp {
 
         // Uyarlanabilir iç çözünürlük: kare hızı düşükse ölçek büyür
         // (daha az piksel), yüksekse küçülür (tam çözünürlük hedeflenir).
-        if self.fps < 24 && self.render_scale < RENDER_SCALE_MAX {
+        if self.fps < 50 && self.render_scale < RENDER_SCALE_MAX {
             self.render_scale += 1;
-        } else if self.fps > 52 && self.render_scale > RENDER_SCALE_MIN {
+        } else if self.fps > 58 && self.render_scale > RENDER_SCALE_MIN {
             self.render_scale -= 1;
         }
 
@@ -1433,6 +1456,11 @@ impl FpsGameApp {
         self.metrics_window_start_ms = now;
         self.metrics_window_frames = 0;
         self.metrics_window_max_interval_ms = 0;
+    }
+
+    /// Yarım kalan karede çözünürlüğü hemen düşürerek sonraki denemeyi hızlandırır.
+    pub fn record_incomplete_frame(&mut self) {
+        self.render_scale = (self.render_scale + 1).min(RENDER_SCALE_MAX);
     }
 
     /// 3B sahneyi çizer (raycasting). `budget_ms` ile render süresi sınırlanır.
@@ -1622,7 +1650,10 @@ impl FpsGameApp {
                             };
                             shade_color(texel, factor)
                         };
-                        row[x * scale] = color;
+                        let start = x * scale;
+                        for dx in 0..scale {
+                            row[start + dx] = color;
+                        }
                     }
                 }
             }

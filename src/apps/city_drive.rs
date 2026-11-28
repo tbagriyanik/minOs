@@ -2282,7 +2282,10 @@ impl CityDriveApp {
             // Kamera yüksekliği duvar izdüşümüyle aynı olmalı (CAM_H);
             // aksi halde araçlar yerden hafif yukarıda "süzülür".
             eye_z: CAM_H,
-            horizon_y: horizon as f32,
+            // gfx3d raster coordinates are local to the viewport; `horizon`
+            // is an absolute framebuffer coordinate because the game view
+            // starts below the title bar.
+            horizon_y: (horizon.saturating_sub(top)) as f32,
             v_scale: focal,
             // Duvar ışınları `plane` vektörünü PLANE_LEN ile ölçekler
             // (`ray = dir + plane_unit * PLANE_LEN * cxf`). Sprite

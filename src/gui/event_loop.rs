@@ -10002,20 +10002,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
         //
-        // Fare mutlak (absolute) konum bildirdiği için oyun konum farkını
-        // kendi içinde hesaplar (`update_pointer`); burada yalnızca ham konum
-        // aktarılır. Önceki sürümde imleç her karede ekran merkezine
-        // "snap"leniyordu; mutlak işaretçide (usb-tablet) bu, host imlecini
-        // etkilemediği için bakışın sürekli kaymasına yol açıyordu.
-        // Kenar sürükleme (imleç ekran kenarına dayanınca dönüş) oyun
-        // tarafında uygulanır; bu yüzden her karede çağrılır.
+        // Göreli fare hareketi birikimli olarak uygulanır; mutlak işaretçide
+        // ise oyun konum farkını kendisi hesaplar (`update_pointer`).
         if app_is_focused(&compositor, 16) {
-            apps.fps_3d_app.as_mut().unwrap().update_pointer(
-                mouse.x as f32,
-                mouse.y as f32,
-                width,
-                height,
-            );
+            let game = apps.fps_3d_app.as_mut().unwrap();
+            if mouse.has_relative_motion() {
+                let (dx, dy) = mouse.take_look_delta();
+                game.handle_mouse_motion(dx, dy);
+            } else {
+                game.update_pointer(mouse.x as f32, mouse.y as f32, width, height);
+            }
+        } else {
+            let _ = mouse.take_look_delta();
         }
 
         // FPS silahı için butonun seviye bilgisini her turda tazele. Mouse

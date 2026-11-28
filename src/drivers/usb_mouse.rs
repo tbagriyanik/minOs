@@ -92,8 +92,10 @@ pub fn process_mouse_report(
 
         // 0..32767 mutlak koordinatlarını ekran çözünürlüğüne orantıla
         if screen_w > 0 && screen_h > 0 {
-            mouse.x = (((raw_x as i32 * screen_w) + 16383) / 32767).clamp(0, screen_w - 1);
-            mouse.y = (((raw_y as i32 * screen_h) + 16383) / 32767).clamp(0, screen_h - 1);
+            mouse.set_absolute_position(
+                (((raw_x as i32 * screen_w) + 16383) / 32767).clamp(0, screen_w - 1),
+                (((raw_y as i32 * screen_h) + 16383) / 32767).clamp(0, screen_h - 1),
+            );
         }
 
         mouse.left_button = (buttons & MOUSE_BTN_LEFT) != 0;

@@ -1828,8 +1828,10 @@ fn handle_custom_mouse_report(
         // Yuvarlayarak ölçekle: 16383/32767 gibi orta noktalar tam merkeze düşsün.
         let scaled_x = (raw_x as i64 * screen_w as i64 + x_max as i64 / 2) / x_max as i64;
         let scaled_y = (raw_y as i64 * screen_h as i64 + y_max as i64 / 2) / y_max as i64;
-        mouse.x = (scaled_x as i32).clamp(0, screen_w - 1);
-        mouse.y = (scaled_y as i32).clamp(0, screen_h - 1);
+        mouse.set_absolute_position(
+            (scaled_x as i32).clamp(0, screen_w - 1),
+            (scaled_y as i32).clamp(0, screen_h - 1),
+        );
 
         mouse.left_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_LEFT) != 0;
         mouse.right_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_RIGHT) != 0;

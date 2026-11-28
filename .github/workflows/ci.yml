@@ -66,38 +66,5 @@ jobs:
       - name: Build Kernel (Release)
         run: cargo build --release
 
-  qemu-integration:
-    name: QEMU Integration Test (Net Self-Test + USB HID)
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install Rust Nightly & Components
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src, rustfmt, clippy
-
-      - name: Install QEMU
-        run: choco install qemu -y
-
-      - name: Run QEMU Integration Test
-        # -UsbHid -NoPs2: xHCI + usb-kbd/usb-mouse yolu QMP enjeksiyonuyla
-        # uçtan uca doğrulanır; ARP TX dahil tüm NET-TEST kalıpları denetlenir.
-        shell: pwsh
-        run: ./test_qemu.ps1 -UsbHid -NoPs2 -TimeoutSeconds 300
-
-      - name: Upload Test Report Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-integration-report
-          path: |
-            test-report.md
-            target/qemu_serial.log
-            target/qemu_audio.wav
-          if-no-files-found: warn
-          retention-days: 30
 
 

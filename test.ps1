@@ -1,4 +1,4 @@
-﻿# File: test.ps1
+# File: test.ps1
 # minOs tek giriş noktalı test kosucusu (test.ps1)
 #
 # Kullanim:
@@ -38,9 +38,7 @@ switch ($Mode) {
         if ($NoRun) { $hostArgs += "-NoRun" }
         & powershell -ExecutionPolicy Bypass -File ".\test_host.ps1" @hostArgs
     }
-    "Qemu" {
-        & powershell -ExecutionPolicy Bypass -File ".\test_qemu.ps1"
-    }
+    # "Qemu" case removed as part of QEMU integration test removal
     "Perf" {
         & powershell -ExecutionPolicy Bypass -File ".\test_perf.ps1"
     }

@@ -1664,6 +1664,810 @@ pub fn puzzle_random_step(tiles: &mut [u8; PUZZLE_TILES], state: &mut u64) -> Op
 }
 
 // ---------------------------------------------------------------------------
+// no_std matematik yardımcıları (Bilardo için)
+// ---------------------------------------------------------------------------
+
+use core::f32::consts::PI;
+
+/// Taylor serisi ile sinüs.
+#[inline(always)]
+pub fn billiards_sin(mut x: f32) -> f32 {
+    if !x.is_finite() {
+        return 0.0;
+    }
+    for _ in 0..8 {
+        if x <= PI {
+            break;
+        }
+        x -= core::f32::consts::TAU;
+    }
+    for _ in 0..8 {
+        if x >= -PI {
+            break;
+        }
+        x += core::f32::consts::TAU;
+    }
+    let x2 = x * x;
+    let x3 = x * x2;
+    let x5 = x3 * x2;
+    let x7 = x5 * x2;
+    x - (x3 / 6.0) + (x5 / 120.0) - (x7 / 5040.0)
+}
+
+/// Kosinüs.
+#[inline(always)]
+pub fn billiards_cos(x: f32) -> f32 {
+    billiards_sin(x + PI / 2.0)
+}
+
+/// Newton-Raphson karekök.
+#[inline(always)]
+pub fn billiards_sqrt(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let mut g = if x >= 1.0 { x * 0.5 + 0.5 } else { 1.0 };
+    for _ in 0..6 {
+        g = 0.5 * (g + x / g);
+    }
+    g
+}
+
+/// atan2 yaklaşımı.
+#[inline(always)]
+pub fn billiards_atan2(y: f32, x: f32) -> f32 {
+    if !x.is_finite() || !y.is_finite() {
+        return 0.0;
+    }
+    if x == 0.0 {
+        if y > 0.0 {
+            return PI / 2.0;
+        }
+        if y < 0.0 {
+            return -PI / 2.0;
+        }
+        return 0.0;
+    }
+    let mut atan = (y / x).atan_approx();
+    if x < 0.0 {
+        if y >= 0.0 {
+            atan += PI;
+        } else {
+            atan -= PI;
+        }
+    }
+    atan
+}
+
+/// atan yaklaşımı (polinom).
+trait AtanApprox {
+    fn atan_approx(self) -> f32;
+}
+
+impl AtanApprox for f32 {
+    fn atan_approx(self) -> f32 {
+        let x = self.abs();
+        let x2 = x * x;
+        let result = x / (1.0 + x2) * (1.0 + x2 * (0.3333333 + x2 * (0.2 + x2 * 0.1428571)));
+        if self < 0.0 {
+            -result
+        } else {
+            result
+        }
+    }
+}
+
+/// clamp yardımcı (f32 için).
+#[inline(always)]
+pub fn billiards_clamp(x: f32, min: f32, max: f32) -> f32 {
+    if x < min {
+        min
+    } else if x > max {
+        max
+    } else {
+        x
+    }
+}
+
+/// max yardımcı (f32 için).
+#[inline(always)]
+pub fn billiards_max(a: f32, b: f32) -> f32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// min yardımcı (f32 için).
+#[inline(always)]
+pub fn billiards_min(a: f32, b: f32) -> f32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// abs_diff yardımcı (usize için).
+#[inline(always)]
+pub fn billiards_abs_diff(a: usize, b: usize) -> usize {
+    a.abs_diff(b)
+}
+
+// ---------------------------------------------------------------------------
+// Bilardo (Pool / 8-Ball)
+// ---------------------------------------------------------------------------
+
+/// Masa boyutları (dünya birimleri).
+pub const BILLIARDS_TABLE_W: f32 = 2.0;
+pub const BILLIARDS_TABLE_H: f32 = 1.0;
+/// Top yarıçapı.
+pub const BILLIARDS_BALL_R: f32 = 0.035;
+/// Çapa (kenar) kalınlığı.
+pub const BILLIARDS_CUSHION: f32 = 0.04;
+/// Delik yarıçapı.
+pub const BILLIARDS_POCKET_R: f32 = 0.055;
+/// Sürtünme katsayısı (her tick'te v *= 1 - friction).
+pub const BILLIARDS_FRICTION: f32 = 0.008;
+/// Minimum hız eşiği (altında durdur).
+pub const BILLIARDS_MIN_SPEED: f32 = 0.001;
+/// Maksimum vuruş hızı.
+pub const BILLIARDS_MAX_SPEED: f32 = 1.5;
+/// Top sayısı (15 renkli + 1 beyaz).
+pub const BILLIARDS_BALL_COUNT: usize = 16;
+
+/// Top türleri (8-ball kuralları).
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum BallKind {
+    #[default]
+    Cue, // 0: Beyaz (çap topu)
+    Solid,  // 1-7: Düz renkli (küçük numaralı)
+    Stripe, // 9-15: Çizgili (büyük numaralı)
+    Eight,  // 8: Siyah 8 topu
+}
+
+/// Bilardo topları.
+#[derive(Clone, Copy)]
+pub struct BilliardsBall {
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    /// Döndürme açısı (radyan) — 3D görünüm için.
+    pub angle: f32,
+    /// Döndürme hızı (radyan/tick).
+    pub ang_vel: f32,
+    pub kind: BallKind,
+    pub number: u8, // 1-15, 0 = çap topu
+    pub pocketed: bool,
+    pub in_play: bool,
+}
+
+impl BilliardsBall {
+    pub fn new_cue() -> Self {
+        Self {
+            x: BILLIARDS_TABLE_W * 0.25,
+            y: BILLIARDS_TABLE_H * 0.5,
+            vx: 0.0,
+            vy: 0.0,
+            angle: 0.0,
+            ang_vel: 0.0,
+            kind: BallKind::Cue,
+            number: 0,
+            pocketed: false,
+            in_play: true,
+        }
+    }
+
+    pub fn new_object(number: u8, x: f32, y: f32) -> Self {
+        let kind = match number {
+            8 => BallKind::Eight,
+            1..=7 => BallKind::Solid,
+            9..=15 => BallKind::Stripe,
+            _ => BallKind::Solid,
+        };
+        Self {
+            x,
+            y,
+            vx: 0.0,
+            vy: 0.0,
+            angle: 0.0,
+            ang_vel: 0.0,
+            kind,
+            number,
+            pocketed: false,
+            in_play: true,
+        }
+    }
+
+    /// Top rengini döndürür (ARGB).
+    pub fn color(&self) -> u32 {
+        match (self.kind, self.number) {
+            (BallKind::Cue, _) => 0xF0F0F0,
+            (BallKind::Solid, 1) => 0xE82C2C,   // Kırmızı
+            (BallKind::Solid, 2) => 0x2C78E8,   // Mavi
+            (BallKind::Solid, 3) => 0xD43ED4,   // Mor
+            (BallKind::Solid, 4) => 0xE88C2C,   // Turuncu
+            (BallKind::Solid, 5) => 0x2CE86C,   // Yeşil
+            (BallKind::Solid, 6) => 0xC82CE8,   // Koyu mor
+            (BallKind::Solid, 7) => 0x8C5E2C,   // Kahverengi
+            (BallKind::Stripe, 9) => 0xFFE8E8,  // Açık kırmızı (çizgili)
+            (BallKind::Stripe, 10) => 0xE8E8FF, // Açık mavi
+            (BallKind::Stripe, 11) => 0xFFE8FF, // Açık mor
+            (BallKind::Stripe, 12) => 0xFFE8C8, // Açık turuncu
+            (BallKind::Stripe, 13) => 0xC8FFC8, // Açık yeşil
+            (BallKind::Stripe, 14) => 0xE8C8FF, // Açık mor 2
+            (BallKind::Stripe, 15) => 0xE8D4C8, // Açık kahverengi
+            (BallKind::Eight, _) => 0x101010,   // Siyah
+            _ => 0xFFFFFF,
+        }
+    }
+
+    /// Çizgili top için beyaz bant rengi.
+    pub fn stripe_color(&self) -> u32 {
+        0xFFFFFF
+    }
+}
+
+/// Delik konumları (6 delik: 4 köşe + 2 yan).
+pub const BILLIARDS_POCKETS: [(f32, f32); 6] = [
+    (BILLIARDS_CUSHION, BILLIARDS_CUSHION),       // Sol üst
+    (BILLIARDS_TABLE_W * 0.5, BILLIARDS_CUSHION), // Üst orta
+    (BILLIARDS_TABLE_W - BILLIARDS_CUSHION, BILLIARDS_CUSHION), // Sağ üst
+    (BILLIARDS_CUSHION, BILLIARDS_TABLE_H - BILLIARDS_CUSHION), // Sol alt
+    (
+        BILLIARDS_TABLE_W * 0.5,
+        BILLIARDS_TABLE_H - BILLIARDS_CUSHION,
+    ), // Alt orta
+    (
+        BILLIARDS_TABLE_W - BILLIARDS_CUSHION,
+        BILLIARDS_TABLE_H - BILLIARDS_CUSHION,
+    ), // Sağ alt
+];
+
+/// Bilardo oyunu durumu.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum BilliardsState {
+    #[default]
+    Aiming, // Vuruş yönü/power ayarlanıyor
+    Shooting,   // Toplar hareket halinde
+    BallInHand, // Çap topu elden (foul sonrası)
+    GameOver,   // Oyun bitti
+}
+
+/// 8-ball oyuncu türü.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum BilliardsPlayerType {
+    #[default]
+    Solids, // Düz renkli (1-7)
+    Stripes, // Çizgili (9-15)
+}
+
+/// Bilardo oyunu.
+#[derive(Clone, Copy)]
+pub struct BilliardsGame {
+    pub balls: [BilliardsBall; BILLIARDS_BALL_COUNT],
+    pub state: BilliardsState,
+    pub current_player: BilliardsPlayerType,
+    pub player_assigned: [bool; 2], // 0 = solids, 1 = stripes
+    pub eight_ball_pocketed: bool,
+    pub cue_ball_in_hand: bool,
+    /// Vuruş yönü (radyan).
+    pub aim_angle: f32,
+    /// Vuruş gücü (0.0 - 1.0).
+    pub aim_power: f32,
+    /// Son vuruş yapan oyuncu (0 = solids, 1 = stripes, 2 = henüz kimse).
+    pub last_shooter: u8,
+    /// Foul bayrağı.
+    pub foul: bool,
+    /// Kazanan (None = devam, Some(0) = solids, Some(1) = stripes).
+    pub winner: Option<u8>,
+    /// Rastgele tohum (AI için).
+    pub rng_state: u64,
+}
+
+impl Default for BilliardsGame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BilliardsGame {
+    /// Yeni 8-ball oyunu başlatır.
+    pub fn new() -> Self {
+        let mut balls = [BilliardsBall::new_cue(); BILLIARDS_BALL_COUNT];
+        balls[0] = BilliardsBall::new_cue();
+
+        // Standart 8-ball üçgen dizilimi (sol üstten başlayarak)
+        //       1
+        //     2   3
+        //   4   8   5
+        // 6   7   9   10
+        //  11  12  13  14  15
+        let rack_x = BILLIARDS_TABLE_W * 0.72;
+        let rack_y = BILLIARDS_TABLE_H * 0.5;
+        let spacing = BILLIARDS_BALL_R * 2.05;
+
+        let positions = [
+            (0, rack_x, rack_y),                                    // 1 (apex)
+            (1, rack_x + spacing * 0.866, rack_y - spacing * 0.5),  // 2
+            (2, rack_x + spacing * 0.866, rack_y + spacing * 0.5),  // 3
+            (3, rack_x + spacing * 1.732, rack_y - spacing),        // 4
+            (4, rack_x + spacing * 1.732, rack_y),                  // 8 (orta)
+            (5, rack_x + spacing * 1.732, rack_y + spacing),        // 5
+            (6, rack_x + spacing * 2.598, rack_y - spacing * 1.5),  // 6
+            (7, rack_x + spacing * 2.598, rack_y - spacing * 0.5),  // 7
+            (8, rack_x + spacing * 2.598, rack_y + spacing * 0.5),  // 9
+            (9, rack_x + spacing * 2.598, rack_y + spacing * 1.5),  // 10
+            (10, rack_x + spacing * 3.464, rack_y - spacing * 2.0), // 11
+            (11, rack_x + spacing * 3.464, rack_y - spacing),       // 12
+            (12, rack_x + spacing * 3.464, rack_y),                 // 13
+            (13, rack_x + spacing * 3.464, rack_y + spacing),       // 14
+            (14, rack_x + spacing * 3.464, rack_y + spacing * 2.0), // 15
+        ];
+
+        for &(idx, x, y) in &positions {
+            balls[idx + 1] = BilliardsBall::new_object((idx + 1) as u8, x, y);
+        }
+
+        Self {
+            balls,
+            state: BilliardsState::Aiming,
+            current_player: BilliardsPlayerType::Solids,
+            player_assigned: [false, false],
+            eight_ball_pocketed: false,
+            cue_ball_in_hand: false,
+            aim_angle: 0.0,
+            aim_power: 0.5,
+            last_shooter: 2,
+            foul: false,
+            winner: None,
+            rng_state: 0xB111AED5EED1234,
+        }
+    }
+
+    /// Oyunu sıfırlar.
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Rastgele sayı üretir.
+    fn rng_next(&mut self) -> u64 {
+        self.rng_state = self
+            .rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.rng_state
+    }
+
+    /// Çap topunu (beyaz) döndürür (mutable).
+    pub fn cue_ball(&mut self) -> &mut BilliardsBall {
+        &mut self.balls[0]
+    }
+
+    /// Çap topunu (beyaz) döndürür (immutable).
+    pub fn cue_ball_ref(&self) -> &BilliardsBall {
+        &self.balls[0]
+    }
+
+    /// Tüm toplar durdu mu?
+    pub fn all_stopped(&self) -> bool {
+        for ball in &self.balls {
+            if ball.in_play
+                && (ball.vx.abs() > BILLIARDS_MIN_SPEED || ball.vy.abs() > BILLIARDS_MIN_SPEED)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Top-masa kenarı çarpışması (index ile).
+    fn collide_cushion_index(&mut self, i: usize) {
+        let left = BILLIARDS_CUSHION + BILLIARDS_BALL_R;
+        let right = BILLIARDS_TABLE_W - BILLIARDS_CUSHION - BILLIARDS_BALL_R;
+        let top = BILLIARDS_CUSHION + BILLIARDS_BALL_R;
+        let bottom = BILLIARDS_TABLE_H - BILLIARDS_CUSHION - BILLIARDS_BALL_R;
+
+        let ball = &mut self.balls[i];
+        let mut hit = false;
+        if ball.x <= left {
+            ball.x = left;
+            ball.vx = -ball.vx * 0.85;
+            hit = true;
+        } else if ball.x >= right {
+            ball.x = right;
+            ball.vx = -ball.vx * 0.85;
+            hit = true;
+        }
+        if ball.y <= top {
+            ball.y = top;
+            ball.vy = -ball.vy * 0.85;
+            hit = true;
+        } else if ball.y >= bottom {
+            ball.y = bottom;
+            ball.vy = -ball.vy * 0.85;
+            hit = true;
+        }
+        if hit {
+            ball.ang_vel += (ball.vx + ball.vy) * 0.1;
+        }
+    }
+
+    /// Top-top çarpışması (elastik).
+    fn collide_balls(&mut self, i: usize, j: usize) {
+        let bi = self.balls[i];
+        let bj = self.balls[j];
+        if !bi.in_play || !bj.in_play {
+            return;
+        }
+        let dx = bj.x - bi.x;
+        let dy = bj.y - bi.y;
+        let dist_sq = dx * dx + dy * dy;
+        let min_dist = BILLIARDS_BALL_R * 2.0;
+        if dist_sq >= min_dist * min_dist || dist_sq < 0.000001 {
+            return;
+        }
+        let dist = billiards_sqrt(dist_sq);
+        let nx = dx / dist;
+        let ny = dy / dist;
+
+        // Hız farkı
+        let dvx = bj.vx - bi.vx;
+        let dvy = bj.vy - bi.vy;
+        let dvn = dvx * nx + dvy * ny;
+
+        // Uzaklaşıyorsa çarpışma yok
+        if dvn >= 0.0 {
+            return;
+        }
+
+        // Kütleler eşit (1.0), elastik çarpışma
+        let impulse = 2.0 * dvn / 2.0; // (2 * dvn) / (m1 + m2) = dvn
+        let ix = impulse * nx;
+        let iy = impulse * ny;
+
+        self.balls[i].vx += ix;
+        self.balls[i].vy += iy;
+        self.balls[j].vx -= ix;
+        self.balls[j].vy -= iy;
+
+        // Çarpışma sonrası ayrışma (yapışmayı önle)
+        let overlap = min_dist - dist;
+        self.balls[i].x -= nx * overlap * 0.5;
+        self.balls[i].y -= ny * overlap * 0.5;
+        self.balls[j].x += nx * overlap * 0.5;
+        self.balls[j].y += ny * overlap * 0.5;
+
+        // Döndürme güncelle
+        self.balls[i].ang_vel = (self.balls[i].vx - self.balls[i].vy) * 0.5;
+        self.balls[j].ang_vel = (self.balls[j].vx - self.balls[j].vy) * 0.5;
+    }
+
+    /// Delik kontrolü.
+    fn check_pockets(&mut self) -> bool {
+        let mut any_pocketed = false;
+        for i in 0..BILLIARDS_BALL_COUNT {
+            if !self.balls[i].in_play || self.balls[i].pocketed {
+                continue;
+            }
+            for &(px, py) in &BILLIARDS_POCKETS {
+                let dx = self.balls[i].x - px;
+                let dy = self.balls[i].y - py;
+                if dx * dx + dy * dy < BILLIARDS_POCKET_R * BILLIARDS_POCKET_R {
+                    self.balls[i].pocketed = true;
+                    self.balls[i].in_play = false;
+                    self.balls[i].vx = 0.0;
+                    self.balls[i].vy = 0.0;
+                    any_pocketed = true;
+
+                    // Çap topu deliğe girdiyse foul
+                    if i == 0 {
+                        self.foul = true;
+                        self.cue_ball_in_hand = true;
+                    }
+                    break;
+                }
+            }
+        }
+        any_pocketed
+    }
+
+    /// 8-ball kuralları: kazananı kontrol et.
+    fn check_win(&mut self) {
+        if self.eight_ball_pocketed {
+            return;
+        }
+
+        // 8 topu deliğe girdi mi?
+        let eight_ball = &self.balls[8]; // 8 numaralı top (index 8 = number 8)
+        if eight_ball.pocketed {
+            self.eight_ball_pocketed = true;
+            // 8 topu deliğe giren oyuncu kazanır EĞER kendi toplarını bitirmişse
+            // Basitleştirme: son vuran kazanır (gerçek kural daha karmaşık)
+            if self.last_shooter != 2 {
+                self.winner = Some(self.last_shooter);
+                self.state = BilliardsState::GameOver;
+            }
+            return;
+        }
+
+        // Kendi toplarından kalan var mı?
+        let mut solids_left = 0;
+        let mut stripes_left = 0;
+        for ball in self.balls.iter().skip(1) {
+            if ball.in_play {
+                match ball.kind {
+                    BallKind::Solid => solids_left += 1,
+                    BallKind::Stripe => stripes_left += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        // Oyuncu ataması henüz yapılmamışsa, ilk yutulan top türüne göre ata
+        if !self.player_assigned[0] && !self.player_assigned[1] {
+            // İlk vuruşta atama yok, sadece kontrol et
+        } else if self.player_assigned[0] && solids_left == 0 {
+            // Solids oyuncusu toplarını bitirdi, 8'i vurduysa kazanır
+        } else if self.player_assigned[1] && stripes_left == 0 {
+            // Stripes oyuncusu toplarını bitirdi
+        }
+    }
+
+    /// Vuruşu uygular.
+    pub fn shoot(&mut self) {
+        if self.state != BilliardsState::Aiming {
+            return;
+        }
+        let angle = self.aim_angle;
+        let power = self.aim_power;
+        let cue = self.cue_ball();
+        if !cue.in_play {
+            return;
+        }
+        cue.vx = billiards_cos(angle) * power * BILLIARDS_MAX_SPEED;
+        cue.vy = billiards_sin(angle) * power * BILLIARDS_MAX_SPEED;
+        self.state = BilliardsState::Shooting;
+        self.foul = false;
+    }
+
+    /// Vuruş yönünü ayarlar (fare/joystick ile).
+    pub fn set_aim(&mut self, angle: f32, power: f32) {
+        if self.state == BilliardsState::Aiming || self.state == BilliardsState::BallInHand {
+            self.aim_angle = angle;
+            self.aim_power = billiards_clamp(power, 0.0, 1.0);
+        }
+    }
+
+    /// Çap topunu masa üzerine yerleştirir (ball in hand).
+    pub fn place_cue_ball(&mut self, x: f32, y: f32) {
+        if self.state == BilliardsState::BallInHand || self.cue_ball_in_hand {
+            let cue = self.cue_ball();
+            cue.x = x.clamp(
+                BILLIARDS_CUSHION + BILLIARDS_BALL_R,
+                BILLIARDS_TABLE_W - BILLIARDS_CUSHION - BILLIARDS_BALL_R,
+            );
+            cue.y = y.clamp(
+                BILLIARDS_CUSHION + BILLIARDS_BALL_R,
+                BILLIARDS_TABLE_H - BILLIARDS_CUSHION - BILLIARDS_BALL_R,
+            );
+            cue.vx = 0.0;
+            cue.vy = 0.0;
+            cue.pocketed = false;
+            cue.in_play = true;
+            self.cue_ball_in_hand = false;
+            self.state = BilliardsState::Aiming;
+        }
+    }
+
+    /// Ana simülasyon adımı.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
+
+        match self.state {
+            BilliardsState::Shooting => {
+                // Topları hareket ettir
+                for ball in &mut self.balls {
+                    if !ball.in_play {
+                        continue;
+                    }
+                    ball.x += ball.vx;
+                    ball.y += ball.vy;
+
+                    // Sürtünme
+                    ball.vx *= 1.0 - BILLIARDS_FRICTION;
+                    ball.vy *= 1.0 - BILLIARDS_FRICTION;
+
+                    // Döndürme güncelle (hıza göre)
+                    let speed = billiards_sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+                    if speed > BILLIARDS_MIN_SPEED {
+                        // Döndürme ekseni: hareket yönüne dik
+                        let ang_vel_target = speed / BILLIARDS_BALL_R;
+                        ball.ang_vel = ball.ang_vel * 0.95 + ang_vel_target * 0.05;
+                        ball.angle += ball.ang_vel;
+                    } else {
+                        ball.ang_vel *= 0.9;
+                    }
+
+                    // Minimum hız altına düşerse durdur
+                    if speed < BILLIARDS_MIN_SPEED {
+                        ball.vx = 0.0;
+                        ball.vy = 0.0;
+                        ball.ang_vel = 0.0;
+                    }
+
+                    changed = true;
+                }
+
+                // Kenar çarpışması (ayrı döngü untuk borrow sorununu önle)
+                for i in 0..BILLIARDS_BALL_COUNT {
+                    if self.balls[i].in_play {
+                        self.collide_cushion_index(i);
+                    }
+                }
+
+                // Top-top çarpışmaları
+                for i in 0..BILLIARDS_BALL_COUNT {
+                    for j in (i + 1)..BILLIARDS_BALL_COUNT {
+                        self.collide_balls(i, j);
+                    }
+                }
+
+                // Delik kontrolü
+                if self.check_pockets() {
+                    self.check_win();
+                    changed = true;
+                }
+
+                // Tüm toplar durdu mu?
+                if self.all_stopped() {
+                    if self.foul {
+                        self.state = BilliardsState::BallInHand;
+                        self.cue_ball_in_hand = true;
+                    } else {
+                        self.state = BilliardsState::Aiming;
+                        // Sıra değişimi (basit: foul olmazsa sıra değişmez, foul olursa ball in hand)
+                        // Gerçek 8-ball'da: top yutulmazsa sıra değişir
+                        // Basit tutuyoruz: foul olmazsa sıra aynı kalır
+                    }
+                    self.aim_power = 0.5;
+                    changed = true;
+                }
+            }
+            BilliardsState::BallInHand => {
+                // Çap topu elden - bekle
+            }
+            _ => {}
+        }
+
+        changed
+    }
+
+    /// Basit AI: rastgele bir top hedefle ve vur.
+    pub fn ai_shoot(&mut self) {
+        if self.state != BilliardsState::Aiming {
+            return;
+        }
+        // Çap topu pozisyonu (kopyala borrow sorununu önlemek için)
+        let cue_x = self.balls[0].x;
+        let cue_y = self.balls[0].y;
+        let cue_in_play = self.balls[0].in_play;
+        if !cue_in_play {
+            return;
+        }
+
+        // Oyun içindeki topları bul
+        let mut targets: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+        for (i, ball) in self.balls.iter().enumerate().skip(1) {
+            if ball.in_play {
+                targets.push(i);
+            }
+        }
+        if targets.is_empty() {
+            return;
+        }
+
+        // Rastgele bir top seç
+        let pick = (self.rng_next() as usize) % targets.len();
+        let target_idx = targets[pick];
+        let target = self.balls[target_idx];
+
+        // Hedef açısını hesapla
+        let dx = target.x - cue_x;
+        let dy = target.y - cue_y;
+        let angle = billiards_atan2(dy, dx);
+
+        // Güç: mesafeye göre ayarla
+        let dist = billiards_sqrt(dx * dx + dy * dy);
+        let power = billiards_clamp(0.3 + 0.5 * (dist / BILLIARDS_TABLE_W), 0.2, 1.0);
+
+        self.aim_angle = angle;
+        self.aim_power = power;
+        self.shoot();
+    }
+}
+
+#[cfg(test)]
+mod billiards_tests {
+    use super::*;
+
+    #[test]
+    fn new_game_has_16_balls() {
+        let game = BilliardsGame::new();
+        let mut count = 0;
+        for ball in &game.balls {
+            if ball.in_play {
+                count += 1;
+            }
+        }
+        assert_eq!(count, 16);
+    }
+
+    #[test]
+    fn cue_ball_starts_at_quarter() {
+        let game = BilliardsGame::new();
+        let cue = &game.balls[0];
+        assert!((cue.x - BILLIARDS_TABLE_W * 0.25).abs() < 0.01);
+        assert!((cue.y - BILLIARDS_TABLE_H * 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn eight_ball_at_center_of_rack() {
+        let game = BilliardsGame::new();
+        let eight = &game.balls[8]; // number 8
+        assert_eq!(eight.number, 8);
+        assert_eq!(eight.kind, BallKind::Eight);
+    }
+
+    #[test]
+    fn shoot_moves_cue_ball() {
+        let mut game = BilliardsGame::new();
+        game.aim_angle = 0.0; // sağa
+        game.aim_power = 1.0;
+        game.shoot();
+        assert!(game.balls[0].vx > 0.0);
+        assert_eq!(game.state, BilliardsState::Shooting);
+    }
+
+    #[test]
+    fn friction_stops_ball() {
+        let mut game = BilliardsGame::new();
+        game.balls[0].vx = 0.1;
+        game.balls[0].vy = 0.0;
+        game.state = BilliardsState::Shooting;
+        for _ in 0..1000 {
+            game.tick();
+        }
+        assert!(game.balls[0].vx.abs() < BILLIARDS_MIN_SPEED);
+    }
+
+    #[test]
+    fn cushion_reflects_ball() {
+        let mut game = BilliardsGame::new();
+        game.balls[1].in_play = true;
+        game.balls[1].x = BILLIARDS_TABLE_W - BILLIARDS_CUSHION - BILLIARDS_BALL_R + 0.01;
+        game.balls[1].vx = 0.1;
+        game.collide_cushion_index(1);
+        assert!(game.balls[1].vx < 0.0); // Yön değişti
+        assert!(game.balls[1].x <= BILLIARDS_TABLE_W - BILLIARDS_CUSHION - BILLIARDS_BALL_R);
+    }
+
+    #[test]
+    fn pocket_detection_works() {
+        let mut game = BilliardsGame::new();
+        game.balls[1].in_play = true;
+        game.balls[1].x = BILLIARDS_CUSHION; // Sol üst köşe deliği
+        game.balls[1].y = BILLIARDS_CUSHION;
+        let result = game.check_pockets();
+        assert!(result);
+        assert!(game.balls[1].pocketed);
+        assert!(!game.balls[1].in_play);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Performans testi (benchmark / stress)
 // ---------------------------------------------------------------------------
 

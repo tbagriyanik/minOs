@@ -22,9 +22,9 @@ use crate::time_budget::TimeBudget;
 // ---------------------------------------------------------------------------
 
 /// Şehir ızgara genişliği (hücre).
-pub const CITY_W: usize = 60;
+pub const CITY_W: usize = 72;
 /// Şehir ızgara yüksekliği (hücre).
-pub const CITY_H: usize = 60;
+pub const CITY_H: usize = 72;
 
 /// Cadde periyodu: her 12 hücrede bir cadde koridoru.
 const ROAD_PERIOD: usize = 12;
@@ -43,9 +43,9 @@ const CAR_RADIUS: f32 = 0.42;
 /// Azami ileri hız (metre/s).
 const MAX_SPEED: f32 = 28.0;
 /// Azami geri hız (metre/s).
-const MAX_REVERSE: f32 = 6.0;
+const MAX_REVERSE: f32 = 10.0;
 /// Gaz ivmesi (m/s²).
-const ACCEL: f32 = 7.5;
+const ACCEL: f32 = 9.0;
 /// Fren ivmesi (m/s²).
 const BRAKE: f32 = 13.5;
 /// El freni ivmesi (m/s²).
@@ -57,11 +57,11 @@ const DRAG_K: f32 = 0.0022;
 /// Bisiklet modeli: dingil mesafesi (metre).
 const WHEELBASE: f32 = 2.72;
 /// Tam kilitte, düşük hızda minimum dönüş yarıçapı (metre).
-const TURN_R_MIN: f32 = 4.2;
+const TURN_R_MIN: f32 = 3.4;
 /// Hıza bağlı dönüş yarıçapı artış katsayısı (yüksek hızda geniş yay).
 const TURN_R_SPEED_K: f32 = 0.030;
 /// Direksiyon kolunun dönme hızı (komut birimi/s).
-const STEER_RATE: f32 = 2.8;
+const STEER_RATE: f32 = 5.0;
 /// Kavşak dönüş yayı yarıçapı (metre).
 const TURN_ARC_R: f32 = 2.5;
 /// Kavşakta dönüş hızı (metre/s).
@@ -72,9 +72,9 @@ const MAX_VIEW: f32 = 70.0;
 const PLANE_LEN: f32 = 0.72;
 
 /// Trafik aracı sayısı.
-const MAX_TRAFFIC: usize = 16;
+const MAX_TRAFFIC: usize = 12;
 /// Toplanabilir ödül sayısı.
-const MAX_REWARDS: usize = 14;
+const MAX_REWARDS: usize = 12;
 /// Render bütçesi (ms).
 const RENDER_BUDGET_MS: u64 = 80;
 
@@ -758,6 +758,8 @@ pub struct CityDriveApp {
     pub heading: f32,
     pub speed: f32,
     pub cam_dir: f32,
+    /// Kamera görünümü: 0 ileri, 1 geri.
+    pub camera_mode: u8,
     /// Direksiyon kolu konumu (-1..1): yumuşatılmış direksiyon komutu.
     pub steer_cmd: f32,
     // Girdi
@@ -773,6 +775,7 @@ pub struct CityDriveApp {
     pub distance: f32,
     pub crashes: u32,
     pub crash_flash: u32,
+    pub success_flash: u32,
     pub state: CityState,
     pub engine_freq: u32,
     // Gün/gece döngüsü (0.0..1.0).
@@ -806,6 +809,7 @@ impl CityDriveApp {
             heading: 0.0,
             speed: 0.0,
             cam_dir: 0.0,
+            camera_mode: 0,
             steer_cmd: 0.0,
             key_mask: 0,
             traffic: [TrafficCar {
@@ -840,6 +844,7 @@ impl CityDriveApp {
             distance: 0.0,
             crashes: 0,
             crash_flash: 0,
+            success_flash: 0,
             state: CityState::Menu,
             engine_freq: 0,
             time_of_day: 0.5,
@@ -873,6 +878,7 @@ impl CityDriveApp {
         self.car_y = 13.5;
         self.heading = 0.0;
         self.cam_dir = 0.0;
+        self.camera_mode = 0;
         self.speed = 0.0;
         self.steer_cmd = 0.0;
         self.key_mask = 0;
@@ -880,6 +886,7 @@ impl CityDriveApp {
         self.distance = 0.0;
         self.crashes = 0;
         self.crash_flash = 0;
+        self.success_flash = 0;
         self.time_of_day = 0.5;
         self.fuel = FUEL_CAPACITY;
         self.drift_angle = 0.0;
@@ -1074,6 +1081,10 @@ impl CityDriveApp {
             'r' | 'R' => {
                 self.reset_world();
                 self.state = CityState::Driving;
+                true
+            }
+            'c' | 'C' => {
+                self.camera_mode = (self.camera_mode + 1) % 2;
                 true
             }
             _ => false,
@@ -1369,6 +1380,7 @@ impl CityDriveApp {
                 self.checkpoint = (self.checkpoint + 1) % self.checkpoints.len();
                 if self.checkpoint == 0 {
                     // Tur tamamlandı.
+                    self.success_flash = 90;
                     if self.best_lap == 0.0 || self.lap_timer < self.best_lap {
                         self.best_lap = self.lap_timer;
                     }
@@ -1383,6 +1395,9 @@ impl CityDriveApp {
 
         if self.crash_flash > 0 {
             self.crash_flash -= 1;
+        }
+        if self.success_flash > 0 {
+            self.success_flash -= 1;
         }
 
         // --- Motor sesi: hıza göre frekans ---
@@ -1849,8 +1864,9 @@ impl CityDriveApp {
             return true;
         }
         let horizon = top + view_h / 2;
-        let dir_x = cos(self.cam_dir);
-        let dir_y = sin(self.cam_dir);
+        let camera_dir = self.camera_direction();
+        let dir_x = cos(camera_dir);
+        let dir_y = sin(camera_dir);
         let plane_x = -dir_y * PLANE_LEN;
         let plane_y = dir_x * PLANE_LEN;
         let focal = view_h as f32 * 0.5;
@@ -1908,9 +1924,15 @@ impl CityDriveApp {
                 }
             }
         } else {
-            // Güneş.
-            let sun_x = win_x + (win_w as f32 * 0.74) as usize;
-            let sun_y = top + ((horizon - top) as f32 * 0.24) as usize;
+            // Güneş doğudan batıya gerçek bir günlük yay izler. 0.28 ve
+            // 0.72 gün doğumu/batımıdır; öğlen güneş en yüksek noktadadır.
+            let daylight = 0.72 - 0.28;
+            let solar_t = ((self.time_of_day - 0.28) / daylight).clamp(0.0, 1.0);
+            let sun_angle = solar_t * core::f32::consts::PI;
+            let sun_x = win_x + (win_w as f32 * (0.08 + 0.84 * solar_t)) as usize;
+            let sun_height = sin(sun_angle).max(0.0);
+            let sun_y = (horizon as f32 - (horizon - top) as f32 * 0.78 * sun_height)
+                .max(top as f32 + 10.0) as usize;
             for dy in -9i32..=9 {
                 for dx in -9i32..=9 {
                     let d2 = dx * dx + dy * dy;
@@ -2106,6 +2128,7 @@ impl CityDriveApp {
         }
 
         // 4) Sprite'lar: ödüller, trafik araçları ve parçacıklar.
+        self.draw_trees(fb, win_x, top, win_w, horizon, focal, &zbuf);
         for reward in self.rewards.iter() {
             if !reward.active {
                 continue;
@@ -2199,6 +2222,15 @@ impl CityDriveApp {
         color
     }
 
+    #[inline(always)]
+    fn camera_direction(&self) -> f32 {
+        if self.camera_mode == 0 {
+            self.cam_dir
+        } else {
+            self.cam_dir + core::f32::consts::PI
+        }
+    }
+
     /// Bir dünya noktasının ekran projeksiyonunu hesaplar (derinlik testi ile).
     fn project(
         &self,
@@ -2208,8 +2240,9 @@ impl CityDriveApp {
         focal: f32,
         zbuf: &[f32; 1024],
     ) -> Option<(i32, f32, f32)> {
-        let dir_x = cos(self.cam_dir);
-        let dir_y = sin(self.cam_dir);
+        let camera_dir = self.camera_direction();
+        let dir_x = cos(camera_dir);
+        let dir_y = sin(camera_dir);
         let plane_x = -dir_y * PLANE_LEN;
         let plane_y = dir_x * PLANE_LEN;
         let rel_x = world_x - self.car_x;
@@ -2267,8 +2300,9 @@ impl CityDriveApp {
             }
         }
 
-        let dir_x = cos(self.cam_dir);
-        let dir_y = sin(self.cam_dir);
+        let camera_dir = self.camera_direction();
+        let dir_x = cos(camera_dir);
+        let dir_y = sin(camera_dir);
         let cam = Camera3D {
             pos_x: self.car_x,
             pos_y: self.car_y,
@@ -2660,6 +2694,65 @@ impl CityDriveApp {
         );
     }
 
+    /// Park/çimen hücrelerine yerleştirilen basit derinlik-testli ağaçlar.
+    fn draw_trees(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        top: usize,
+        win_w: usize,
+        horizon: usize,
+        focal: f32,
+        zbuf: &[f32; 1024],
+    ) {
+        for cy in (0..CITY_H).step_by(2) {
+            for cx in (0..CITY_W).step_by(2) {
+                if self.map.tile(cx as i32, cy as i32) != T_PARK || hash4(cx, cy, 41, 7) % 100 >= 42
+                {
+                    continue;
+                }
+                let jitter_x = (hash4(cx, cy, 13, 3) % 70) as f32 / 100.0 - 0.35;
+                let jitter_y = (hash4(cx, cy, 17, 5) % 70) as f32 / 100.0 - 0.35;
+                let wx = cx as f32 + 0.5 + jitter_x;
+                let wy = cy as f32 + 0.5 + jitter_y;
+                let (sx, depth, scale) = match self.project(wx, wy, win_w, focal, zbuf) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let h = 3.4 + (hash4(cx, cy, 23, 9) % 12) as f32 * 0.12;
+                let width = (1.25 * scale).max(2.0) as usize;
+                let trunk_w = (width / 4).max(2);
+                let ground = (horizon as f32 + CAM_H * scale) as usize;
+                let crown_top = (horizon as f32 - (h - CAM_H) * scale).max(top as f32) as usize;
+                let crown_h = (ground.saturating_sub(crown_top) / 2).max(2);
+                let left = sx - (width as i32 / 2);
+                let runs = visible_runs(zbuf, depth, left, sx + width as i32 / 2 + 1);
+                let x = (left.max(0) as usize).saturating_add(win_x);
+                draw_clipped(
+                    fb,
+                    &runs.0,
+                    runs.1,
+                    x + width / 2 - trunk_w / 2,
+                    crown_top + crown_h / 2,
+                    trunk_w,
+                    ground.saturating_sub(crown_top + crown_h / 2),
+                    0x65452D,
+                );
+                draw_clipped(fb, &runs.0, runs.1, x, crown_top, width, crown_h, 0x2E7D32);
+                draw_clipped(
+                    fb,
+                    &runs.0,
+                    runs.1,
+                    x + width / 5,
+                    crown_top.saturating_sub(crown_h / 4),
+                    width * 3 / 5,
+                    crown_h / 2 + 1,
+                    0x3F9940,
+                );
+            }
+        }
+    }
+
     /// HUD: hız göstergesi, dönüş yarıçapı, skor, mini harita, kontrol ipuçları.
     fn render_hud(
         &self,
@@ -2829,7 +2922,7 @@ impl CityDriveApp {
         // Kontrol ipuçları (alt orta).
         let hint = crate::gui::ui_text(
             "W/S gaz-fren  A/D direksiyon  Space el freni (drift)  R sifirla  Esc duraklat",
-            "W/S throttle-brake  A/D steer  Space handbrake (drift)  R reset  Esc pause",
+            "W/S throttle-brake  A/D steer  C camera  Space handbrake  R reset  Esc pause",
         );
         MinGuiCompositor::draw_string(
             fb,
@@ -2844,6 +2937,56 @@ impl CityDriveApp {
             let alpha = (self.crash_flash as f32 / 14.0).min(1.0);
             let c = shade(0xFF4444, alpha * 0.55);
             fb.draw_rect_outline(win_x, win_y, win_w, win_h, c);
+            let title = crate::gui::ui_text("ÇARPIŞMA!", "CRASH!");
+            let msg = crate::gui::ui_text(
+                "Kontrolü toparla ve devam et",
+                "Recover control and continue",
+            );
+            let cx = win_x + win_w / 2;
+            let y = win_y + win_h / 2 - 38;
+            MinGuiCompositor::draw_string(
+                fb,
+                cx - MinGuiCompositor::text_width(title, 2) / 2,
+                y,
+                title,
+                0xFF7777,
+            );
+            MinGuiCompositor::draw_string(
+                fb,
+                cx - MinGuiCompositor::text_width(msg, 1) / 2,
+                y + 30,
+                msg,
+                Color::TEXT_MAIN,
+            );
+        }
+
+        if self.success_flash > 0 {
+            let bw = 360.min(win_w.saturating_sub(24));
+            let bh = 86.min(win_h.saturating_sub(24));
+            let bx = win_x + (win_w - bw) / 2;
+            let by = win_y + (win_h - bh) / 2;
+            fb.draw_rect(bx + 4, by + 5, bw, bh, 0x080E12);
+            fb.draw_rect(bx, by, bw, bh, 0x10291F);
+            fb.draw_rect_outline(bx, by, bw, bh, 0x62D6A8);
+            let title = crate::gui::ui_text("TUR TAMAMLANDI!", "LAP COMPLETE!");
+            MinGuiCompositor::draw_string(
+                fb,
+                bx + (bw - MinGuiCompositor::text_width(title, 2)) / 2,
+                by + 16,
+                title,
+                0x62D6A8,
+            );
+            let msg = crate::gui::ui_text(
+                "Yeni tur başladı · +500 puan",
+                "New lap started · +500 points",
+            );
+            MinGuiCompositor::draw_string(
+                fb,
+                bx + (bw - MinGuiCompositor::text_width(msg, 1)) / 2,
+                by + 52,
+                msg,
+                Color::TEXT_MAIN,
+            );
         }
 
         // Menü / duraklatma katmanı.
@@ -2856,7 +2999,7 @@ impl CityDriveApp {
                 );
                 let controls = crate::gui::ui_text(
                     "W/S gaz-fren · A/D direksiyon · Space el freni",
-                    "W/S throttle-brake · A/D steer · Space handbrake",
+                    "W/S throttle-brake · A/D steer · C camera · Space handbrake",
                 );
                 let goal = crate::gui::ui_text(
                     "Ödülleri topla, yakıtını koru, drift yap, tur tamamla!",
@@ -2866,8 +3009,10 @@ impl CityDriveApp {
                 let cy = win_y + win_h / 2;
                 let bw = 340.min(win_w.saturating_sub(20));
                 let bh = 150.min(win_h.saturating_sub(20));
-                fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, bh, 0x0E1218);
+                fb.draw_rect(cx - bw / 2 + 4, cy - bh / 2 + 5, bw, bh, 0x080B10);
+                fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, bh, 0x101923);
                 fb.draw_rect_outline(cx - bw / 2, cy - bh / 2, bw, bh, 0x4DABF7);
+                fb.draw_rect(cx - bw / 2, cy - bh / 2, bw, 4, 0x4DABF7);
                 MinGuiCompositor::draw_string(
                     fb,
                     cx - MinGuiCompositor::text_width(title, 2) / 2,

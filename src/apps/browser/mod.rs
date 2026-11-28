@@ -971,6 +971,10 @@ pub struct BrowserApp {
     pub js_alert: Option<String>,
     pub js_vars: Vec<(String, String)>,
     pub js_functions: Vec<(String, String)>,
+    /// Basit DOM olay dinleyicileri: (hedef, olay, JS kodu).
+    pub js_event_listeners: Vec<(String, String, String)>,
+    pub js_event_propagation_stopped: bool,
+    pub js_event_default_prevented: bool,
     /// Tarayıcı sekmeleri.
     pub tabs: Vec<BrowserTab>,
     pub bookmarks_extra: Vec<crate::apps::browser::types::Bookmark>,
@@ -1335,6 +1339,9 @@ impl BrowserApp {
             js_alert: None,
             js_vars: Vec::new(),
             js_functions: Vec::new(),
+            js_event_listeners: Vec::new(),
+            js_event_propagation_stopped: false,
+            js_event_default_prevented: false,
             bookmarks_extra: Vec::new(),
             download_path: None,
             download_data: None,
@@ -1871,6 +1878,7 @@ impl BrowserApp {
         if self.has_page_selection() {
             return None;
         }
+        let mut event_target = String::new();
         let mut clicked_url = None;
         let mut clicked_js = None;
 
@@ -1883,6 +1891,7 @@ impl BrowserApp {
                 } else if !link.url.is_empty() {
                     clicked_url = Some(link.url.clone());
                 }
+                event_target = link.elem_id.clone();
                 break;
             }
         }
@@ -1909,6 +1918,7 @@ impl BrowserApp {
                                 if !span.onclick.is_empty() {
                                     clicked_js = Some(span.onclick.clone());
                                 }
+                                event_target = span.elem_id.clone();
                                 break;
                             }
                         }
@@ -1921,6 +1931,17 @@ impl BrowserApp {
             }
         }
 
+        // Fare olaylarının tarayıcıdaki sıralı akışı. Koordinatlar CSS pikseli
+        // olarak olay bağlamına eklenir; eski minJs bunları noktalı değişken
+        // adlarıyla okuyabilir.
+        self.set_js_var("event.clientX", &mx.to_string());
+        self.set_js_var("event.clientY", &my.to_string());
+        self.set_js_var("event.button", "0");
+        self.dispatch_dom_event(&event_target, "mousedown");
+        self.dispatch_dom_event(&event_target, "mouseup");
+        self.dispatch_dom_event(&event_target, "click");
+        let default_prevented = self.event_default_prevented();
+
         if let Some(js_code) = clicked_js {
             // <summary> tıklaması: details aç/kapa durumunu çevirir.
             if let Some(rest) = js_code.strip_prefix("__details_set__:") {
@@ -1931,6 +1952,9 @@ impl BrowserApp {
                 return None;
             }
             self.execute_js(&js_code);
+            return None;
+        }
+        if default_prevented {
             return None;
         }
         // HTML içinde saklanan href göreli olabilir (`/path`, `page.html`,
@@ -2009,6 +2033,96 @@ impl BrowserApp {
         }
     }
 
+    /// Belge ve pencere seviyesindeki dinleyicileri çalıştırır.
+    /// Hedef eleman zinciri DOM ile tam bağlandığında bu yöntem ara bubbling
+    /// katmanlarını da eklemek için tek giriş noktası olarak kullanılacaktır.
+    /// Kullanıcı girdisini DOM olayına dönüştürmek için ortak giriş noktası.
+    /// `target` HTML `id` değeridir; boş hedefte yalnızca document/window
+    /// dinleyicileri çalışır.
+    pub fn dispatch_dom_event(&mut self, target: &str, event_type: &str) {
+        self.dispatch_dom_event_with_data(target, event_type, "", "", false, false);
+    }
+
+    /// Olayı temel `event.*` alanlarıyla birlikte çalıştırır. Eski minJs
+    /// değerlendiricisi nesne argümanı taşımadığı için olay bağlamı, mevcut
+    /// değişken tablosunda noktalı adlarla görünür (`event.key` gibi).
+    pub fn dispatch_dom_event_with_data(
+        &mut self,
+        target: &str,
+        event_type: &str,
+        key: &str,
+        code: &str,
+        ctrl: bool,
+        shift: bool,
+    ) {
+        self.js_event_propagation_stopped = false;
+        self.js_event_default_prevented = false;
+        self.set_js_var("event.type", event_type);
+        self.set_js_var("event.key", key);
+        self.set_js_var("event.code", code);
+        self.set_js_var("event.ctrlKey", if ctrl { "true" } else { "false" });
+        self.set_js_var("event.shiftKey", if shift { "true" } else { "false" });
+        let mut handlers: Vec<(String, String)> = self
+            .js_event_listeners
+            .iter()
+            .filter(|(listener_target, event, _)| {
+                (listener_target == target
+                    || listener_target == "document"
+                    || listener_target == "window")
+                    && event.eq_ignore_ascii_case(event_type)
+            })
+            .map(|(listener_target, _, code)| (listener_target.clone(), code.clone()))
+            .collect();
+        handlers.sort_by_key(|(listener_target, _)| {
+            if listener_target == target {
+                0
+            } else if listener_target == "document" {
+                1
+            } else {
+                2
+            }
+        });
+        for (_, code) in handlers {
+            self.execute_js(&code);
+            if self.js_event_propagation_stopped {
+                break;
+            }
+        }
+    }
+
+    pub fn event_default_prevented(&self) -> bool {
+        self.js_event_default_prevented
+    }
+
+    pub fn remove_dom_event_listener(&mut self, target: &str, event_type: &str, handler: &str) {
+        self.js_event_listeners.retain(
+            |(registered_target, registered_event, registered_handler)| {
+                !(registered_target == target
+                    && registered_event.eq_ignore_ascii_case(event_type)
+                    && registered_handler.trim() == handler.trim())
+            },
+        );
+    }
+
+    /// Touch sürücüsünden gelen olaylar için ortak DOM giriş noktası.
+    /// Şimdilik tek dokunuşlu touch modelini kullanır; çoklu dokunuş için
+    /// sonraki aşamada `touches` koleksiyonu eklenebilir.
+    pub fn dispatch_touch_event(&mut self, target: &str, event_type: &str, x: usize, y: usize) {
+        self.set_js_var("event.type", event_type);
+        self.set_js_var("event.clientX", &x.to_string());
+        self.set_js_var("event.clientY", &y.to_string());
+        self.set_js_var("event.touches.length", "1");
+        self.dispatch_dom_event(target, event_type);
+    }
+
+    fn set_js_var(&mut self, name: &str, value: &str) {
+        if let Some(existing) = self.js_vars.iter_mut().find(|(key, _)| key == name) {
+            existing.1 = value.to_string();
+        } else {
+            self.js_vars.push((name.to_string(), value.to_string()));
+        }
+    }
+
     fn eval_js_expr(&self, expr: &str) -> String {
         let expr = expr.trim();
         if (expr.starts_with('\'') && expr.ends_with('\'') && expr.len() >= 2)
@@ -2033,6 +2147,54 @@ impl BrowserApp {
 
     fn execute_js_statement(&mut self, stmt: &str) {
         let stmt = stmt.trim();
+        if stmt.contains("event.stopPropagation()") {
+            self.js_event_propagation_stopped = true;
+            return;
+        }
+        if stmt.contains("event.preventDefault()") {
+            self.js_event_default_prevented = true;
+            return;
+        }
+        if let Some(pos) = stmt.find("removeEventListener(") {
+            let target = if pos > 0 && stmt.as_bytes()[pos - 1] == b'.' {
+                stmt[..pos - 1].trim()
+            } else {
+                "window"
+            };
+            let rest = &stmt[pos + "removeEventListener".len()..];
+            if let Some(end) = rest.rfind(')') {
+                let args = &rest[1..end];
+                let mut parts = args.splitn(2, ',');
+                let event = parts.next().unwrap_or("").trim().trim_matches(['\'', '"']);
+                let handler = parts.next().unwrap_or("").trim();
+                self.remove_dom_event_listener(target, event, handler);
+            }
+            return;
+        }
+        if let Some(pos) = stmt.find("addEventListener(") {
+            let target = if pos > 0 && stmt.as_bytes()[pos - 1] == b'.' {
+                stmt[..pos - 1].trim()
+            } else {
+                "window"
+            };
+            let rest = &stmt[pos + "addEventListener".len()..];
+            if let Some(end) = rest.rfind(')') {
+                let args = &rest[1..end];
+                let mut parts = args.splitn(2, ',');
+                let event = parts
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches(['\'', '"'])
+                    .to_string();
+                let handler = parts.next().unwrap_or("").trim().to_string();
+                if !event.is_empty() && !handler.is_empty() {
+                    self.js_event_listeners
+                        .push((target.to_string(), event, handler));
+                }
+            }
+            return;
+        }
         // Gradyan durak ekleme: `degisken.addColorStop(offset, 'renk')`
         // — değişken `canvasgrad<c>_<i>` referansı taşır.
         if stmt.contains(".addColorStop(") {
@@ -2533,6 +2695,7 @@ impl BrowserApp {
         self.page_bg_image = None;
         self.js_alert = None;
         self.js_vars.clear();
+        self.js_event_listeners.clear();
         self.scroll_reset = true;
 
         // HTML yerleşimi, DOM yeniden çizimi ve script yürütme her karede
@@ -6908,6 +7071,7 @@ impl BrowserApp {
                                                 rect: (cur_x, draw_y, span_w, line_h),
                                                 url: span.link_url.clone(),
                                                 onclick: span.onclick.clone(),
+                                                elem_id: span.elem_id.clone(),
                                             });
                                         }
                                         span_char_start = span_char_end;
@@ -6990,6 +7154,7 @@ impl BrowserApp {
                                                 rect: (cur_x, draw_y, span_w, line_h),
                                                 url: span.link_url.clone(),
                                                 onclick: span.onclick.clone(),
+                                                elem_id: span.elem_id.clone(),
                                             });
                                         }
                                         span_char_start = span_char_end;
@@ -7087,6 +7252,7 @@ impl BrowserApp {
                                                 rect: (cur_x, draw_y, span_w, line_h),
                                                 url: span.link_url.clone(),
                                                 onclick: span.onclick.clone(),
+                                                elem_id: span.elem_id.clone(),
                                             });
                                         }
                                         span_char_start = span_char_end;
@@ -7132,6 +7298,7 @@ impl BrowserApp {
                                         rect: (cur_x, draw_y, span_w, line_h),
                                         url: span.link_url.clone(),
                                         onclick: span.onclick.clone(),
+                                        elem_id: span.elem_id.clone(),
                                     });
                                 }
                                 // Resim isabet alanı kaydet (önbellekten görüntüleme için)
@@ -7205,6 +7372,7 @@ impl BrowserApp {
                                         rect: (cur_x, draw_y, span_w, line_h),
                                         url: span.link_url.clone(),
                                         onclick: span.onclick.clone(),
+                                        elem_id: span.elem_id.clone(),
                                     });
                                 }
                             } else if let Some((s, e)) = sel_range {
@@ -7338,6 +7506,7 @@ impl BrowserApp {
                                             rect: (cur_x, draw_y, span_w, line_h),
                                             url: span.link_url.clone(),
                                             onclick: span.onclick.clone(),
+                                            elem_id: span.elem_id.clone(),
                                         });
                                     }
                                 }

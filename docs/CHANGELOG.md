@@ -5,6 +5,14 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 
 ## Güncel · v2.7.0
 
+### Son güncellemeler · Kasım 2026
+
+- **FPS oyunu:** Başlangıç ve sonuç ekranları kart düzeninde yenilendi; can/mermi HUD'ı ve sağlık, zırh, cephane gibi toplanabilir eşyalar açıkça gösteriliyor. Son bölüm tamamlanınca zafer, can sıfırlanınca kaybetme durumu ve puan gösteriliyor; sonuç ekranından yeniden başlanabiliyor. Render katmanları ayrı zaman bütçeleriyle çalışarak duvar, düşman ve HUD çiziminin yarım karelerde kaybolmasını önlüyor.
+- **Oyunlar:** Dama, Mayın Tarlası ve Satranç sekmelerine 8-top bilardo eklendi; gölgeli 3D top çizimi, nişan çizgisi, güç çubuğu ve basit AI içeriyor.
+- **Şehir Sürüş:** Harita 72×72 hücreye genişletildi; sürüş/geri vites ayarları, geri kamera görünümü ve derinlik testli ağaç çizimi eklendi.
+- **Web Tarayıcısı:** Fare ve dokunma girdileri için temel DOM olay dağıtımı, olay verileri ve olay dinleyicilerini kaldırma desteği eklendi.
+- **Kalite doğrulaması:** Host test paketi 575 teste çıktı (575 geçti / 0 hata); `cargo clippy -- -D warnings` uyarısız tamamlandı.
+
 ### Düzeltmeler · Pencere yırtılması ve parça parça güncelleme
 
 - **Pencere güncellemesi artık atomik:** `GlobalDirtyTracker::mark_window` ile giren per-pencere kirli işaretleri artık çerçevenin genel kirli bölgesine de yansıtılıyor (`window_bounding` birleşimi). Daha önce bu işaretler yalnızca per-pencere listesine yazılıyordu; `take_dirty_region()` genel birleşimi kullandığı için pencere "kendi listesinde kirli" olmasına rağmen çerçeve kırpma dikdörtgeni dışında kalıyor ve pencere yalnızca kırpma bölgesi kadar yeniden çiziliyordu. Sonuç: pencerenin bir kısmı yeni, bir kısmı bayat kalıyordu (parça parça güncelleme). Ayrıca `is_empty()` per-pencere işaretlerini hesaba katmadığı için yalnızca pencere işareti bulunan karelerde redraw hiç tetiklenmiyordu (kapatılan kullanıcı modu penceresi ekranda hayalet bırakabiliyordu).
@@ -45,7 +53,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
   - **Çift fare kaynağı:** BIOS legacy USB emülasyonu devrede kaldığında aynı fare hem xHCI'den hem 8042'den geliyordu (çift girdi → jitle). Artık legacy devir tamamlanamazsa PS/2 fare yolu (`ps2::disable_mouse`) otomatik kapatılır; klavye etkilenmez.
   - **Ekran yırtılması:** kare başına iki ayrı LFB yazımı (içerik + imleç) tek yazıma indirildi ve yazma öncesi dikey-blank beklemesi eklendi. `vsync_wait()` artık donanım vblank bildirmiyorsa (ör. VirtualBox VBoxVGA) bir kez yoklayıp tamamen devre dışı kalıyor — her karede boşuna spin yapıp fare gecikmesi üretmiyor.
   - **Hızlı açılış profili:** Limine menüsüne **minOs Fast Boot** girdisi (`live full fast`) eklendi; açılışta çalışan bellek/süreç/Ring3 test bataryası atlanır, açılış süresi belirgin şekilde kısalır.
-- Host test paketi 547 teste ulaştı (547 geçti / 0 hata).
+- Host test paketi 575 test içerir (575 geçti / 0 hata).
 ## v2.5.0
 
 - **Masaüstü UI/UX cilası ve performans:** Tüm uygulamalarda tekerlekle global yumuşak kaydırma (`Window::scroll_anim`, tarayıcı kendi sistemiyle hariç; sürükleme/track tıklaması animasyonu iptal eder); pencere açılışında 140 ms'lik yukarı kayma, başlat menüsü/bağlam menüsü/Alt+Tab/takvim/ses popup'larında kısa açılış animasyonları ve toast'larda slide-in/out (`gui::anim` easing yardımcıları, `*_open_ms` zaman damgaları, animasyon karelerinde `dirty_tracker` ile sınırlı yeniden çizim); görev çubuğu/tepsi öğelerinde 700 ms gecikmeli tooltip balonları (`gui::tooltip`); tüm metin alanlarında merkezileştirilmiş imleç yanıp sönmesi (`textedit::caret_visible`); başlık çubuğu hover'ında içerik render'ının atlanması (chrome-only repaint); metin çiziminde 256 girişli doğrudan eşlemeli glyph önbelleği ve `text_width`'teki çift aramanın tek `glyph()` çağrısına indirilmesi; kullanılmayan `gui::renderer` ikiz render yolu kaldırıldı.

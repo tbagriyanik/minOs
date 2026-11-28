@@ -926,6 +926,7 @@ pub struct RenderedLink {
     pub rect: (usize, usize, usize, usize),
     pub url: String,
     pub onclick: String,
+    pub elem_id: String,
 }
 
 #[derive(Clone)]

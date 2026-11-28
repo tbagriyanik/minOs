@@ -88,6 +88,7 @@ pub struct KeyboardState {
     action_tail: usize,
     extended_scancode: bool,
     break_scancode: bool,
+    last_released_scancode: Option<u8>,
     prt_scn_state: u8,
     /// Şu an basılı tutulan normal tuşlar (PS/2 set 1 tarama kodu).
     held: [u8; 128],
@@ -114,6 +115,7 @@ impl KeyboardState {
             action_tail: 0,
             extended_scancode: false,
             break_scancode: false,
+            last_released_scancode: None,
             prt_scn_state: 0,
             held: [0; 128],
             held_extended: [0; 128],
@@ -163,6 +165,10 @@ impl KeyboardState {
         }
     }
 
+    pub fn take_last_released_scancode(&mut self) -> Option<u8> {
+        self.last_released_scancode.take()
+    }
+
     /// Normal (E0 ön ekli olmayan) bir tuşun şu an basılı olup olmadığı.
     ///
     /// Basılı tutma gerektiren uygulamalar (ör. araç sürüş oyunu) tuş
@@ -192,6 +198,7 @@ impl KeyboardState {
         if self.break_scancode {
             self.break_scancode = false;
             let released = scancode & 0x7F;
+            self.last_released_scancode = Some(released);
             self.held[released as usize] = 0;
             if released == 0x2A || released == 0x36 {
                 self.shift = false;
@@ -243,6 +250,7 @@ impl KeyboardState {
         // Tuş bırakma (Release / Break code) kontrolü
         if scancode & 0x80 != 0 {
             let released = scancode & 0x7F;
+            self.last_released_scancode = Some(released);
             self.held[released as usize] = 0;
             if released == 0x2A || released == 0x36 {
                 self.shift = false;
@@ -623,6 +631,7 @@ impl KeyboardState {
     fn handle_extended_scancode(&mut self, scancode: u8) -> Option<char> {
         if scancode & 0x80 != 0 {
             let released = scancode & 0x7F;
+            self.last_released_scancode = Some(released);
             self.held_extended[released as usize] = 0;
             if released == 0x1D {
                 self.ctrl = false;

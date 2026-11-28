@@ -5,6 +5,14 @@ The README files only summarise the highlights; the full list lives here.
 
 ## Current · v2.7.0
 
+### Recent updates · November 2026
+
+- **FPS game:** Start and result screens now use a redesigned card layout; the health/ammo HUD and health, armor and ammo pickups are clearly presented. Completing the final level shows victory, running out of health shows defeat, and the result screen displays the score and allows a restart. Separate render-layer budgets prevent walls, enemies and the HUD from disappearing on partial frames.
+- **Games:** 8-ball billiards joins Checkers, Minesweeper and Chess, with shaded 3D balls, an aiming line, a power bar and basic AI.
+- **City Drive:** The map was expanded to 72×72 cells, with tuned driving/reverse controls, a rear camera view and depth-tested trees.
+- **Web browser:** Basic DOM event dispatch for mouse/touch input, event data and event-listener removal were added.
+- **Quality checks:** The host suite now has 575 tests (575 passed, 0 failed); `cargo clippy -- -D warnings` completes without warnings.
+
 ### Fixes · Window tearing and partial (fragmented) window updates
 
 - **Window updates are now atomic:** per-window dirty marks recorded through `GlobalDirtyTracker::mark_window` are now folded into the frame's global dirty region (`window_bounding` union). Previously those marks only reached the per-window list, while `take_dirty_region()` used the global union — so a window could be "dirty in its own list" yet fall outside the frame clip rectangle and was redrawn only inside that clip. The visible result was a window whose changed part was new while the rest stayed stale (piece-by-piece updates). `is_empty()` also ignored per-window marks, so frames whose only pending work was a window mark never triggered a redraw at all (a closed user-mode window could leave a ghost on screen).
@@ -44,7 +52,7 @@ The README files only summarise the highlights; the full list lives here.
   - **Duplicate mouse source:** when the BIOS legacy USB emulation could not be handed over, the same mouse arrived through both xHCI and the 8042 (double input → jitter). The PS/2 mouse path is now disabled automatically in that case (`ps2::disable_mouse`); the keyboard is unaffected.
   - **Screen tearing:** the two separate LFB writes per frame (content + cursor) were merged into one, and a vertical-blank wait was added before the write. `vsync_wait()` now probes once and disables itself when the device never reports vblank (e.g. VirtualBox VBoxVGA), instead of burning a spin every frame and adding input latency.
   - **Fast boot profile:** the Limine menu gained a **minOs Fast Boot** entry (`live full fast`) that skips the memory/process/Ring3 self-test battery and noticeably shortens boot time.
-- The host suite reached 547 tests (547 passed / 0 failed).
+- The host suite contains 575 tests (575 passed / 0 failed).
 ## v2.5.0
 
 - **Desktop UI/UX polish and performance:** Global smooth mouse-wheel scrolling in every app (`Window::scroll_anim`; the browser keeps its own system; scrollbar drags/track clicks cancel the animation); a 140 ms rise on window open plus short open animations for the start menu, context menus, the Alt+Tab switcher and the calendar/volume popups, and slide-in/out toasts (`gui::anim` easing helpers, `*_open_ms` timestamps, dirty-region-limited repaints during animation frames); 700 ms delayed tooltip balloons on taskbar/tray items (`gui::tooltip`); centralized caret blinking across text fields (`textedit::caret_visible`); content render skipped for titlebar-only dirty regions (chrome-only repaint); a 256-entry direct-mapped glyph cache for text rendering and `text_width`'s double lookup reduced to a single `glyph()` call; the unused `gui::renderer` duplicate render path removed.

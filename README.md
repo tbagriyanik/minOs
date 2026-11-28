@@ -6,8 +6,8 @@
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-212%2C813%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![Host Tests](https://img.shields.io/badge/Host%20Tests-568%20passing-brightgreen.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-214%2C823%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Host Tests](https://img.shields.io/badge/Host%20Tests-576%20tests-brightgreen.svg)](https://github.com/tbagriyanik/minos)
 [![Version](https://img.shields.io/badge/Version-v2.7.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Çekirdek `no_std` ve `no_main` kullanır; grafik masaüstü ve yerleşik uygulamalar sunar.
@@ -19,9 +19,11 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - Sürücü görünürlüğü ve hata ayıklama: ortak durum modeliyle her donanım sürücüsü `Hazır` / `Kullanılamıyor` / `Hata` olarak izlenir; hata kodu ve açıklama seri günlüğe yazılır. Kontrol Paneli'ne **Sürücüler** sekmesi eklendi (durum tablosu + ağ/grafik/ses/depolama ayrıntıları + **Yeniden Tara**); sürücüsü hatalı uygulamalar güvenli biçimde engellenir.
 - Dosya Yöneticisi ve Kurulum Sihirbazı'na onay diyalogları eklendi: yeni dosya/klasör oluşturma, yeniden adlandırma ve silme (Geri Dönüşüm Kutusu'na taşıma veya kalıcı silme) artık adlandırmalı onay penceresiyle onaylatılıyor; Enter onaylar, Esc vazgeçer. Kurulum sihirbazında `Biçimlendir` ve `Tek Tıkla Kur` adımları da aynı şekilde onay istiyor.
 - Donmuş uygulamaların izlenmesi ana döngüden bağımsız çalışır; FPS 3D uygulaması gerçek kare hızı ölçümleri üretir.
-- FPS Oyunu başlangıç ve sonuç menülerini içerir; temel form kontrollerinde Tab ile gezinme, Enter ile onaylama ve Esc ile vazgeçme desteği bulunur (Hoş Geldin ekranı dahil).
+- FPS oyunu görsel olarak yenilenmiş başlangıç/sonuç paneli, can ve mermi toplanabilirleri, can/mermi HUD'ı ve son bölüm zaferi/can bitişi durumlarını içerir; sonuç panelinden yeniden başlanabilir.
+- Oyunlar uygulamasına 8-top bilardo eklendi: gölgeli 3D toplar, nişan çizgisi, güç çubuğu ve basit rakip yapay zekâsı. Şehir Sürüş haritası büyütüldü; ağaçlar derinlik testiyle çizilir ve geri kamera/sürüş kontrolleri iyileştirildi.
+- Tarayıcı kullanıcı girdileri için temel DOM olayları (fare ve dokunma), olay verisi ve dinleyici kaldırma desteği kazandı.
 - Render bütçesi aşılırsa tamamlanmamış kare ekranda bırakılmaz.
-- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 568 test içerir.
+- TLS/X.509 doğrulaması yaprak ve ara sertifika tarihlerini, CA BasicConstraints/pathLen kısıtlarını ve varsa KeyUsage/EKU uzantılarını denetler; testlerde doğrulama kestirmesi kaldırıldı. Host paketi 575 test içerir.
 - Çekirdek loglama artık seviyeli ve filtrelenebilir: `trace/debug/info/warn/error` seviyeleri ile `boot`, `driver` ve `net` hedeflerine ayrılan kayıtlar `[LEVEL][hedef]` önekiyle seri konsola yazılır. Varsayılanlar Limine cmdline `log=` belirtecinden (`log=debug`, `log=info,net:trace` gibi), çalışma anı değişiklikleri seri konsoldan `log ...` komutlarıyla yapılır; CI'a çekirdek hedefi için `cargo clippy -D warnings` kapısı eklendi.
 - Web tarayıcısı modern bir tarayıcıya dönüştü: HTTP/1.1 + TLS 1.3'in yanına HTTP/2 ve HTTP/3 (QUIC) eklendi; HTML5'te satır-içi SVG rasterizasyonu, `<details>`/`<dialog>`/`<template>`/`<picture>` desteği; CSS3'te bağlam-duyarlı seçiciler (`:nth-child`, `[attr=]`, `:is()`/`:not()`, kardeş/ata birleşimleyicileri); Canvas 2D'de gradyan, transform, Bézier/arc path'leri, `save`/`restore` ve `getImageData`/`putImageData`; minJs'te `XMLHttpRequest`, `history.pushState` ve `requestAnimationFrame`.
 - Tarayıcı CSS3 `display` (flex/grid/block/inline/inline-block) ve `overflow` kuralları artık doğru uygulanıyor; çoklu CPU scheduler'ında bir işlemcinin kendi hazır görevini atlayıp boşta kalma hatası düzeltildi.
@@ -32,7 +34,7 @@ minOs, Rust ile geliştirilen bağımsız bir 64-bit (`x86_64`) işletim sistemi
 - QEMU varsayılan çalıştırmasında klavye ve fare artık çalışıyor: `run.ps1` artık varsayılan olarak `qemu-xhci + usb-kbd + usb-tablet` (USB HID) bağlar. `usb-tablet` mutlak koordinatlıdır ve QEMU fare konumunu doğrudan host imleciyle senkronize eder, böylece QEMU'da fare takılmadan pürüzsüz hareket eder. QEMU 11'in varsayılan `pc` makinesinde i8042 denetleyicisi olduğuna karşın PS/2 klavye/fare aygıtı bağlı gelmediği için önceki sürümlerde masaüstü giriş olayları gelmemişti. 
 - Masaüstü arayüzü uçtan uca cilalandı ve hızlandırıldı: tüm uygulamalarda tekerlekle yumuşak kaydırma; pencere, başlat menüsü, bağlam menüsü, Alt+Tab geçişi ve takvim/ses açılır pencerelerinde kısa açılış animasyonları; görev çubuğu ve tepside ipucu (tooltip) balonları; toast bildirimlerde kayma animasyonu; metin çiziminde glyph önbelleği. Sistem Ayarları > Ekran sekmesine **Arayüz animasyonları** (tüm hareketi kapatır) ve **Saydam pencereler** anahtarları eklendi.
 - Erişilebilirlik iyileştirmeleri: başlık çubuğunda kaydedilmemiş değişiklik işareti (●) ve uzun başlık kısaltma (…); düğmelerde seçili (yeşil çerçeve), odaklanmış (sarı odak halkası) ve devre dışı (koyulaştırılmış) durumlar ayrıştırıldı; tüm pencereler doğru uygulama kimliği (app_id) ile başlık ve simge alır.
-- Host test paketi 568 teste ulaştı; tüm testler geçti (568 passed, 0 failed).
+- Host test paketi 575 test içerir; son doğrulamada tümü geçti (`575 geçti / 0 hata`).
 
 Değişikliklerin tam listesi: [Sürüm günlüğü](docs/CHANGELOG.md).
 
@@ -52,7 +54,7 @@ Host testlerini çalıştırmak için:
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Son doğrulama: **568 host testi geçti** (`568 passed; 0 failed`). Projede toplam **212.813 Rust satırı** bulunur; bunun **200.450 satırı `src/`**, **5.407 satırı `tests/`**, kalan **6.956 satır** ise fuzz hedefleri, `build.rs`, `tools/` ve kök seviyedeki test yardımcı dosyalarıdır (`target/` hariç). Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
+Host test paketi **575 test** içerir; son doğrulamada tümü geçti. Projede toplam **214.823 Rust satırı** bulunur; bunun **202.460 satırı `src/`**, **5.407 satırı `tests/`**, kalan **6.956 satır** ise fuzz hedefleri, `build.rs`, `tools/` ve kök seviyedeki test yardımcı dosyalarıdır (`target/` hariç). Satır sayısı mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarından hesaplanır.
 
 ## Özellikler
 

@@ -1473,9 +1473,6 @@ impl FpsGameApp {
         win_h: usize,
         budget_ms: u64,
     ) -> bool {
-        let budget = TimeBudget::new(budget_ms);
-        let mut cancelled = false;
-
         let scale = self.render_scale.max(1);
         let iw = win_w.div_ceil(scale).min(ZBUF_MAX);
         let ih = win_h.div_ceil(scale);
@@ -1518,32 +1515,65 @@ impl FpsGameApp {
             self.rays[2 * x] = self.dir_x + self.plane_x * camera_x;
             self.rays[2 * x + 1] = self.dir_y + self.plane_y * camera_x;
         }
-        // Derinlik tamponunu temizle (sprite kırpma için).
+        // Duvar ışını henüz çizilmemiş sütunlarda sprite görünürlüğünü koru.
         for slot in self.zbuf[..iw].iter_mut() {
-            *slot = 0.0;
+            *slot = MAX_DEPTH * 4.0;
         }
 
         // Arka plan: ufuk sis rengi (kaplanmayan pikseller için).
         fb.draw_rect(win_x, win_y, win_w, win_h, 0x141A22);
 
-        if !cancelled {
-            cancelled = !self.render_planes(
-                fb, win_x, win_y, scale, iw, horizon_f, v_scale, col_start, col_end, row_start,
-                row_end, &budget,
-            );
-        }
-        if !cancelled {
-            cancelled = !self.render_walls(
-                fb, win_x, win_y, scale, ih, horizon_f, v_scale, col_start, col_end, row_start,
-                row_end, &budget,
-            );
-        }
-        if !cancelled {
-            cancelled = !self.render_sprites(
-                fb, win_x, win_y, scale, iw, ih, horizon_f, v_scale, focal, col_start, col_end,
-                row_start, row_end, &budget,
-            );
-        }
+        // A slow plane pass must not starve walls and enemies. Give each
+        // render layer its own share so later layers still get drawn when
+        // an earlier one is incomplete.
+        let planes_budget_ms = budget_ms / 4;
+        let walls_budget_ms = budget_ms / 2;
+        let sprites_budget_ms = budget_ms.saturating_sub(planes_budget_ms + walls_budget_ms);
+        let planes_complete = self.render_planes(
+            fb,
+            win_x,
+            win_y,
+            scale,
+            iw,
+            horizon_f,
+            v_scale,
+            col_start,
+            col_end,
+            row_start,
+            row_end,
+            &TimeBudget::new(planes_budget_ms),
+        );
+        let walls_complete = self.render_walls(
+            fb,
+            win_x,
+            win_y,
+            scale,
+            ih,
+            horizon_f,
+            v_scale,
+            col_start,
+            col_end,
+            row_start,
+            row_end,
+            &TimeBudget::new(walls_budget_ms),
+        );
+        let sprites_complete = self.render_sprites(
+            fb,
+            win_x,
+            win_y,
+            scale,
+            iw,
+            ih,
+            horizon_f,
+            v_scale,
+            focal,
+            col_start,
+            col_end,
+            row_start,
+            row_end,
+            &TimeBudget::new(sprites_budget_ms),
+        );
+        let cancelled = !(planes_complete && walls_complete && sprites_complete);
 
         if !cancelled {
             // Ateş/hasar ekran çerçevesi.
@@ -2501,30 +2531,28 @@ impl FpsGameApp {
                         budget.remaining_ms(),
                     );
                 }
-                if completed && !budget.is_expired() {
-                    // Nişangâh.
-                    let cx = win_x + win_w / 2;
-                    let cy = view_y + view_h / 2;
-                    fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(8), 2, 5, 0xD8F4FF);
-                    fb.draw_rect(cx.saturating_sub(1), cy + 3, 2, 5, 0xD8F4FF);
-                    fb.draw_rect(cx.saturating_sub(8), cy.saturating_sub(1), 5, 2, 0xD8F4FF);
-                    fb.draw_rect(cx + 3, cy.saturating_sub(1), 5, 2, 0xD8F4FF);
-                    fb.draw_rect(cx, cy, 1, 1, 0xFFFFFF);
+                // Nişangâh.
+                let cx = win_x + win_w / 2;
+                let cy = view_y + view_h / 2;
+                fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(8), 2, 5, 0xD8F4FF);
+                fb.draw_rect(cx.saturating_sub(1), cy + 3, 2, 5, 0xD8F4FF);
+                fb.draw_rect(cx.saturating_sub(8), cy.saturating_sub(1), 5, 2, 0xD8F4FF);
+                fb.draw_rect(cx + 3, cy.saturating_sub(1), 5, 2, 0xD8F4FF);
+                fb.draw_rect(cx, cy, 1, 1, 0xFFFFFF);
 
-                    // Elde tutulan silah.
-                    self.render_weapon(fb, win_x, view_y, win_w, view_h);
+                // Elde tutulan silah.
+                self.render_weapon(fb, win_x, view_y, win_w, view_h);
 
-                    // Hasar efekti.
-                    if self.damage_flash_timer > 0 {
-                        fb.draw_rect(win_x + 2, view_y + 2, win_w - 4, 4, Color::ACCENT_RED);
-                        fb.draw_rect(
-                            win_x + 2,
-                            view_y + view_h.saturating_sub(6),
-                            win_w - 4,
-                            4,
-                            Color::ACCENT_RED,
-                        );
-                    }
+                // Hasar efekti.
+                if self.damage_flash_timer > 0 {
+                    fb.draw_rect(win_x + 2, view_y + 2, win_w - 4, 4, Color::ACCENT_RED);
+                    fb.draw_rect(
+                        win_x + 2,
+                        view_y + view_h.saturating_sub(6),
+                        win_w - 4,
+                        4,
+                        Color::ACCENT_RED,
+                    );
                 }
             }
             RenderMode::TopDown2D => {
@@ -2537,7 +2565,7 @@ impl FpsGameApp {
         }
 
         // Durum çubuğu.
-        if completed && !budget.is_expired() {
+        if self.result == GameResult::Playing {
             self.render_hud(fb, win_x, win_y, win_w, win_h);
         }
 
@@ -2598,62 +2626,213 @@ impl FpsGameApp {
         view_h: usize,
         win_w: usize,
     ) {
+        let is_menu = self.result == GameResult::Menu;
+        let is_won = self.result == GameResult::Won;
+        let accent = if is_won {
+            Color::ACCENT_GREEN
+        } else {
+            Color::ACCENT_RED
+        };
+        fb.draw_rect(win_x, view_y, win_w, view_h, 0x0B1118);
+
+        let horizon = view_y + view_h * 2 / 3;
+        for line in 0..6 {
+            let y = horizon + line * 10;
+            if y < view_y + view_h {
+                fb.draw_rect(win_x + 12, y, win_w.saturating_sub(24), 1, 0x18212D);
+            }
+        }
+
+        let card_w = win_w.saturating_sub(32).min(620);
+        let card_h = view_h.saturating_sub(24).min(370);
+        let compact_height = card_h < 340;
+        let card_x = win_x + win_w.saturating_sub(card_w) / 2;
+        let card_y = view_y + view_h.saturating_sub(card_h) / 2;
+        fb.draw_rounded_rect(card_x, card_y, card_w, card_h, 10, 0x1A2430);
+        fb.draw_rounded_rect_outline(card_x, card_y, card_w, card_h, 10, 0x3B4A5C);
+        fb.draw_rect(card_x + 1, card_y + 1, card_w.saturating_sub(2), 3, accent);
+
+        let brand = crate::gui::ui_text("MINOS // FPS GOREVI", "MINOS // FPS MISSION");
+        MinGuiCompositor::draw_string(fb, card_x + 22, card_y + 19, brand, Color::ACCENT_BLUE);
+
         let title = match self.result {
             GameResult::Menu => "WOLFENSTEIN 3D",
             GameResult::Won => "ZAFER!",
-            _ => "OLDUNUZ",
+            GameResult::Lost => "OLDUNUZ",
+            GameResult::Playing => "",
         };
         let title = crate::gui::ui_text(title, title);
-        let tw = MinGuiCompositor::text_width(title, 2);
-        MinGuiCompositor::draw_string(
+        let title_w = MinGuiCompositor::text_width(title, 2);
+        MinGuiCompositor::draw_string_scaled(
             fb,
-            win_x + (win_w.saturating_sub(tw)) / 2,
-            view_y + view_h / 6,
+            card_x + card_w.saturating_sub(title_w) / 2,
+            card_y + 43,
             title,
-            Color::ACCENT_RED,
+            accent,
+            2,
         );
 
-        let lines: [&str; 6] = [
-            crate::gui::ui_text(
-                "BASLAMAK ICIN BOSLUK VEYA ENTER",
-                "PRESS SPACE OR ENTER TO START",
-            ),
-            crate::gui::ui_text(
-                "WASD: hareket  |  Fare: bakis  |  Sol tik: ates",
-                "WASD: move  |  Mouse: look  |  LMB: fire",
-            ),
-            crate::gui::ui_text("E: kapi ac / gizli duvar it", "E: use door / push wall"),
-            crate::gui::ui_text(
-                "1-3: silah  |  R: doldur  |  Tab: harita",
-                "1-3: weapon  |  R: reload  |  Tab: map",
-            ),
-            crate::gui::ui_text("T: 2D ustten gorunum", "T: 2D top-down view"),
-            crate::gui::ui_text("Esc: menuye don", "Esc: back to menu"),
-        ];
-        let mut y = view_y + view_h / 3;
-        for line in lines.iter() {
-            let lw = MinGuiCompositor::text_width(line, 1);
+        let subtitle = match self.result {
+            GameResult::Menu => {
+                crate::gui::ui_text("KARANLIKTA YOLUNU BUL", "FIND YOUR WAY THROUGH THE DARK")
+            }
+            GameResult::Won => crate::gui::ui_text("BOLUM TAMAMLANDI", "MISSION COMPLETE"),
+            GameResult::Lost => crate::gui::ui_text("GOREV BASARISIZ", "MISSION FAILED"),
+            GameResult::Playing => "",
+        };
+        let subtitle_w = MinGuiCompositor::text_width(subtitle, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            card_x + card_w.saturating_sub(subtitle_w) / 2,
+            card_y + 79,
+            subtitle,
+            Color::TEXT_MUTED,
+        );
+
+        let button_w = card_w.saturating_sub(48).min(240);
+        let button_h = 38;
+        let button_x = card_x + card_w.saturating_sub(button_w) / 2;
+        let button_y = card_y + if compact_height { 92 } else { 104 };
+        fb.draw_rounded_rect(button_x, button_y, button_w, button_h, 7, 0x50302F);
+        fb.draw_rounded_rect_outline(button_x, button_y, button_w, button_h, 7, accent);
+        let action = if is_menu {
+            crate::gui::ui_text("OYUNA BASLA", "START GAME")
+        } else {
+            crate::gui::ui_text("TEKRAR OYNA", "PLAY AGAIN")
+        };
+        let action_w = MinGuiCompositor::text_width(action, 1);
+        MinGuiCompositor::draw_string(
+            fb,
+            button_x + button_w.saturating_sub(action_w) / 2,
+            button_y + 10,
+            action,
+            Color::TEXT_MAIN,
+        );
+
+        if !is_menu {
+            let mut score = crate::gui::TextBuf::new();
+            score.push_str(crate::gui::ui_text("PUAN  ", "SCORE  "));
+            score.push_usize(self.score as usize);
+            let score_w = MinGuiCompositor::text_width(score.as_str(), 1);
             MinGuiCompositor::draw_string(
                 fb,
-                win_x + (win_w.saturating_sub(lw)) / 2,
-                y,
-                line,
-                Color::TEXT_MAIN,
+                card_x + card_w.saturating_sub(score_w) / 2,
+                button_y + button_h + 5,
+                score.as_str(),
+                Color::ACCENT_YELLOW,
             );
-            y += 22;
+        } else {
+            let start_hint = crate::gui::ui_text(
+                "BASLATMAK ICIN ENTER / BOSLUK / FARE",
+                "PRESS ENTER / SPACE / CLICK TO START",
+            );
+            let hint_w = MinGuiCompositor::text_width(start_hint, 1);
+            MinGuiCompositor::draw_string(
+                fb,
+                card_x + card_w.saturating_sub(hint_w) / 2,
+                button_y + button_h + 5,
+                start_hint,
+                Color::TEXT_MUTED,
+            );
         }
 
-        if self.result != GameResult::Menu {
-            let mut sc = crate::gui::TextBuf::new();
-            sc.push_str(crate::gui::ui_text("Puan: ", "Score: "));
-            sc.push_usize(self.score as usize);
-            let sw = MinGuiCompositor::text_width(sc.as_str(), 1);
+        let controls_y = if compact_height {
+            (button_y + button_h + 22).max(card_y + card_h.saturating_sub(115))
+        } else {
+            card_y + 174
+        };
+        fb.draw_rect(
+            card_x + 20,
+            controls_y,
+            card_w.saturating_sub(40),
+            1,
+            0x3B4A5C,
+        );
+        let controls_title = crate::gui::ui_text("KONTROLLER", "CONTROLS");
+        MinGuiCompositor::draw_string(
+            fb,
+            card_x + 22,
+            controls_y + 9,
+            controls_title,
+            Color::ACCENT_BLUE,
+        );
+
+        if compact_height {
+            let controls = [
+                crate::gui::ui_text("WASD: HAREKET / FARE: BAKIS", "WASD: MOVE / MOUSE: LOOK"),
+                crate::gui::ui_text("SOL TIK: ATES / E: KULLAN", "CLICK: FIRE / E: USE"),
+                crate::gui::ui_text("1-3: SILAH / R: DOLDUR", "1-3: WEAPON / R: RELOAD"),
+                crate::gui::ui_text("TAB: HARITA / T: GORUNUM", "TAB: MAP / T: VIEW"),
+            ];
+            for (index, line) in controls.iter().enumerate() {
+                let width = MinGuiCompositor::text_width(line, 1);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    card_x + card_w.saturating_sub(width) / 2,
+                    controls_y + 31 + index * 12,
+                    line,
+                    Color::TEXT_MAIN,
+                );
+            }
+        } else if card_w >= 450 {
+            let controls = [
+                ("W A S D", crate::gui::ui_text("HAREKET", "MOVE")),
+                ("FARE", crate::gui::ui_text("BAKIS", "LOOK")),
+                ("SOL TIK", crate::gui::ui_text("ATES", "FIRE")),
+                (
+                    "E / BOSLUK",
+                    crate::gui::ui_text("KULLAN / KAPI", "USE / DOOR"),
+                ),
+                (
+                    "1-3 / R / TAB",
+                    crate::gui::ui_text("SILAH / DOLDUR / HARITA", "WEAPON / RELOAD / MAP"),
+                ),
+            ];
+            let row_y = controls_y + 31;
+            for (index, (key, action)) in controls.iter().enumerate() {
+                let y = row_y + index * 19;
+                fb.draw_rounded_rect(card_x + 22, y, 132, 17, 3, 0x273341);
+                MinGuiCompositor::draw_string(fb, card_x + 29, y + 3, key, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, card_x + 168, y + 3, action, Color::TEXT_MUTED);
+            }
+        } else {
+            let controls = [
+                "WASD: HAREKET",
+                "FARE: BAKIS / SOL TIK: ATES",
+                "E: KULLAN / KAPI",
+                "1-3: SILAH / R: DOLDUR",
+                "TAB: HARITA / T: GORUNUM",
+            ];
+            for (index, line) in controls.iter().enumerate() {
+                let width = MinGuiCompositor::text_width(line, 1);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    card_x + card_w.saturating_sub(width) / 2,
+                    controls_y + 31 + index * 18,
+                    line,
+                    Color::TEXT_MAIN,
+                );
+            }
+        }
+
+        if is_menu && !compact_height {
+            let mode = match self.render_mode {
+                RenderMode::Mode3D => "3D",
+                RenderMode::TopDown2D => "2D",
+            };
+            let mut footer = crate::gui::TextBuf::new();
+            footer.push_str(crate::gui::ui_text(
+                "T: GORUNUM  |  MOD: ",
+                "T: VIEW  |  MODE: ",
+            ));
+            footer.push_str(mode);
+            let width = MinGuiCompositor::text_width(footer.as_str(), 1);
             MinGuiCompositor::draw_string(
                 fb,
-                win_x + (win_w.saturating_sub(sw)) / 2,
-                y + 8,
-                sc.as_str(),
-                Color::ACCENT_YELLOW,
+                card_x + card_w.saturating_sub(width) / 2,
+                card_y + card_h.saturating_sub(23),
+                footer.as_str(),
+                Color::ACCENT_GREEN,
             );
         }
     }

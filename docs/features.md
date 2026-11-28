@@ -2,11 +2,14 @@
 
 Uygulama kataloğu, sistem yetenekleri ve proje yol haritası.
 
-## Güncel sürüm: v2.6.0
+## Güncel sürüm: v2.7.0
 
 - Donmuş uygulamalar APIC zamanlayıcı kesmesinde izlenir; uygulamanın kapatılması ana döngüye bırakılır.
-- FPS 3D Oyunu tamamlanan karelerden gerçek FPS ve kare süresi ölçümleri üretir. QEMU stres testi `test_qemu.ps1 -FpsStressTest` ile başlatılabilir.
-- FPS Oyunu başlangıç ve sonuç menülerini içerir. Hoş Geldin ekranı, kurulum sihirbazı ve Dosya Yöneticisi form kontrollerinde Tab, Enter ve Esc kısayolları desteklenir.
+- FPS 3D Oyunu gerçek FPS/kare süresi ölçümleri, yenilenmiş başlangıç/sonuç paneli, can-cephane HUD'ı ve sağlık/zırh/cephane toplayıcıları sunar; son bölüm zaferi ve can bitişi durumları sonuç ekranında puanla gösterilir. QEMU stres testi `test_qemu.ps1 -FpsStressTest` ile başlatılabilir.
+- Oyunlar uygulamasında dama, Mayın Tarlası ve satranca ek olarak gölgeli 3D toplar, nişan çizgisi, güç çubuğu ve basit AI içeren 8-top bilardo bulunur.
+- Şehir Sürüş haritası 72×72 hücreye genişletildi; geri kamera, sürüş kontrolleri ve derinlik testli ağaç render'ı eklendi.
+- Tarayıcı temel fare/dokunma DOM olaylarını, olay verisini ve olay dinleyicilerini kaldırmayı destekler.
+- Host test paketi 575 testten oluşur (575 geçti / 0 hata); `cargo clippy -- -D warnings` uyarısız geçer.
 - Render bütçesi aşılırsa tamamlanmamış kare geri yüklenir; `TimeBudget` zaman aşımı davranışı deterministik host testleriyle kapsanır.
 - Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı Müzik Çalar'da açar. Resim Gösterici görüntüyü döşeli masaüstü arka planı yapabilir.
 - Ayarlar'da üç yeni ek masaüstü görseli bulunur (`desktop1.png`–`desktop3.png`).
@@ -26,7 +29,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerle
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. Arama ve işlem kontrolleri klavyeyle kullanılabilir. |
-| **⚙️ Sistem Ayarları** | Beş sekme (Temel / Ekran / Ağ / Aygıtlar / Testler): v2.6.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve masaüstü resimleri) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **⚙️ Sistem Ayarları** | Beş sekme (Temel / Ekran / Ağ / Aygıtlar / Testler): v2.7.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve masaüstü resimleri) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
 | **🎛️ Kontrol Paneli** | Canlı sistem bilgisi: işletim sistemi/çekirdek sürümü, CPU üreticisi ve mantıksal çekirdek sayısı, RAM kullanımı ve doluluk çubuğu, çözünürlük, tema, klavye düzeni, çalışma süresi ve tarih. Ağ sekmesinde etkin ağ sürücüsü (e1000 / RTL816x / RTL8139 / NE2000), link durumu, DHCP/IP/maske/ağ geçidi/DNS ve ses sürücüsü; tek düğmeyle tema değiştirme. |
 | **📦 Paket Yöneticisi (`minPak`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
@@ -40,8 +43,8 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerle
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `format` ile disk biçimlendirme (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. Tab ile kontroller arasında gezinilir, Enter ile etkinleştirilir ve onay pencereleri Esc ile kapatılabilir. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |
-| **🎮 FPS Oyunu** | Raycasting tabanlı 3D motor; fare ile bakış, WASD hareket, gölgelendirme, düşman hedefleri, radar ve ses efektleri. Başlangıç ve sonuç menüleri oyun başlatma, yeniden başlatma ve çıkış seçenekleri sunar. |
-| **🎯 FPS 3D Oyun** | Gerçek performans ölçümlü FPS uygulaması (app ID 16): tamamlanan karelerden `fps`/`min_fps`/`frame_ms`/`interval_ms` metrikleri (`[FPS3D-METRICS]`), HUD'da canlı ve minimum FPS, bütçe aşımında kısmi karenin geri yüklenmesi. `test_qemu.ps1 -FpsStressTest` ile 10/30/60 dk stres testi. |
+| **🎲 Oyunlar** | Tek pencerede dama, Mayın Tarlası, satranç ve 8-top bilardo. Bilardoda gölgeli 3D toplar, nişan çizgisi, güç çubuğu ve basit AI bulunur. |
+| **🎯 FPS 3D Oyun** | Raycasting tabanlı FPS: fareyle bakış, WASD hareket, düşmanlar, radar, can/mermi HUD'ı ve sağlık/zırh/cephane toplayıcıları. Son bölüm zaferi ve can bitişi sonuç ekranında puan ve yeniden başlatma sunar. Tamamlanan karelerden `fps`/`min_fps`/`frame_ms`/`interval_ms` ölçümleri (`[FPS3D-METRICS]`) ve bütçe aşımında kısmi karenin geri yüklenmesi; `test_qemu.ps1 -FpsStressTest` ile 10/30/60 dk stres testi. |
 
 > **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) kod tabanında mevcuttur; ayarlar ve kişiselleştirme işlevleri **Sistem Ayarları** (`settings.rs`) üzerinden yürütülmektedir.
 
@@ -68,13 +71,14 @@ Derleme profilleri, QEMU örnekleri ve ayrıntılı donanım sınırları için 
 
 | Ölçüm | Değer |
 | :--- | :--- |
-| **Rust Kaynak Dosyası (`src/`)** | 232 dosya |
-| **Toplam Kod Satırı (`src/*.rs`)** | 194.267 satır (ham) / 179.005 satır (boşlukları hariç) |
-| **Test Dosyaları (`tests/*.rs`)** | 4.881 satır (17 dosya) |
+| **Rust Kaynak Dosyası (`src/`)** | 237 dosya |
+| **Kaynak Satırları (`src/**/*.rs`)** | 202.460 fiziksel satır |
+| **Test Dosyaları (`tests/**/*.rs`)** | 5.407 satır (20 dosya) |
 | **Derleme Komut Dosyası (`build.rs`)** | 210 satır |
-| **Toplam (`src/` + `tests/` + `build.rs`)** | 199.358 satır (ham) |
+| **Toplam (`src/` + `tests/` + `build.rs`)** | 208.077 fiziksel satır |
+| **Tüm Rust dosyaları (`target/` hariç)** | 214.823 fiziksel satır |
 
-Sayılar `cloc`-tarzı satır sayımıdır (boş ve yorum satırları dahil); boşlukları hariç Rust kaynağı 179.005, yorum satırları da hariç ~151.800 satırdır. Host birim testleri: **547 test (547 geçti / 0 hata)**.
+Sayılar mevcut çalışma ağacındaki `.rs` dosyalarının fiziksel satırlarını içerir (boş ve yorum satırları dahil). Host birim testleri: **575 test (575 geçti / 0 hata)**; `cargo clippy -- -D warnings` uyarısız tamamlandı.
 
 ---
 

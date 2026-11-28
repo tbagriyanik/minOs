@@ -16,6 +16,7 @@ use crate::handle_terminal_open_request;
 use crate::task;
 use crate::watchdog;
 use crate::{alloc_pmm_frame_global, MEMORY_MGR};
+use alloc::string::ToString;
 
 /// Animasyonlu oyun pencerelerinin her tikinde yalnızca ilgili pencere
 /// bölgesini (gölge payı dahil) kirli işaretler. Böylece `state.force_render`'ın
@@ -5830,7 +5831,32 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         let mut enter_char_consumed = false;
 
+        while let Some(scancode) = keyboard.take_last_released_scancode() {
+            if app_is_focused(&compositor, 3) {
+                let key_name = alloc::format!("scancode-{:02X}", scancode);
+                apps.browser_app.dispatch_dom_event_with_data(
+                    "",
+                    "keyup",
+                    &key_name,
+                    &key_name,
+                    keyboard.ctrl,
+                    keyboard.shift,
+                );
+            }
+        }
+
         while let Some(action) = keyboard.take_last_action() {
+            if app_is_focused(&compositor, 3) {
+                let key_name = alloc::format!("{:?}", action);
+                apps.browser_app.dispatch_dom_event_with_data(
+                    "",
+                    "keydown",
+                    &key_name,
+                    &key_name,
+                    keyboard.ctrl,
+                    keyboard.shift,
+                );
+            }
             // Dosya yöneticisi onay iletişim kutusu açıkken tuşlar önce diyaloğa gider.
             let fm_handled = fm_confirm_key(&mut apps.desktop_files, &mut fs_mgr.vfs, action)
                 || (app_is_focused(&compositor, 0)
@@ -9057,6 +9083,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // 6. Klavye karakter girisleri
 
         while let Some(ch) = keyboard.take_last_char() {
+            if app_is_focused(&compositor, 3) {
+                let key = ch.to_string();
+                apps.browser_app.dispatch_dom_event_with_data(
+                    "",
+                    "keypress",
+                    &key,
+                    &key,
+                    keyboard.ctrl,
+                    keyboard.shift,
+                );
+            }
             if ch == '\n' && enter_char_consumed {
                 enter_char_consumed = false;
 

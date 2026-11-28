@@ -213,11 +213,88 @@ impl JsDocumentRef {
     pub fn get_elements_by_class_name(&self, class: &str) -> Vec<usize> {
         let mut results = Vec::new();
         for (idx, elem) in self.elements.iter().enumerate() {
-            if elem.class_name.as_ref().is_some_and(|c| c.contains(class)) {
+            if elem
+                .class_name
+                .as_ref()
+                .is_some_and(|c| c.split_ascii_whitespace().any(|token| token == class))
+            {
                 results.push(idx);
             }
         }
         results
+    }
+
+    /// Basit ama CSS uyumlu temel seçici desteği.
+    ///
+    /// Desteklenen biçimler: `tag`, `#id`, `.class`, `tag.class`,
+    /// `tag#id`, `[attr]` ve `[attr=value]`. Boşlukla ayrılmış seçiciler
+    /// basit descendant selector olarak değerlendirilir.
+    pub fn query_selector_all(&self, selector: &str) -> Vec<usize> {
+        let parts: Vec<&str> = selector.split_ascii_whitespace().collect();
+        if parts.is_empty() {
+            return Vec::new();
+        }
+
+        (0..self.elements.len())
+            .filter(|idx| {
+                let mut current = Some(*idx);
+                for part in parts.iter().rev() {
+                    let mut found = false;
+                    while let Some(node) = current {
+                        if self.matches_simple_selector(node, part) {
+                            found = true;
+                            current = self.elements[node].parent;
+                            break;
+                        }
+                        current = self.elements[node].parent;
+                    }
+                    if !found {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect()
+    }
+
+    fn matches_simple_selector(&self, idx: usize, selector: &str) -> bool {
+        let elem = &self.elements[idx];
+        let selector = selector.trim();
+        if let Some(open) = selector.find('[') {
+            if selector.ends_with(']') && open > 0 {
+                return self.matches_simple_selector(idx, &selector[..open])
+                    && self.matches_simple_selector(idx, &selector[open..]);
+            }
+        }
+        if let Some(attr) = selector.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            return attr.split_once('=').map_or_else(
+                || elem.attributes.contains_key(attr.trim()),
+                |(key, value)| {
+                    elem.attributes.get(key.trim()).is_some_and(|v| {
+                        v.trim_matches(['\'', '"']) == value.trim().trim_matches(['\'', '"'])
+                    })
+                },
+            );
+        }
+        let (head, id) = selector
+            .split_once('#')
+            .map_or((selector, None), |(h, i)| (h, Some(i)));
+        if id.is_some_and(|wanted| elem.id.as_deref() != Some(wanted)) {
+            return false;
+        }
+        let (tag, class) = head
+            .split_once('.')
+            .map_or((head, None), |(t, c)| (t, Some(c)));
+        (tag.is_empty() || tag == "*" || elem.tag_name.eq_ignore_ascii_case(tag))
+            && class.is_none_or(|wanted| {
+                elem.class_name
+                    .as_deref()
+                    .is_some_and(|classes| classes.split_ascii_whitespace().any(|c| c == wanted))
+            })
+    }
+
+    pub fn query_selector(&self, selector: &str) -> Option<usize> {
+        self.query_selector_all(selector).into_iter().next()
     }
 
     /// Elemanı DOM'a ekle (root altına)
@@ -5500,6 +5577,33 @@ impl JsRuntime {
                     } else {
                         out.extend_from_slice(b"");
                     }
+                } else if name == "document.querySelector" || name == "document.querySelectorAll" {
+                    let selector = value.trim().trim_matches(['\'', '"']);
+                    if let Some(doc) = self.doc.as_ref() {
+                        let indices = if name == "document.querySelector" {
+                            doc.query_selector(selector)
+                                .into_iter()
+                                .collect::<Vec<usize>>()
+                        } else {
+                            doc.query_selector_all(selector)
+                        };
+                        if name == "document.querySelector" {
+                            if let Some(idx) = indices.first() {
+                                out.extend_from_slice(format!("element{}", idx).as_bytes());
+                            } else {
+                                out.extend_from_slice(b"null");
+                            }
+                        } else {
+                            let refs = indices
+                                .iter()
+                                .map(|i| format!("element{}", i))
+                                .collect::<Vec<String>>()
+                                .join(",");
+                            out.extend_from_slice(refs.as_bytes());
+                        }
+                    } else if name == "document.querySelector" {
+                        out.extend_from_slice(b"null");
+                    }
                 } else if name == "document.createElement" {
                     let tag = value.trim();
                     if let Some(doc) = self.doc.as_mut() {
@@ -6898,11 +7002,90 @@ pub fn inline_scripts_ex(html: &[u8], base_url: Option<&str>) -> InlineScriptRes
         rt.page_url = String::from(url);
         rt.page_origin = storage_origin_of(url);
     }
+    let mut document = JsDocumentRef::new();
+    document.add_root(parse_dom_snapshot(html));
+    rt.set_document(document);
     let html_out = inline_scripts_run(html, &mut rt);
     InlineScriptResult {
         html: html_out,
         pending_navigation: rt.pending_navigation.take(),
     }
+}
+
+/// Script çalıştırmadan önce HTML'in element/parent snapshot'ını üretir.
+/// Bu hafif parser yalnızca DOM API'si için kullanılır; görsel layout parser'ı
+/// yine browser/html.rs tarafından yürütülür.
+fn parse_dom_snapshot(html: &[u8]) -> DomElement {
+    let mut stack = vec![DomElement {
+        tag_name: "body".to_string(),
+        attributes: BTreeMap::new(),
+        inner_html: String::new(),
+        text_content: String::new(),
+        children: Vec::new(),
+        style: BTreeMap::new(),
+        parent: None,
+        id: None,
+        class_name: None,
+    }];
+    let source = String::from_utf8_lossy(html);
+    let mut rest = source.as_ref();
+    while let Some(start) = rest.find('<') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('>') else { break };
+        let raw = after[..end].trim();
+        rest = &after[end + 1..];
+        if raw.starts_with('!') || raw.starts_with('?') || raw.starts_with('/') {
+            if raw.starts_with('/') && stack.len() > 1 {
+                let child = stack.pop().unwrap();
+                stack.last_mut().unwrap().children.push(child);
+            }
+            continue;
+        }
+        let self_closing = raw.ends_with('/');
+        let raw = raw.trim_end_matches('/').trim();
+        let mut fields = raw.split_whitespace();
+        let Some(tag) = fields.next() else { continue };
+        let mut attrs = BTreeMap::new();
+        let mut id = None;
+        let mut class_name = None;
+        for field in fields {
+            if let Some((key, value)) = field.split_once('=') {
+                let value = value.trim_matches(['\'', '"']);
+                attrs.insert(key.to_ascii_lowercase(), value.to_string());
+                if key.eq_ignore_ascii_case("id") {
+                    id = Some(value.to_string());
+                }
+                if key.eq_ignore_ascii_case("class") {
+                    class_name = Some(value.to_string());
+                }
+            }
+        }
+        stack.push(DomElement {
+            tag_name: tag.to_ascii_lowercase(),
+            attributes: attrs,
+            inner_html: String::new(),
+            text_content: String::new(),
+            children: Vec::new(),
+            style: BTreeMap::new(),
+            parent: None,
+            id,
+            class_name,
+        });
+        if self_closing
+            || matches!(
+                tag.to_ascii_lowercase().as_str(),
+                "img" | "input" | "br" | "meta" | "link"
+            )
+        {
+            let child = stack.pop().unwrap();
+            stack.last_mut().unwrap().children.push(child);
+        }
+    }
+    while stack.len() > 1 {
+        let child = stack.pop().unwrap();
+        stack.last_mut().unwrap().children.push(child);
+    }
+    stack.pop().unwrap()
 }
 
 /// `<script>` bloklarını verilen çalışma zamanında çalıştırır.
@@ -7201,6 +7384,41 @@ mod tests {
         let fired = rt.dispatch_event("document", "click", &mut out);
         assert!(fired);
         assert_eq!(String::from_utf8_lossy(&out), "Dugme tiklandi!");
+    }
+
+    #[test]
+    fn query_selector_respects_descendant_relationships() {
+        let mut doc = JsDocumentRef::new();
+        let mut root = DomElement {
+            tag_name: "div".to_string(),
+            attributes: BTreeMap::new(),
+            inner_html: String::new(),
+            text_content: String::new(),
+            children: Vec::new(),
+            style: BTreeMap::new(),
+            parent: None,
+            id: Some("panel".to_string()),
+            class_name: Some("panel dark".to_string()),
+        };
+        root.children.push(DomElement {
+            tag_name: "button".to_string(),
+            attributes: [("type".to_string(), "button".to_string())]
+                .into_iter()
+                .collect(),
+            inner_html: String::new(),
+            text_content: "Tamam".to_string(),
+            children: Vec::new(),
+            style: BTreeMap::new(),
+            parent: None,
+            id: Some("ok".to_string()),
+            class_name: Some("button primary".to_string()),
+        });
+        doc.add_root(root);
+
+        assert_eq!(doc.query_selector("div .primary"), Some(1));
+        assert_eq!(doc.query_selector("#panel .button"), Some(1));
+        assert_eq!(doc.query_selector("button[type=button]"), Some(1));
+        assert!(doc.query_selector("span .button").is_none());
     }
 
     #[test]

@@ -1,29 +1,33 @@
 //! "Oyunlar" uygulaması — 2D oyunlar tek pencerede.
 //!
-//! Üç bölüm tek pencerede sunulur:
+//! Dört bölüm tek pencerede sunulur:
 //! * **Dama** — Türk/uluslararası kurallı, yapay zekâya karşı 2D dama.
 //! * **Mayın Tarlası** — klasik mayın tarlası; hücreleri aç, bayrak koy, tüm
 //!   güvenli hücreleri açarak kazan.
 //! * **Satranç** — 8x8 satranç tahtası; tam yasal hamle kontrolü, rok, geçerken
 //!   alma, terfi, şah mat/pat ve iki oyunculu oynanış.
+//! * **Bilardo** — 8-ball bilardo; üstten 2D masa, toplar 3D döndürülerek
+//!   deliklere girer.
 //!
-//! Tüm oyun mantığı (dama, mayın tarlası, satranç) `game_core` içinde saf
+//! Tüm oyun mantığı (dama, mayın tarlası, satranç, bilardo) `game_core` içinde saf
 //! olarak tutulur; bu modül yalnızca çizim ve girdi yönetimini yapar. Ses,
 //! ana döngüde (`GameApp::sound_pending`) PC Speaker / HDA üzerinden çalınır.
 
+use super::game_core::{
+    self, BallKind, BilliardsGame, Board, CellState, ChessBoard, ChessMove, ChessSide, ChessStatus,
+    GameState, Minesweeper, Move, PieceKind,
+};
+use super::game_core::{billiards_clamp, billiards_max, billiards_min};
+use super::gfx3d::{fast_atan2, fast_cos, fast_sin, fast_sqrt};
 use crate::drivers::video::Framebuffer;
 use crate::gui::{scaled_statusbar_h, sp, Color, MinGuiCompositor, TextBuf};
 
-use super::game_core::{
-    self, Board, CellState, ChessBoard, ChessMove, ChessSide, ChessStatus, GameState, Minesweeper,
-    Move, PieceKind,
-};
-
 /// Bölüm sekmesi sayısı.
-pub const TAB_COUNT: usize = 3;
+pub const TAB_COUNT: usize = 4;
 const TAB_GAME: usize = 0;
 const TAB_MINES: usize = 1;
 const TAB_CHESS: usize = 2;
+const TAB_BILLIARDS: usize = 3;
 
 const TAB_Y: usize = 28;
 const TAB_H: usize = 24;
@@ -85,6 +89,12 @@ pub struct GameApp {
     pub chess_last: Option<ChessMove>,
     /// Terfi seçimi bekleyen hamle.
     pub chess_pending: Option<ChessMove>,
+    // --- Bilardo ---
+    pub billiards: BilliardsGame,
+    pub billiards_selected_ball: Option<usize>,
+    pub billiards_aiming: bool,
+    /// AI düşünme beklemesi.
+    pub billiards_ai_wait: u8,
     // --- Ses ---
     pub sound_pending: Sound,
     pub sound_volume: u8,
@@ -126,6 +136,10 @@ impl GameApp {
             chess_history: alloc::vec::Vec::new(),
             chess_last: None,
             chess_pending: None,
+            billiards: BilliardsGame::new(),
+            billiards_selected_ball: None,
+            billiards_aiming: false,
+            billiards_ai_wait: 0,
             sound_pending: Sound::None,
             sound_volume: 60,
             // Oyun sesleri kullanıcı özellikle açana kadar kapalıdır.
@@ -149,6 +163,7 @@ impl GameApp {
             ("Dama", "Checkers"),
             ("Mayın Tarlası", "Minesweeper"),
             ("Satranç", "Chess"),
+            ("Bilardo", "Billiards"),
         ]
     }
 
@@ -723,6 +738,22 @@ impl GameApp {
                 self.mine_elapsed_ms = elapsed;
             }
         }
+        // Bilardo simülasyonu ve AI
+        if self.tab == TAB_BILLIARDS {
+            changed |= self.billiards.tick();
+            // AI vuruşu (basit: sıra stripes oyuncusunda ve aiming durumunda)
+            if self.billiards.state == super::game_core::BilliardsState::Aiming
+                && self.billiards.current_player == super::game_core::BilliardsPlayerType::Stripes
+            {
+                if self.billiards_ai_wait > 0 {
+                    self.billiards_ai_wait -= 1;
+                } else {
+                    self.billiards.ai_shoot();
+                    self.billiards_ai_wait = 30; // ~1 saniye bekle
+                    changed = true;
+                }
+            }
+        }
         changed
     }
 
@@ -740,6 +771,7 @@ impl GameApp {
             TAB_GAME => self.render_checkers(fb, x, y, w, h),
             TAB_MINES => self.render_mines(fb, x, y, w, h),
             TAB_CHESS => self.render_chess(fb, x, y, w, h),
+            TAB_BILLIARDS => self.render_billiards(fb, x, y, w, h),
             _ => {}
         }
         self.render_status(fb, x, y, w, h);
@@ -747,7 +779,7 @@ impl GameApp {
 
     fn render_tabs(&self, fb: &mut Framebuffer, x: usize, y: usize, _w: usize) {
         let names = Self::tab_names();
-        let tab_icons = [6usize, 7, 8]; // checker, mine, chess king
+        let tab_icons = [6usize, 7, 8, 9]; // checker, mine, chess king, billiard ball
         for (i, pair) in names.iter().enumerate() {
             let (tx, ty, tw, th) = Self::tab_rect(i);
             let active = i == self.tab;
@@ -969,6 +1001,47 @@ impl GameApp {
                     }
                 }
             }
+            TAB_BILLIARDS => {
+                use super::game_core::{BilliardsPlayerType, BilliardsState};
+                let player_str = match self.billiards.current_player {
+                    BilliardsPlayerType::Solids => crate::gui::ui_text("Düz (1-7)", "Solids (1-7)"),
+                    BilliardsPlayerType::Stripes => {
+                        crate::gui::ui_text("Çizgili (9-15)", "Stripes (9-15)")
+                    }
+                };
+                left.push_str(player_str);
+                left.push_str(crate::gui::ui_text(" sırası", " to move"));
+                left.push_str(" - ");
+                match self.billiards.state {
+                    BilliardsState::Aiming => {
+                        left.push_str(crate::gui::ui_text("Vuruş hazırlanıyor", "Aiming"))
+                    }
+                    BilliardsState::Shooting => {
+                        left.push_str(crate::gui::ui_text("Toplar hareket ediyor", "Balls moving"))
+                    }
+                    BilliardsState::BallInHand => {
+                        left.push_str(crate::gui::ui_text("Beyaz top elinizde", "Ball in hand"))
+                    }
+                    BilliardsState::GameOver => {
+                        if let Some(w) = self.billiards.winner {
+                            if w == 0 {
+                                left.push_str(crate::gui::ui_text("DÜZ KAZANDI!", "SOLIDS WIN!"))
+                            } else {
+                                left.push_str(crate::gui::ui_text(
+                                    "ÇİZGİLİ KAZANDI!",
+                                    "STRIPES WIN!",
+                                ))
+                            }
+                        } else {
+                            left.push_str(crate::gui::ui_text("OYUN BİTTİ", "GAME OVER"))
+                        }
+                    }
+                }
+                if self.billiards.foul {
+                    left.push_str(" - ");
+                    left.push_str(crate::gui::ui_text("FOUL!", "FOUL!"));
+                }
+            }
             _ => {}
         }
         MinGuiCompositor::draw_string_clipped(
@@ -991,6 +1064,10 @@ impl GameApp {
             TAB_CHESS => crate::gui::ui_text(
                 "Taşı seç, hedefe tıkla; piyon terfisinde taş seç",
                 "Select piece, click target; choose a piece on promotion",
+            ),
+            TAB_BILLIARDS => crate::gui::ui_text(
+                "Masa alanına tıkla vuruş yönü/gücü ayarla; Space ile vur",
+                "Click table to aim; Space to shoot",
             ),
             _ => crate::gui::ui_text("", ""),
         };
@@ -1322,6 +1399,380 @@ impl GameApp {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Bilardo çizimi
+    // -----------------------------------------------------------------------
+
+    fn render_billiards(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
+        let board = Self::board_rect(w, h);
+        let (bx, by, bw, bh) = (x + board.0, y + board.1, board.2, board.3);
+
+        // Masa çerçevesi
+        fb.draw_rounded_rect(bx - 6, by - 6, bw + 12, bh + 12, 8, Color::BORDER);
+
+        // Masa yüzeyi (yeşil bez)
+        let felt_color = 0x1B5E20; // Koyu yeşil
+        fb.draw_rounded_rect(bx - 2, by - 2, bw + 4, bh + 4, 6, felt_color);
+
+        // Çapalar (kenarlar)
+        let cushion_w =
+            bw as f32 * (super::game_core::BILLIARDS_CUSHION / super::game_core::BILLIARDS_TABLE_W);
+        let cushion_w = billiards_max(cushion_w, 4.0) as usize;
+        let cushion_h =
+            bh as f32 * (super::game_core::BILLIARDS_CUSHION / super::game_core::BILLIARDS_TABLE_H);
+        let cushion_h = billiards_max(cushion_h, 4.0) as usize;
+        let cushion_color = 0x3E2723; // Koyu kahverengi
+
+        // Üst çapa
+        fb.draw_rect(bx, by - cushion_h, bw, cushion_h, cushion_color);
+        // Alt çapa
+        fb.draw_rect(bx, by + bh, bw, cushion_h, cushion_color);
+        // Sol çapa
+        fb.draw_rect(
+            bx - cushion_w,
+            by - cushion_h,
+            cushion_w,
+            bh + 2 * cushion_h,
+            cushion_color,
+        );
+        // Sağ çapa
+        fb.draw_rect(
+            bx + bw,
+            by - cushion_w,
+            cushion_w,
+            bh + 2 * cushion_h,
+            cushion_color,
+        );
+
+        // Delikler (6 delik)
+        let table_min_dim = billiards_min(
+            super::game_core::BILLIARDS_TABLE_W,
+            super::game_core::BILLIARDS_TABLE_H,
+        );
+        let pocket_r =
+            (bw.min(bh) as f32 * (super::game_core::BILLIARDS_POCKET_R / table_min_dim)) as usize;
+        let pocket_r = billiards_max(pocket_r as f32, 6.0) as usize;
+        let pockets = [
+            (bx - cushion_w / 2, by - cushion_h / 2),      // Sol üst
+            (bx + bw / 2, by - cushion_h / 2),             // Üst orta
+            (bx + bw + cushion_w / 2, by - cushion_h / 2), // Sağ üst
+            (bx - cushion_w / 2, by + bh + cushion_h / 2), // Sol alt
+            (bx + bw / 2, by + bh + cushion_h / 2),        // Alt orta
+            (bx + bw + cushion_w / 2, by + bh + cushion_h / 2), // Sağ alt
+        ];
+        for (px, py) in pockets {
+            Self::fill_circle(fb, px, py, pocket_r, 0x000000);
+        }
+
+        // Topları çiz (gfx3d ile 3D görünümlü)
+        self.render_billiards_balls_3d(fb, bx, by, bw, bh);
+
+        // Vuruş çizgisi (aiming)
+        if self.billiards.state == super::game_core::BilliardsState::Aiming
+            || self.billiards.state == super::game_core::BilliardsState::BallInHand
+        {
+            self.render_aim_line(fb, bx, by, bw, bh);
+        }
+
+        // Güç çubuğu
+        self.render_power_bar(fb, bx, by, bw, bh);
+
+        // Oyuncu bilgisi
+        self.render_billiards_info(fb, x, by, bh);
+    }
+
+    /// 3D görünümlü topları çizer (gfx3d kullanarak basit küre projeksiyonu).
+    fn render_billiards_balls_3d(
+        &self,
+        fb: &mut Framebuffer,
+        bx: usize,
+        by: usize,
+        bw: usize,
+        bh: usize,
+    ) {
+        use super::game_core::{BILLIARDS_BALL_R, BILLIARDS_TABLE_H, BILLIARDS_TABLE_W};
+
+        // Basit 3D küre çizimi: üstten görünümde daire, ama gölgelendirme ile 3D hissi
+        for ball in &self.billiards.balls {
+            if !ball.in_play || ball.pocketed {
+                continue;
+            }
+
+            // Dünya koordinatlarını ekran koordinatlarına çevir
+            let scale_x = bw as f32 / BILLIARDS_TABLE_W;
+            let scale_y = bh as f32 / BILLIARDS_TABLE_H;
+            let scale_min = billiards_min(scale_x, scale_y);
+            let screen_x = bx + (ball.x * scale_x) as usize;
+            let screen_y = by + (ball.y * scale_y) as usize;
+            let radius = ((BILLIARDS_BALL_R * scale_min) as usize).max(4);
+
+            // Top rengi
+            let base_color = ball.color();
+
+            // 3D küre gölgelendirmesi: üstten ışık geliyormuş gibi
+            // Merkez daha açık, kenarlar daha koyu
+            let radius_isize = radius as isize;
+            for dy in -radius_isize..=radius_isize {
+                let row = screen_y as isize + dy;
+                if row < 0 {
+                    continue;
+                }
+                let dx_max = fast_sqrt((radius_isize * radius_isize - dy * dy) as f32) as isize;
+                for dx in -dx_max..=dx_max {
+                    let col = screen_x as isize + dx;
+                    if col < 0 {
+                        continue;
+                    }
+                    let dist_sq = dx * dx + dy * dy;
+                    let radius_sq = radius_isize * radius_isize;
+                    if dist_sq > radius_sq {
+                        continue;
+                    }
+                    let dist = fast_sqrt(dist_sq as f32);
+                    let norm_dist = dist / radius as f32;
+
+                    // Küre normali (z bileşeni)
+                    let nz_sq = 1.0 - norm_dist * norm_dist;
+                    let nz = if nz_sq > 0.0 { fast_sqrt(nz_sq) } else { 0.0 };
+                    // Işık yönü (yukarıdan hafif sağdan)
+                    let lx = 0.3;
+                    let ly = -0.2;
+                    let lz = 0.9;
+                    let l_len = fast_sqrt(lx * lx + ly * ly + lz * lz);
+                    let diffuse_raw = lx * 0.0 + ly * 0.0 + lz * nz / l_len;
+                    let diffuse = if diffuse_raw > 0.0 { diffuse_raw } else { 0.0 };
+                    let ambient = 0.3;
+                    let intensity_raw = ambient + 0.7 * diffuse;
+                    let intensity = if intensity_raw < 1.0 {
+                        intensity_raw
+                    } else {
+                        1.0
+                    };
+
+                    let r = (((base_color >> 16) & 0xFF) as f32 * intensity) as u32;
+                    let g = (((base_color >> 8) & 0xFF) as f32 * intensity) as u32;
+                    let b = ((base_color & 0xFF) as f32 * intensity) as u32;
+                    let color = (r << 16) | (g << 8) | b;
+
+                    // Çizgili toplar için beyaz bant
+                    if ball.kind == BallKind::Stripe && ball.in_play {
+                        // Basit bant: yatay eksende
+                        let angle = ball.angle;
+                        let ca = fast_cos(angle);
+                        let sa = fast_sin(angle);
+                        let _local_x = dx as f32 * ca - dy as f32 * sa;
+                        let local_y = dx as f32 * sa + dy as f32 * ca;
+                        let stripe_width = radius as f32 * 0.4;
+                        if local_y.abs() < stripe_width {
+                            let stripe_color = ball.stripe_color();
+                            let sr = (stripe_color >> 16) & 0xFF;
+                            let sg = (stripe_color >> 8) & 0xFF;
+                            let sb = stripe_color & 0xFF;
+                            fb.draw_rect(
+                                col as usize,
+                                row as usize,
+                                1,
+                                1,
+                                (sr << 16) | (sg << 8) | sb,
+                            );
+                            continue;
+                        }
+                    }
+
+                    // 8 topu için numara
+                    if ball.kind == BallKind::Eight && dist < (radius as f32 * 0.3) {
+                        fb.draw_rect(col as usize, row as usize, 1, 1, 0xFFFFFF);
+                        continue;
+                    }
+
+                    fb.draw_rect(col as usize, row as usize, 1, 1, color);
+                }
+            }
+
+            // Seçili top vurgusu
+            if self.billiards_selected_ball
+                == Some(
+                    self.billiards
+                        .balls
+                        .iter()
+                        .position(|b| core::ptr::eq(b, ball))
+                        .unwrap_or(0),
+                )
+            {
+                fb.draw_rect_outline(
+                    screen_x.saturating_sub(radius + 2),
+                    screen_y.saturating_sub(radius + 2),
+                    radius * 2 + 4,
+                    radius * 2 + 4,
+                    Color::ACCENT_YELLOW,
+                );
+            }
+        }
+    }
+
+    /// Vuruş yön çizgisi (aiming line).
+    fn render_aim_line(&self, fb: &mut Framebuffer, bx: usize, by: usize, bw: usize, bh: usize) {
+        use super::game_core::{BILLIARDS_TABLE_H, BILLIARDS_TABLE_W};
+
+        let cue = self.billiards.cue_ball_ref();
+        if !cue.in_play {
+            return;
+        }
+
+        let scale_x = bw as f32 / BILLIARDS_TABLE_W;
+        let scale_y = bh as f32 / BILLIARDS_TABLE_H;
+        let start_x = bx + (cue.x * scale_x) as usize;
+        let start_y = by + (cue.y * scale_y) as usize;
+
+        let angle = self.billiards.aim_angle;
+        let ca = fast_cos(angle);
+        let sa = fast_sin(angle);
+        let max_dist = (bw.max(bh) as f32) * 1.5;
+
+        // Ana çizgi (kesikli)
+        let steps = 30;
+        for i in 0..steps {
+            let t = i as f32 / steps as f32;
+            let dist = t * max_dist;
+            let x = start_x as f32 + ca * dist;
+            let y = start_y as f32 + sa * dist;
+
+            // Masa sınırları kontrolü
+            if x < bx as f32 || x > (bx + bw) as f32 || y < by as f32 || y > (by + bh) as f32 {
+                break;
+            }
+
+            if i % 3 < 2 {
+                fb.draw_rect(x as usize, y as usize, 1, 1, 0xFFFFFF);
+            }
+        }
+
+        // Hedef top vurgusu (ilk çarpışacak top)
+        let mut closest_dist = f32::MAX;
+        let mut target_ball: Option<&super::game_core::BilliardsBall> = None;
+        for ball in &self.billiards.balls {
+            if !ball.in_play || ball.pocketed || ball.kind == super::game_core::BallKind::Cue {
+                continue;
+            }
+            let bx_ = ball.x;
+            let by_ = ball.y;
+            // Işın-top çarpışması
+            let dx = bx_ - cue.x;
+            let dy = by_ - cue.y;
+            let proj = dx * ca + dy * sa;
+            if proj > 0.0 {
+                let perp_sq = dx * dx + dy * dy - proj * proj;
+                let ball_r = super::game_core::BILLIARDS_BALL_R * 2.0;
+                if perp_sq < ball_r * ball_r && proj < closest_dist {
+                    closest_dist = proj;
+                    target_ball = Some(ball);
+                }
+            }
+        }
+
+        if let Some(target) = target_ball {
+            let tx = bx + (target.x * scale_x) as usize;
+            let ty = by + (target.y * scale_y) as usize;
+            let tr = ((super::game_core::BILLIARDS_BALL_R * scale_x.min(scale_y)) as usize).max(4);
+            fb.draw_rect_outline(
+                tx.saturating_sub(tr + 2),
+                ty.saturating_sub(tr + 2),
+                tr * 2 + 4,
+                tr * 2 + 4,
+                Color::ACCENT_GREEN,
+            );
+        }
+    }
+
+    /// Güç çubuğu (power bar).
+    fn render_power_bar(&self, fb: &mut Framebuffer, bx: usize, by: usize, bw: usize, bh: usize) {
+        if self.billiards.state != super::game_core::BilliardsState::Aiming
+            && self.billiards.state != super::game_core::BilliardsState::BallInHand
+        {
+            return;
+        }
+        let bar_w = bw / 3;
+        let bar_h = 8;
+        let bar_x = bx + (bw - bar_w) / 2;
+        let bar_y = by + bh + 20;
+        fb.draw_rect(bar_x, bar_y, bar_w, bar_h, Color::TITLE_BAR);
+        fb.draw_rect_outline(bar_x, bar_y, bar_w, bar_h, Color::BORDER);
+        let fill_w = (bar_w as f32 * self.billiards.aim_power) as usize;
+        let fill_color = if self.billiards.aim_power > 0.7 {
+            Color::ACCENT_RED
+        } else if self.billiards.aim_power > 0.4 {
+            Color::ACCENT_YELLOW
+        } else {
+            Color::ACCENT_GREEN
+        };
+        fb.draw_rect(bar_x, bar_y, fill_w, bar_h, fill_color);
+    }
+
+    /// Bilardo bilgi paneli.
+    fn render_billiards_info(&self, fb: &mut Framebuffer, x: usize, by: usize, bh: usize) {
+        let info_y = by + bh + 40;
+        let mut buf = TextBuf::new();
+
+        // Mevcut oyuncu
+        let player_str = match self.billiards.current_player {
+            super::game_core::BilliardsPlayerType::Solids => {
+                crate::gui::ui_text("Oyuncu: Düz (1-7)", "Player: Solids (1-7)")
+            }
+            super::game_core::BilliardsPlayerType::Stripes => {
+                crate::gui::ui_text("Oyuncu: Çizgili (9-15)", "Player: Stripes (9-15)")
+            }
+        };
+        buf.push_str(player_str);
+        MinGuiCompositor::draw_string(fb, x + 10, info_y, buf.as_str(), Color::TEXT_MAIN);
+
+        // Durum
+        let mut buf2 = TextBuf::new();
+        let state_str = match self.billiards.state {
+            super::game_core::BilliardsState::Aiming => {
+                crate::gui::ui_text("Vuruş hazırlanıyor...", "Aiming...")
+            }
+            super::game_core::BilliardsState::Shooting => {
+                crate::gui::ui_text("Toplar hareket halinde", "Balls moving")
+            }
+            super::game_core::BilliardsState::BallInHand => crate::gui::ui_text(
+                "Beyaz top elinizde - yerleştirin",
+                "Ball in hand - place cue ball",
+            ),
+            super::game_core::BilliardsState::GameOver => {
+                if let Some(w) = self.billiards.winner {
+                    if w == 0 {
+                        crate::gui::ui_text("OYUN BİTTİ - Düz kazandı!", "GAME OVER - Solids win!")
+                    } else {
+                        crate::gui::ui_text(
+                            "OYUN BİTTİ - Çizgili kazandı!",
+                            "GAME OVER - Stripes win!",
+                        )
+                    }
+                } else {
+                    crate::gui::ui_text("OYUN BİTTİ", "GAME OVER")
+                }
+            }
+        };
+        buf2.push_str(state_str);
+        MinGuiCompositor::draw_string(fb, x + 10, info_y + 18, buf2.as_str(), Color::TEXT_MUTED);
+
+        // Foul uyarısı
+        if self.billiards.foul {
+            let mut buf3 = TextBuf::new();
+            buf3.push_str(crate::gui::ui_text(
+                "FOUL! Beyaz top elinizde.",
+                "FOUL! Ball in hand.",
+            ));
+            MinGuiCompositor::draw_string(
+                fb,
+                x + 10,
+                info_y + 36,
+                buf3.as_str(),
+                Color::ACCENT_RED,
+            );
+        }
+    }
+
     /// Dolu daire (satır satır tarama).
     fn fill_circle(fb: &mut Framebuffer, cx: usize, cy: usize, radius: usize, color: u32) {
         let r = radius as isize;
@@ -1463,11 +1914,72 @@ impl GameApp {
                 }
                 false
             }
+            TAB_BILLIARDS => self.click_billiards(px, py, w, h),
             _ => false,
         }
     }
 
-    /// Klavye kısayolları: 1-3 bölüm, N yeni oyun, S ses, U geri al.
+    /// Bilardo tıklama işleme.
+    fn click_billiards(&mut self, px: usize, py: usize, w: usize, h: usize) -> bool {
+        use super::game_core::{BilliardsState, BILLIARDS_TABLE_H, BILLIARDS_TABLE_W};
+
+        // Yeni oyun butonu
+        if crate::gui::in_rect(px, py, Self::new_game_rect()) {
+            self.billiards.reset();
+            return true;
+        }
+
+        let board = Self::board_rect(w, h);
+        let (bx, by, bw, bh) = (board.0, board.1, board.2, board.3);
+
+        // Masa alanına tıklama
+        if px >= bx && py >= by && px < bx + bw && py < by + bh {
+            // Ekran koordinatlarını dünya koordinatlarına çevir
+            let world_x = (px - bx) as f32 / bw as f32 * BILLIARDS_TABLE_W;
+            let world_y = (py - by) as f32 / bh as f32 * BILLIARDS_TABLE_H;
+
+            match self.billiards.state {
+                BilliardsState::BallInHand => {
+                    // Çap topunu yerleştir
+                    self.billiards.place_cue_ball(world_x, world_y);
+                    return true;
+                }
+                BilliardsState::Aiming => {
+                    // Vuruş yönünü ayarla (çap topundan tıklanan noktaya)
+                    let cue = self.billiards.cue_ball_ref();
+                    if cue.in_play {
+                        let dx = world_x - cue.x;
+                        let dy = world_y - cue.y;
+                        let angle = fast_atan2(dy, dx);
+                        let dist = fast_sqrt(dx * dx + dy * dy);
+                        let max_dist = billiards_max(BILLIARDS_TABLE_W, BILLIARDS_TABLE_H);
+                        let power = billiards_clamp(dist / max_dist, 0.1, 1.0);
+                        self.billiards.set_aim(angle, power);
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Güç çubuğuna tıklama (aiming sırasında)
+        if self.billiards.state == BilliardsState::Aiming {
+            let bar_w = bw / 3;
+            let bar_h = 8;
+            let bar_x = bx + (bw - bar_w) / 2;
+            let bar_y = by + bh + 20;
+            if px >= bar_x && px < bar_x + bar_w && py >= bar_y && py < bar_y + bar_h {
+                let power = (px - bar_x) as f32 / bar_w as f32;
+                self.billiards
+                    .set_aim(self.billiards.aim_angle, power.clamp(0.1, 1.0));
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Klavye kısayolları: 1-4 bölüm, N yeni oyun, S ses, U geri al.
     pub fn handle_key(&mut self, ch: char) -> bool {
         // Terfi paneli açıkken Q/R/B/N ile taş seç, Esc ile iptal et.
         if self.chess_pending.is_some() {
@@ -1494,6 +2006,7 @@ impl GameApp {
                     }
                     TAB_MINES => self.reset_mines(),
                     TAB_CHESS => self.reset_chess(),
+                    TAB_BILLIARDS => self.billiards.reset(),
                     _ => {}
                 }
                 true
@@ -1506,7 +2019,27 @@ impl GameApp {
                 self.undo_current();
                 true
             }
-            '1'..='3' => {
+            ' ' => {
+                // Space: bilardo vuruşu
+                if self.tab == TAB_BILLIARDS
+                    && (self.billiards.state == super::game_core::BilliardsState::Aiming
+                        || self.billiards.state == super::game_core::BilliardsState::BallInHand)
+                {
+                    if self.billiards.state == super::game_core::BilliardsState::BallInHand {
+                        // Çap topu masa ortasına yerleştir
+                        self.billiards.place_cue_ball(
+                            super::game_core::BILLIARDS_TABLE_W * 0.25,
+                            super::game_core::BILLIARDS_TABLE_H * 0.5,
+                        );
+                    } else {
+                        self.billiards.shoot();
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            '1'..='4' => {
                 self.select_tab(ch as usize - '1' as usize);
                 true
             }

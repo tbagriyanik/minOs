@@ -1,15 +1,15 @@
-﻿# minOs QEMU Entegrasyon Test Raporu
+# minOs QEMU Entegrasyon Test Raporu
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-23 17:09:28 UTC |
+| Zaman | 2026-11-28 12:15:47 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Depolama profili | ata |
 | Disk bağlantı kesme testi | çalıştırılmadı |
 | Bellek / vCPU | 512 MB / 2 |
 | VGA | virtio |
-| USB HID / PS/2 | açık / açık |
+| USB HID / PS/2 | kapalı / açık |
 
 ## Kontroller
 
@@ -23,7 +23,7 @@
 | Bellek sıkıstirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sıkıstirilamaz veri reddi |
 | Kernel Heap Buyutme ve Tembel Doldurma | ✅ GEÇTİ | Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi |
 | Bellek Kullanim Profili | ✅ GEÇTİ | PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari |
-| Uygulama Bazli Bellek Raporu | ✅ GEÇTİ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
+| Uygulama Bazli Bellek Raporu | ❌ BAŞARISIZ | Yerlesik uygulamalarin statik + dinamik bellek kapasitelerinin seri raporu |
 | GUI Ekran Geometrisi / Duman Testi | ✅ GEÇTİ | Acilis/kapanis/hata ekran geometrisi ve yerellestirilmis ekran metinleri |
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |
 | Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir) | ✅ GEÇTİ | PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu |
@@ -49,15 +49,11 @@
 | TCP 3-Way Handshake Testi | ✅ GEÇTİ | Gateway HTTP portuna SYN paketi gonderildi |
 | Soket + HTTP Mantik Testleri | ✅ GEÇTİ | NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi |
 | ATA QEMU Depolama Profili | ✅ GEÇTİ | QEMU IDE/ATA veri diski tanimlandi |
-| USB HID Numaralandirma (xHCI) | ✅ GEÇTİ | qemu-xhci uzerinde usb-kbd ve usb-tablet numaralandirildi |
-| USB HID Etkin Girdi Yolu | ✅ GEÇTİ | Masaustu girdisi USB HID surucusune baglandi |
-| USB Klavye Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP 'a' tusu xHCI HID raporu olarak islendi |
-| USB Fare Raporu (QMP enjeksiyonu) | ✅ GEÇTİ | QMP fare hareketi/tiki xHCI HID raporu olarak islendi |
 | Masaüstü Olay Döngüsü | ✅ GEÇTİ | Ana etkileşim döngüsüne giriş |
 
 ## Sonuç
 
-**BAŞARILI** — tüm kontroller geçti.
+**BAŞARISIZ** — bir veya daha fazla kontrol başarısız oldu.
 
 > Bu rapor 	est_qemu.ps1 tarafından otomatik üretilmiştir.
 

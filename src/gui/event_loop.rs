@@ -5810,6 +5810,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         state.force_render = true;
                                     }
                                 }
+                                // Sag tik: "kullan" (kapi ac, gizli duvar it).
+                                if mouse.right_button != state.last_buttons.1 {
+                                    apps.fps_3d_app.as_mut().unwrap().handle_use(&mut audio_dev);
+                                    state.force_render = true;
+                                }
                             }
 
                             _ => {}
@@ -8055,6 +8060,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         let scroll_val = mouse.take_scroll_delta();
 
         if scroll_val != 0 {
+            // FPS 3D oyun: tekerlek silah degistirir (Wolfenstein tarzi).
+            if app_is_focused(&compositor, 16) {
+                if let Some(game) = apps.fps_3d_app.as_mut() {
+                    game.cycle_weapon(if scroll_val > 0 { -1 } else { 1 });
+                    state.force_render = true;
+                }
+            }
+
             // Ayarlar > Testler: tekerlek sinamasi sayaci.
 
             if app_is_focused(&compositor, 1) && apps.settings_app.active_tab == 4 {
@@ -9988,20 +10001,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         }
 
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
-        // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
-        // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
-        // Mouse look only when FPS-3D window is focused; avoids unnecessary
-        // redraws when another window has focus.
-        if mouse_moved && app_is_focused(&compositor, 16) {
-            let dx = mouse.x as f32 - state.last_mouse_x as f32;
-            let dy = mouse.y as f32 - state.last_mouse_y as f32;
-            if dx.abs() > 0.0 || dy.abs() > 0.0 {
-                apps.fps_3d_app.as_mut().unwrap().handle_mouse_look(dx, dy);
-            }
-            if apps.fps_3d_app.as_ref().is_some_and(|g| g.is_playing()) {
-                mouse.x = (width as i32) / 2;
-                mouse.y = (height as i32) / 2;
-            }
+        //
+        // Fare mutlak (absolute) konum bildirdiği için oyun konum farkını
+        // kendi içinde hesaplar (`update_pointer`); burada yalnızca ham konum
+        // aktarılır. Önceki sürümde imleç her karede ekran merkezine
+        // "snap"leniyordu; mutlak işaretçide (usb-tablet) bu, host imlecini
+        // etkilemediği için bakışın sürekli kaymasına yol açıyordu.
+        // Kenar sürükleme (imleç ekran kenarına dayanınca dönüş) oyun
+        // tarafında uygulanır; bu yüzden her karede çağrılır.
+        if app_is_focused(&compositor, 16) {
+            apps.fps_3d_app.as_mut().unwrap().update_pointer(
+                mouse.x as f32,
+                mouse.y as f32,
+                width,
+                height,
+            );
         }
 
         // FPS silahı için butonun seviye bilgisini her turda tazele. Mouse

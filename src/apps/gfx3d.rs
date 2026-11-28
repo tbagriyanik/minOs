@@ -12,6 +12,19 @@
 
 use core::f32::consts::PI;
 
+use crate::time_budget::TimeBudget;
+
+/// Çekirdeğin zaman bütçesini model çizimine bağlar.
+///
+/// `TimeBudget` çekirdeğe özgü olduğu için bu impl burada (trait'in
+/// tanımlandığı yerde) durur; böylece hem FPS oyunu hem şehir sürüşü
+/// aynı bütçe tipini kullanabilir.
+impl RenderBudget for TimeBudget {
+    fn expired(&self) -> bool {
+        self.is_expired()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // no_std matematik yardımcıları
 // ---------------------------------------------------------------------------

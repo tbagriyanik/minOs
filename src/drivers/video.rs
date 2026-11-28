@@ -876,6 +876,51 @@ impl Framebuffer {
         }
     }
 
+    /// Tek bir sahne pikselini tema çözümlemesi olmadan yazar.
+    ///
+    /// `put_scene_pixel` ile aynı sözleşme: kırpma çağırana aittir, yalnızca
+    /// satır/tampon sınırları denetlenir. 3B sahne döngülerinde piksel
+    /// başına `theme::resolve` çağrısını (bir dal + olası atomik yükleme)
+    /// atlatır.
+    ///
+    /// # Safety
+    /// `x < width` ve `y < height` olmalıdır.
+    #[inline(always)]
+    pub unsafe fn put_scene_pixel_raw(&mut self, x: usize, y: usize, color: u32) {
+        let offset = y * self.width + x;
+        if offset < BACKBUFFER_LEN {
+            unsafe {
+                BACKBUFFER[offset] = color;
+            }
+        }
+    }
+
+    /// Bir satırın arka tamponundaki ham piksel dilimini verir.
+    ///
+    /// Doku örnekleyen 3B sahne döngüleri satırı bir kez alıp piksel
+    /// başına fonksiyon çağrısı yapmadan yazabilir. Dönen dilim
+    /// `(x0, x0 + len)` aralığını kapsar.
+    ///
+    /// # Safety
+    /// `y < height` ve `x0 + len <= width` olmalıdır; çağıran kırpma
+    /// kurallarına uymak zorundadır.
+    pub unsafe fn scene_row_mut(&mut self, y: usize, x0: usize, len: usize) -> Option<&mut [u32]> {
+        if y >= self.height || x0 >= self.width || len == 0 {
+            return None;
+        }
+        let len = len.min(self.width - x0);
+        let offset = y * self.width + x0;
+        if offset.saturating_add(len) > BACKBUFFER_LEN {
+            return None;
+        }
+        Some(unsafe {
+            core::slice::from_raw_parts_mut(
+                (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(offset),
+                len,
+            )
+        })
+    }
+
     /// 1px genişliğinde dikey renk dilimi. Kırpma bir kez hesaplanır ve
     /// sütun doğrudan arka tampona yazılır; piksel başına `draw_rect`
     /// çağırmanın kırpma/çağrı maliyeti olmadan raycasting duvarlarını

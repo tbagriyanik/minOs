@@ -417,6 +417,19 @@ pub enum VehicleKind {
 }
 
 impl VehicleKind {
+    /// Stable index into the vehicle sprite/mesh atlas.
+    pub const fn sprite_id(self) -> usize {
+        match self {
+            VehicleKind::Compact => 0,
+            VehicleKind::Sedan => 1,
+            VehicleKind::Suv => 2,
+            VehicleKind::Van => 3,
+            VehicleKind::Pickup => 4,
+            VehicleKind::Taxi => 5,
+            VehicleKind::Police => 6,
+        }
+    }
+
     /// Gövde ölçüleri: (uzunluk, genişlik, yükseklik) — metre.
     pub fn dims(self) -> (f32, f32, f32) {
         match self {
@@ -492,6 +505,8 @@ pub struct TrafficCar {
     pub target_speed: f32,
     pub color: u32,
     pub kind: VehicleKind,
+    /// Vehicle atlas/mesh entry selected from `kind`.
+    pub sprite_id: usize,
     /// Gövde ölçüleri (metre).
     pub length: f32,
     pub width: f32,
@@ -802,6 +817,7 @@ impl CityDriveApp {
                 target_speed: 0.0,
                 color: 0,
                 kind: VehicleKind::Sedan,
+                sprite_id: VehicleKind::Sedan.sprite_id(),
                 length: 4.62,
                 width: 1.78,
                 height: 1.45,
@@ -975,6 +991,7 @@ impl CityDriveApp {
                 target_speed: kind.cruise(),
                 color,
                 kind,
+                sprite_id: kind.sprite_id(),
                 length,
                 width,
                 height,
@@ -2096,7 +2113,7 @@ impl CityDriveApp {
             self.draw_reward(fb, top, win_w, horizon, focal, &zbuf, reward);
         }
         self.draw_traffic_3d(
-            fb, win_x, top, win_w, view_h, horizon, focal, &zbuf, &budget,
+            fb, win_x, top, win_w, view_h, horizon, focal, &mut zbuf, &budget,
         );
         self.draw_particles(fb, top, win_w, horizon, focal, &zbuf);
 
@@ -2234,7 +2251,7 @@ impl CityDriveApp {
         view_h: usize,
         horizon: usize,
         focal: f32,
-        zbuf: &[f32; 1024],
+        zbuf: &mut [f32; 1024],
         budget: &TimeBudget,
     ) {
         use crate::apps::gfx3d::{self, Box3D, Camera3D, Face3D, PixelSink, ProjVertex, Shading};
@@ -2440,6 +2457,20 @@ impl CityDriveApp {
                 face_count,
                 budget,
             );
+            // Vehicles are world geometry too: publish their nearest
+            // projected depth for later world sprites (particles/rewards).
+            let zbuf_width = win_w.min(zbuf.len()) as f32;
+            for face in faces.iter().take(face_count) {
+                let min_x = face.v.iter().map(|v| v.x).fold(f32::INFINITY, f32::min);
+                let max_x = face.v.iter().map(|v| v.x).fold(f32::NEG_INFINITY, f32::max);
+                let left = min_x.clamp(0.0, zbuf_width) as usize;
+                let right = max_x.clamp(0.0, zbuf_width) as usize;
+                if left < right {
+                    for z in zbuf[left..right].iter_mut() {
+                        *z = (*z).min(face.depth);
+                    }
+                }
+            }
         }
     }
 

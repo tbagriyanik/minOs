@@ -1,4 +1,4 @@
-//! Wolfenstein 3D tarzi seviye verisi.
+//! Kurt 3D tarzi seviye verisi.
 //!
 //! Seviyeler 32x32 karakterlik ASCII haritalardir; her karakter hucrenin
 //! tipini ve zemin/tavan/dokularini birlikte belirler. Haritalar

@@ -8086,7 +8086,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         let scroll_val = mouse.take_scroll_delta();
 
         if scroll_val != 0 {
-            // FPS 3D oyun: tekerlek silah degistirir (Wolfenstein tarzi).
+            // FPS 3D oyun: tekerlek silah degistirir (Kurt tarzi).
             if app_is_focused(&compositor, 16) {
                 if let Some(game) = apps.fps_3d_app.as_mut() {
                     game.cycle_weapon(if scroll_val > 0 { -1 } else { 1 });

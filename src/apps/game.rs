@@ -1407,40 +1407,76 @@ impl GameApp {
         let board = Self::board_rect(w, h);
         let (bx, by, bw, bh) = (x + board.0, y + board.1, board.2, board.3);
 
+        // Masa dünya koordinatlarında yatay dikdörtgendir
+        // (BILLIARDS_TABLE_W : BILLIARDS_TABLE_H = 2:1). board_rect kare
+        // döndürdüğü için masayı aynı oranda dikdörtgen olarak merkeze al;
+        // böylece toplar yatay olarak şişmeden daire olarak çizilir.
+        let table_w = bw;
+        let table_h = (bw as f32 * super::game_core::BILLIARDS_TABLE_H
+            / super::game_core::BILLIARDS_TABLE_W) as usize;
+        let table_x = bx;
+        let table_y = by + bh.saturating_sub(table_h) / 2;
+
         // Masa çerçevesi
-        fb.draw_rounded_rect(bx - 6, by - 6, bw + 12, bh + 12, 8, Color::BORDER);
+        fb.draw_rounded_rect(
+            table_x - 6,
+            table_y - 6,
+            table_w + 12,
+            table_h + 12,
+            8,
+            Color::BORDER,
+        );
 
         // Masa yüzeyi (yeşil bez)
         let felt_color = 0x1B5E20; // Koyu yeşil
-        fb.draw_rounded_rect(bx - 2, by - 2, bw + 4, bh + 4, 6, felt_color);
+        fb.draw_rounded_rect(
+            table_x - 2,
+            table_y - 2,
+            table_w + 4,
+            table_h + 4,
+            6,
+            felt_color,
+        );
 
         // Çapalar (kenarlar)
-        let cushion_w =
-            bw as f32 * (super::game_core::BILLIARDS_CUSHION / super::game_core::BILLIARDS_TABLE_W);
+        let cushion_w = table_w as f32
+            * (super::game_core::BILLIARDS_CUSHION / super::game_core::BILLIARDS_TABLE_W);
         let cushion_w = billiards_max(cushion_w, 4.0) as usize;
-        let cushion_h =
-            bh as f32 * (super::game_core::BILLIARDS_CUSHION / super::game_core::BILLIARDS_TABLE_H);
+        let cushion_h = table_h as f32
+            * (super::game_core::BILLIARDS_CUSHION / super::game_core::BILLIARDS_TABLE_H);
         let cushion_h = billiards_max(cushion_h, 4.0) as usize;
         let cushion_color = 0x3E2723; // Koyu kahverengi
 
         // Üst çapa
-        fb.draw_rect(bx, by - cushion_h, bw, cushion_h, cushion_color);
+        fb.draw_rect(
+            table_x,
+            table_y - cushion_h,
+            table_w,
+            cushion_h,
+            cushion_color,
+        );
         // Alt çapa
-        fb.draw_rect(bx, by + bh, bw, cushion_h, cushion_color);
+        fb.draw_rect(
+            table_x,
+            table_y + table_h,
+            table_w,
+            cushion_h,
+            cushion_color,
+        );
         // Sol çapa
         fb.draw_rect(
-            bx - cushion_w,
-            by - cushion_h,
+            table_x - cushion_w,
+            table_y - cushion_h,
             cushion_w,
-            bh + 2 * cushion_h,
+            table_h + 2 * cushion_h,
             cushion_color,
         );
         // Sağ çapa
         fb.draw_rect(
-            bx + bw,
-            by - cushion_w,
+            table_x + table_w,
+            table_y - cushion_w,
             cushion_w,
-            bh + 2 * cushion_h,
+            table_h + 2 * cushion_h,
             cushion_color,
         );
 
@@ -1449,36 +1485,40 @@ impl GameApp {
             super::game_core::BILLIARDS_TABLE_W,
             super::game_core::BILLIARDS_TABLE_H,
         );
-        let pocket_r =
-            (bw.min(bh) as f32 * (super::game_core::BILLIARDS_POCKET_R / table_min_dim)) as usize;
+        let pocket_r = (table_w.min(table_h) as f32
+            * (super::game_core::BILLIARDS_POCKET_R / table_min_dim))
+            as usize;
         let pocket_r = billiards_max(pocket_r as f32, 6.0) as usize;
         let pockets = [
-            (bx - cushion_w / 2, by - cushion_h / 2),      // Sol üst
-            (bx + bw / 2, by - cushion_h / 2),             // Üst orta
-            (bx + bw + cushion_w / 2, by - cushion_h / 2), // Sağ üst
-            (bx - cushion_w / 2, by + bh + cushion_h / 2), // Sol alt
-            (bx + bw / 2, by + bh + cushion_h / 2),        // Alt orta
-            (bx + bw + cushion_w / 2, by + bh + cushion_h / 2), // Sağ alt
+            (table_x - cushion_w / 2, table_y - cushion_h / 2), // Sol üst
+            (table_x + table_w / 2, table_y - cushion_h / 2),   // Üst orta
+            (table_x + table_w + cushion_w / 2, table_y - cushion_h / 2), // Sağ üst
+            (table_x - cushion_w / 2, table_y + table_h + cushion_h / 2), // Sol alt
+            (table_x + table_w / 2, table_y + table_h + cushion_h / 2), // Alt orta
+            (
+                table_x + table_w + cushion_w / 2,
+                table_y + table_h + cushion_h / 2,
+            ), // Sağ alt
         ];
         for (px, py) in pockets {
             Self::fill_circle(fb, px, py, pocket_r, 0x000000);
         }
 
         // Topları çiz (gfx3d ile 3D görünümlü)
-        self.render_billiards_balls_3d(fb, bx, by, bw, bh);
+        self.render_billiards_balls_3d(fb, table_x, table_y, table_w, table_h);
 
         // Vuruş çizgisi (aiming)
         if self.billiards.state == super::game_core::BilliardsState::Aiming
             || self.billiards.state == super::game_core::BilliardsState::BallInHand
         {
-            self.render_aim_line(fb, bx, by, bw, bh);
+            self.render_aim_line(fb, table_x, table_y, table_w, table_h);
         }
 
         // Güç çubuğu
-        self.render_power_bar(fb, bx, by, bw, bh);
+        self.render_power_bar(fb, table_x, table_y, table_w, table_h);
 
         // Oyuncu bilgisi
-        self.render_billiards_info(fb, x, by, bh);
+        self.render_billiards_info(fb, x, table_y, table_h);
     }
 
     /// 3D görünümlü topları çizer (gfx3d kullanarak basit küre projeksiyonu).

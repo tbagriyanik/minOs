@@ -1,4 +1,4 @@
-//! Wolfenstein 3D tarzı sprite gorselleri (dusman, esya, silah).
+//! Kurt 3D tarzı sprite gorselleri (dusman, esya, silah).
 //!
 //! Modul, 2B billboard (yassı) sprite'ları prosedurel olarak uretir:
 //!

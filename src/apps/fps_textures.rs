@@ -1,4 +1,4 @@
-//! Wolfenstein 3D tarzı prosedürel doku atlası.
+//! Kurt 3D tarzı prosedürel doku atlası.
 //!
 //! Tüm duvar / zemin / tavan dokuları 32x32 piksel ve `0xRRGGBB` renktedir
 //! (alfa biti yoktur; sprite'lar bu modülde yer almaz). Doku üretimi tamamen

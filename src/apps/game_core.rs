@@ -1814,6 +1814,10 @@ pub const BILLIARDS_FRICTION: f32 = 0.008;
 pub const BILLIARDS_MIN_SPEED: f32 = 0.001;
 /// Maksimum vuruş hızı.
 pub const BILLIARDS_MAX_SPEED: f32 = 1.5;
+/// Bir alt adımda bir topun en fazla bu kadar ilerlemesi hedeflenir.
+/// Hızlı topların tek bir adımda diğer topu veya çapayı geçmesini
+/// (tunneling) önlemek için hareket ve çarpışma denetimi alt adımlara bölünür.
+pub const BILLIARDS_SUB_STEP_MAX_DIST: f32 = BILLIARDS_BALL_R * 0.5;
 /// Top sayısı (15 renkli + 1 beyaz).
 pub const BILLIARDS_BALL_COUNT: usize = 16;
 
@@ -2268,15 +2272,61 @@ impl BilliardsGame {
 
         match self.state {
             BilliardsState::Shooting => {
-                // Topları hareket ettir
+                // Hızlı bir topun tek bir adımda diğer topu veya çapayı
+                // geçmesini (tunneling) önlemek için hareketi ve çarpışma
+                // denetimini alt adımlara böler. Bir alt adımda her top en
+                // fazla BILLIARDS_SUB_STEP_MAX_DIST kadar ilerler.
+                let mut max_speed = 0.0f32;
+                for ball in &self.balls {
+                    if ball.in_play {
+                        let s = billiards_sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+                        if s > max_speed {
+                            max_speed = s;
+                        }
+                    }
+                }
+                let sub_steps: usize = if max_speed > 0.0 {
+                    let ratio = max_speed / BILLIARDS_SUB_STEP_MAX_DIST;
+                    let mut n = ratio as usize;
+                    if ratio > n as f32 {
+                        n += 1;
+                    }
+                    n.clamp(1, 128)
+                } else {
+                    1
+                };
+                let step = 1.0f32 / sub_steps as f32;
+
+                for _ in 0..sub_steps {
+                    // Topları hareket ettir
+                    for ball in &mut self.balls {
+                        if !ball.in_play {
+                            continue;
+                        }
+                        ball.x += ball.vx * step;
+                        ball.y += ball.vy * step;
+                    }
+
+                    // Kenar çarpışması (ayrı döngü için borrow sorununu önle)
+                    for i in 0..BILLIARDS_BALL_COUNT {
+                        if self.balls[i].in_play {
+                            self.collide_cushion_index(i);
+                        }
+                    }
+
+                    // Top-top çarpışmaları
+                    for i in 0..BILLIARDS_BALL_COUNT {
+                        for j in (i + 1)..BILLIARDS_BALL_COUNT {
+                            self.collide_balls(i, j);
+                        }
+                    }
+                }
+
+                // Sürtünme, dönüş ve durdurma (tick başına bir kez).
                 for ball in &mut self.balls {
                     if !ball.in_play {
                         continue;
                     }
-                    ball.x += ball.vx;
-                    ball.y += ball.vy;
-
-                    // Sürtünme
                     ball.vx *= 1.0 - BILLIARDS_FRICTION;
                     ball.vy *= 1.0 - BILLIARDS_FRICTION;
 
@@ -2299,20 +2349,6 @@ impl BilliardsGame {
                     }
 
                     changed = true;
-                }
-
-                // Kenar çarpışması (ayrı döngü untuk borrow sorununu önle)
-                for i in 0..BILLIARDS_BALL_COUNT {
-                    if self.balls[i].in_play {
-                        self.collide_cushion_index(i);
-                    }
-                }
-
-                // Top-top çarpışmaları
-                for i in 0..BILLIARDS_BALL_COUNT {
-                    for j in (i + 1)..BILLIARDS_BALL_COUNT {
-                        self.collide_balls(i, j);
-                    }
                 }
 
                 // Delik kontrolü
@@ -2464,6 +2500,62 @@ mod billiards_tests {
         assert!(result);
         assert!(game.balls[1].pocketed);
         assert!(!game.balls[1].in_play);
+    }
+
+    /// Yüksek hızla hareket eden çap topu, durgun bir topun üzerinden
+    /// geçmemeli (tunneling): alt adımlandırma sayesinde çarpışma algılanmalı
+    /// ve momentum aktarılmalı. Eşit kütleli elastik çarpışmada çap topu
+    /// durur, momentum hedef topa geçer.
+    #[test]
+    fn fast_cue_ball_transfers_momentum_instead_of_tunneling() {
+        let mut game = BilliardsGame::new();
+        game.state = BilliardsState::Shooting;
+        game.balls[0].x = 0.4;
+        game.balls[0].y = 0.5;
+        game.balls[0].vx = BILLIARDS_MAX_SPEED;
+        game.balls[0].vy = 0.0;
+
+        game.balls[1].in_play = true;
+        game.balls[1].x = 0.4 + (BILLIARDS_BALL_R * 2.0) + 0.001;
+        game.balls[1].y = 0.5;
+        game.balls[1].vx = 0.0;
+        game.balls[1].vy = 0.0;
+
+        game.tick();
+
+        // Çarpışma algılanmalı: çap topu momentumunu hedef topa aktarıp durmalı.
+        // Alt adımlandırma olmadan çap topu hedefin üzerinden geçerdi (tunneling).
+        assert!(
+            game.balls[0].vx.abs() < 0.01,
+            "çap topu çarpmalı ve durmalı, hedefin üzerinden geçmemeli"
+        );
+    }
+
+    /// Karşı doğru yüksek hızla gelen iki top, birbirinin üzerinden
+    //  geçmemeli; elastik çarpışma sonucu yönleri terselenmeli.
+    #[test]
+    fn fast_balls_moving_toward_each_other_collide() {
+        let mut game = BilliardsGame::new();
+        game.state = BilliardsState::Shooting;
+        // Merkezde, çapalara temas etmeyecek mesafede karşı doğru hareket.
+        game.balls[0].x = 0.9;
+        game.balls[0].y = 0.5;
+        game.balls[0].vx = 0.8;
+        game.balls[0].vy = 0.0;
+
+        game.balls[1].in_play = true;
+        game.balls[1].x = 1.0;
+        game.balls[1].y = 0.5;
+        game.balls[1].vx = -0.8;
+        game.balls[1].vy = 0.0;
+
+        game.tick();
+
+        // Eşit kütleli elastik çarpışma: çap topunun yönü terselenecek.
+        assert!(
+            game.balls[0].vx < 0.0,
+            "karşı doğru gelen toplar çarpmalı, çap topu geri dönmeli"
+        );
     }
 }
 

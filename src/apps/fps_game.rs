@@ -1,4 +1,4 @@
-//! Wolfenstein 3D tarzı birinci şahıs nişancı (FPS) oyunu.
+//! Kurt 3D tarzı birinci şahıs nişancı (FPS) oyunu.
 //!
 //! Oyun tamamen yazılım rasterizasyonu ile çizilir: duvarlar DDA ışın
 //! izleme (raycasting) ile, zemin/tavan düzlem atma (plane casting) ile,
@@ -867,7 +867,7 @@ impl FpsGameApp {
                 true
             }
             ' ' => {
-                // Wolfenstein 3D'de boşluk tuşu "kullan" (kapı aç / duvar it);
+                // Kurt 3D'de boşluk tuşu "kullan" (kapı aç / duvar it);
                 // ateş için sol fare tuşu kullanılır.
                 self.use_action(audio_dev);
                 true
@@ -2166,7 +2166,7 @@ impl FpsGameApp {
     // Durum çubuğu
     // -----------------------------------------------------------------------
 
-    /// Wolfenstein 3D tarzı durum çubuğu: harita, can, zırh, anahtar, mermi.
+    /// Kurt 3D tarzı durum çubuğu: harita, can, zırh, anahtar, mermi.
     pub fn render_hud(
         &self,
         fb: &mut Framebuffer,
@@ -2461,9 +2461,7 @@ impl FpsGameApp {
 
         // Üst araç çubuğu.
         let mode_label = match self.render_mode {
-            RenderMode::Mode3D => {
-                crate::gui::ui_text("FPS 3D — Wolfenstein tarzı", "FPS 3D — Wolfenstein style")
-            }
+            RenderMode::Mode3D => crate::gui::ui_text("FPS 3D — Kurt tarzı", "FPS 3D — Kurt style"),
             RenderMode::TopDown2D => crate::gui::ui_text("FPS 2D Üstten", "FPS 2D Top-Down"),
         };
         fb.draw_rect(
@@ -2656,7 +2654,7 @@ impl FpsGameApp {
         MinGuiCompositor::draw_string(fb, card_x + 22, card_y + 19, brand, Color::ACCENT_BLUE);
 
         let title = match self.result {
-            GameResult::Menu => "WOLFENSTEIN 3D",
+            GameResult::Menu => "Kurt 3D",
             GameResult::Won => "ZAFER!",
             GameResult::Lost => "OLDUNUZ",
             GameResult::Playing => "",

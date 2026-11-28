@@ -2,11 +2,14 @@ use core::arch::asm;
 extern crate alloc;
 
 use crate::arch::x86_64::sync::SpinMutex;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// `LOG_BYTES` bir `Vec`'tir ve COM1 yazımı tektir; SMP altında birden çok
 /// CPU aynı anda yazdırırsa yığın bozulur ve baytlar iç içe geçer. Tüm
 /// kayıt/okuma yolları bu kilidi alır (RAII: kapsam çıkışında bırakılır).
 static SERIAL_LOCK: SpinMutex<()> = SpinMutex::new(());
+static LAST_BOOT_MESSAGE_MS: AtomicU64 = AtomicU64::new(0);
+const BOOT_MESSAGE_INTERVAL_MS: u64 = 5;
 
 const COM1_DATA: u16 = 0x3F8;
 const COM1_INT_EN: u16 = 0x3F9;
@@ -22,6 +25,16 @@ const YELLOW: &[u8] = b"\x1b[33m";
 const RESET: &[u8] = b"\x1b[0m";
 
 pub fn print(message: &str) {
+    if is_boot_message(message) {
+        let now = crate::boot::time::monotonic_ms();
+        let previous = LAST_BOOT_MESSAGE_MS.swap(now, Ordering::AcqRel);
+        if previous != 0 {
+            let target = previous.saturating_add(BOOT_MESSAGE_INTERVAL_MS);
+            while crate::boot::time::monotonic_ms() < target {
+                core::hint::spin_loop();
+            }
+        }
+    }
     let _guard = SERIAL_LOCK.lock();
     append_log(message.as_bytes());
     let color = if is_warning(message) {
@@ -39,6 +52,17 @@ pub fn print(message: &str) {
     if color.is_some() {
         write_bytes(RESET);
     }
+}
+
+fn is_boot_message(message: &str) -> bool {
+    let text = message.trim_start();
+    text.contains("[BOOT]")
+        || text.contains("[DRIVERS]")
+        || text.contains("[DRIVER]")
+        || text.contains("[PMM]")
+        || text.contains("[SMP]")
+        || text.contains("[GPU]")
+        || text.contains("[INPUT")
 }
 
 const MAX_LOG_BYTES: usize = 4 * 1024 * 1024; // 4 MiB

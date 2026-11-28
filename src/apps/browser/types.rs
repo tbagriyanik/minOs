@@ -947,13 +947,6 @@ pub struct Bookmark {
 
 pub const BOOKMARKS: &[Bookmark] = &[
     Bookmark {
-        title: "HttpForever",
-        title_en: "HttpForever",
-        url: "http://httpforever.com/",
-        description: "Hafif ve saf HTTP test sitesi (port 80).",
-        description_en: "Lightweight and pure HTTP test site (port 80).",
-    },
-    Bookmark {
         title: "Example (HTTPS)",
         title_en: "Example (HTTPS)",
         url: "https://example.com/",
@@ -1016,12 +1009,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_httpforever_bookmark() {
-        assert!(!BOOKMARKS.is_empty());
-        let first = &BOOKMARKS[0];
-        assert_eq!(first.title, "HttpForever");
-        assert_eq!(first.url, "http://httpforever.com/");
-        assert!(BOOKMARKS.iter().any(|b| b.url == "http://httpforever.com/"));
+    fn httpforever_bookmark_is_removed() {
+        assert!(!BOOKMARKS.iter().any(|b| b.url == "http://httpforever.com/"));
     }
 
     #[test]

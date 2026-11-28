@@ -3,7 +3,7 @@
 Bu dosya minOs sürümlerinin ayrıntılı değişiklik listelerini içerir.
 README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradadır.
 
-## Güncel · v2.7.0
+## Güncel · v2.8.0
 
 ### Son güncellemeler · Kasım 2026
 
@@ -15,13 +15,19 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 
 ### Düzeltmeler · Pencere yırtılması ve parça parça güncelleme
 
+### Düzeltmeler · Bilardo ve önyükleme zaman tabanı
+
+- **Bilardo masası yatay dikdörtgen yapıldı:** `render_billiards` masa artık `BILLIARDS_TABLE_W : BILLIARDS_TABLE_H = 2:1` oranında dikdörtgen olarak çiziliyor; board_rect kare döndürdüğü için masayı merkeze alıp oranı koruyor, böylece toplar daire olarak görünüyor (yatay olarak şişmiyor).
+- **Hızlı top çarpışması (tunneling) düzeltildi:** `BilliardsGame::tick()` hareket ve çarpışma denetimini alt adımlara böler; bir alt adımda her top en fazla `BILLIARDS_SUB_STEP_MAX_DIST = BILLIARDS_BALL_R * 0.5` kadar ilerler. Bu sayede `BILLIARDS_MAX_SPEED = 1.5` hızındaki çap topu diğer topun veya çapanın üzerinden geçmeden çarpışma algılanıyor. İki yeni test eklendi: `fast_cue_ball_transfers_momentum_instead_of_tunneling` ve `fast_balls_moving_toward_each_other_collide`.
+- **Önyükleme zaman tabanı takılması düzeltildi:** `init_timebase()` artık PIT kanal 2 port-polling kalibrasyonu yapmıyor (QEMU'da PIT çıkışı port 0x61 bit 5'ini set etmediği için boot `"[BOOT] Starting PIT/TSC time base..."` mesajında kalıyordu). Bunun yerine CPUID leaf 0x15/0x16'den TSC frekans tahmini kullanılıyor; `monotonic_ms()` için yeterince doğrudur ve asla takılmaz.
+
 - **Pencere güncellemesi artık atomik:** `GlobalDirtyTracker::mark_window` ile giren per-pencere kirli işaretleri artık çerçevenin genel kirli bölgesine de yansıtılıyor (`window_bounding` birleşimi). Daha önce bu işaretler yalnızca per-pencere listesine yazılıyordu; `take_dirty_region()` genel birleşimi kullandığı için pencere "kendi listesinde kirli" olmasına rağmen çerçeve kırpma dikdörtgeni dışında kalıyor ve pencere yalnızca kırpma bölgesi kadar yeniden çiziliyordu. Sonuç: pencerenin bir kısmı yeni, bir kısmı bayat kalıyordu (parça parça güncelleme). Ayrıca `is_empty()` per-pencere işaretlerini hesaba katmadığı için yalnızca pencere işareti bulunan karelerde redraw hiç tetiklenmiyordu (kapatılan kullanıcı modu penceresi ekranda hayalet bırakabiliyordu).
 - **Sürükleme + izlenen kirli bölge çakışması giderildi:** `event_render.rs` içinde `drag_dirty_rect` ile izlenen kirli bölge birbirini eziyordu; artık ikisi birleştirilerek kullanılıyor, böylece bir karede hem sürükleme hem uygulama değişikliği varsa ikisi de ekrana yansıyor.
 - **Dikey-blank (vblank) tespiti güvenilir hâle getirildi:** `probe_vblank` artık portun hem "set" hem "clear" durumunu gözlemlemesini şart koşuyor (sabit 0xFF/0x00 okuyan aygıtlarda "vblank var" sanılmıyordu) ve `monotonic_ms` yerine TSC döngü bütçesi kullanıyor (zaman tabanı kalibre edilmemişken sonsuz döngü riski kalktı). Tek seferlik yoklamanın kalıcı karara dönüşmesi kaldırıldı: donanım vblank yoksa 1800 çağrıda bir yeniden yoklama yapılıyor, böylece erken/yanlış bir yoklama sistemi ömrü boyunca yanlış moda kilitlemiyor.
 - **Kare periyodu ölçümü ve tanı:** iki vblank darbesi arasındaki süre ölçülüyor (`gpu::frame_period_us`) ve LFB kopyalama süresi kare periyodundan uzunsa tek seferlik `[GFX] UYARI` mesajı seri günlüğe yazılıyor — kopyalama ışını yakalıyorsa yırtılma kaçınılmazdır.
 - **VirtIO-GPU yolunda ekran güncellemesi düzeltildi:** `Framebuffer::flush`/`flush_rect` VirtIO-GPU etkinken CPU kopyasını **atlayıp** yalnızca host transferi yapıyordu; çizim ise yazılım backbuffer'ında kaldığı için LFB güncellenmiyordu. Artık CPU kopyası her zaman yapılıyor, VirtIO-GPU etkinse ek olarak host aktarımı ve flush uygulanıyor.
 
-### Yenilikler (v2.7.0)
+### Yenilikler (v2.8.0)
 
 - **Çizim Tahtası (Paint) UI/UX yeniden tasarımı:** iki şeritli araç çubuğu, hover/basma animasyonlu düğmeler, renk seçici, fırça ucu önizlemesi, enterpolasyonla kesintisiz çizim/silme, sağ tuşla sürükle-sil, Ctrl+N/O/S kısayolları.
 - **Tembel uygulama yükleme:** kabuk uygulamaları her zaman yüklü; diğerleri ilk açılışta belleğe alınır, son pencere kapanınca düşürülür.

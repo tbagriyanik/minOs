@@ -55,9 +55,9 @@ fn publish_app_memory(app_id: usize, static_bytes: usize, dynamic_bytes: usize) 
     apps::memory::publish(app_id, static_bytes.saturating_add(dynamic_bytes));
 }
 
-/// Yerleşik uygulamaların son bellek ölçümünü kayda yazar ve seri bağlantıya
-/// `[APP-MEM]` satırını gönderir. Çalışma zamanında periyodik çağrılır;
-/// Görev Yöneticisi aynı kaydı "Bellek" sütununda kullanır.
+/// Yerleşik uygulamaların son bellek ölçümünü kayda yazar. Çalışma
+/// zamanında periyodik çağrılır; Görev Yöneticisi bu kaydı "Bellek"
+/// sütununda kullanır.
 fn publish_runtime_app_memory(
     filemanager_app: &apps::filemanager::FileManagerApp,
     desktop_files: &apps::filemanager::FileManagerApp,
@@ -88,7 +88,7 @@ fn publish_runtime_app_memory(
     );
     // 1..=17: kalan yerleşik uygulamalar. Dinamik tampon bildirmeyenler için
     // `size_of_val` güvenli alt sınırdır. Bellekte olmayan (None) uygulamalar
-    // 0 bayt olarak raporlanır, böylece [APP-MEM] satırında görünmezler.
+    // 0 bayt olarak raporlanır, böylece bellek kaydında görünmezler.
     publish_app_memory(1, core::mem::size_of_val(settings_app), 0);
     publish_app_memory(
         2,
@@ -200,20 +200,6 @@ fn publish_runtime_app_memory(
             .unwrap_or(0),
         0,
     );
-
-    // Uygulama bellek kaydını seri olarak yayınla: `[APP-MEM] app=<id> bytes=<bytes>`
-    // satırları QEMU entegrasyon testleri ve harici izleyiciler tarafından okunur.
-    // Sadece sifirdan buyuk kayitlar yazilir (0 baytli uygulamalar zaten rapor degil).
-    for app_id in 0..=17 {
-        let bytes = apps::memory::sample(app_id);
-        if bytes > 0 {
-            serial_print("[APP-MEM] app=");
-            serial_print_dec(app_id as u64);
-            serial_print(" bytes=");
-            serial_print_dec(bytes as u64);
-            serial_print("\n");
-        }
-    }
 }
 
 /// `FileManagerApp` onay iletişim kutusu açıkken Enter onayını ilgili diyalog
@@ -661,7 +647,6 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     // Oyun bütçesi sabitleri
     const GAME_UPDATE_BUDGET_MS: u64 = 50;
-    const GAME_BUDGET_MAX_STRIKES: u32 = 2;
     const GAME_FPS_LIMIT_MS: u64 = 33;
     const FPS3D_FPS_LIMIT_MS: u64 = 16;
     // Oyun tick zamanları (döngü içinde kullanılır)
@@ -723,10 +708,28 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         serial_print("[BOOT] perftest=1: performans testi baslatildi.\n");
     }
 
-    // Uygulama bazlı bellek raporu döngünün ilk turunda da yayınlanır; ancak
+    // `fps3d` komut satırı simgesi: FPS 3D oyunu otomatik açılır.
+    // Performans senaryosu ve hata ayıklama için kullanılır.
+    if crate::boot::limine::limine_boot_cmdline()
+        .map(|c| crate::boot::limine::cmdline_has_token(c, "fps3d"))
+        .unwrap_or(false)
+    {
+        open_app(&mut compositor, &mut apps, &fs_mgr.vfs, 16);
+        serial_print("[BOOT] fps3d=1: FPS 3D oyunu otomatik acildi.\n");
+    }
+
+    // `city` komut satırı simgesi: şehir sürüşü otomatik açılır.
+    if crate::boot::limine::limine_boot_cmdline()
+        .map(|c| crate::boot::limine::cmdline_has_token(c, "city"))
+        .unwrap_or(false)
+    {
+        open_app(&mut compositor, &mut apps, &fs_mgr.vfs, 17);
+        serial_print("[BOOT] city=1: sehir surusu otomatik acildi.\n");
+    }
+
+    // Uygulama bazlı bellek kaydı döngünün ilk turunda da yayınlanır; ancak
     // TCG altında ilk kare yavaş olabildiği için masaüstüne geçişte bir kez
-    // hemen yayınlanır. Böylece `[APP-MEM]` işareti sistemin gerçekten
-    // çalıştığını doğrulayan testler tarafından geç yakalanır.
+    // hemen yayınlanır, böylece Görev Yöneticisi erken gerçek değerler görür.
     publish_runtime_app_memory(
         &apps.filemanager_app,
         &apps.desktop_files,
@@ -826,7 +829,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             title.push_str(crash.title(gui::ui_english()));
 
             // Bildirim gövdesinde somut kurtarma adımı; uygulama adı seri
-            // günlüğünde ve [APP-MEM] kaydında zaten yer alıyor.
+            // günlüğünde zaten yer alıyor.
             let mut message = gui::TextBuf::new();
             message.push_str(crash.recovery(gui::ui_english()));
             compositor.push_toast(
@@ -838,8 +841,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             );
         }
 
-        // Uygulama bazlı bellek ölçümü: her 90 turda bir yayınla. Böylece
-        // Görev Yöneticisi ve `[APP-MEM]` seri satırları aynı kaynağı görür.
+        // Uygulama bazlı bellek ölçümü: her 90 turda bir kaydı yenile.
+        // Görev Yöneticisi "Bellek" sütunu bu kaydı okur.
         static APP_MEM_TICK: core::sync::atomic::AtomicUsize =
             core::sync::atomic::AtomicUsize::new(0);
         if APP_MEM_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 90 == 0 {
@@ -6205,13 +6208,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         } else if app_is_focused(&compositor, 12) {
                             apps.viewer3d_app.as_mut().unwrap().rot_x -= 0.1;
                         } else if app_is_focused(&compositor, 15) {
-                            // Oyunlar: sol/sağ ok bölüm (sekme) değiştirir.
-                            let tab = if apps.fps_game_app.as_mut().unwrap().tab == 0 {
-                                apps::game::TAB_COUNT - 1
-                            } else {
-                                apps.fps_game_app.as_mut().unwrap().tab - 1
-                            };
-                            apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                            // Bilardo nişanı: ok yukarı güç artırır;
+                            // nişan yoksa oklar bölüm (sekme) değiştirir.
+                            if !apps
+                                .fps_game_app
+                                .as_mut()
+                                .unwrap()
+                                .nudge_billiards_aim(0.0, 0.05)
+                            {
+                                let tab = if apps.fps_game_app.as_mut().unwrap().tab == 0 {
+                                    apps::game::TAB_COUNT - 1
+                                } else {
+                                    apps.fps_game_app.as_mut().unwrap().tab - 1
+                                };
+                                apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                            }
                             state.force_render = true;
                         }
                     }
@@ -6376,9 +6387,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         } else if app_is_focused(&compositor, 12) {
                             apps.viewer3d_app.as_mut().unwrap().rot_x += 0.1;
                         } else if app_is_focused(&compositor, 15) {
-                            let tab = (apps.fps_game_app.as_mut().unwrap().tab + 1)
-                                % apps::game::TAB_COUNT;
-                            apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                            // Bilardo nişanı: ok aşağı güç azaltır.
+                            if !apps
+                                .fps_game_app
+                                .as_mut()
+                                .unwrap()
+                                .nudge_billiards_aim(0.0, -0.05)
+                            {
+                                let tab = (apps.fps_game_app.as_mut().unwrap().tab + 1)
+                                    % apps::game::TAB_COUNT;
+                                apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                            }
                             state.force_render = true;
                         }
                     }
@@ -6512,12 +6531,20 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 12) {
                         apps.viewer3d_app.as_mut().unwrap().rot_y -= 0.1;
                     } else if app_is_focused(&compositor, 15) {
-                        let tab = if apps.fps_game_app.as_mut().unwrap().tab == 0 {
-                            apps::game::TAB_COUNT - 1
-                        } else {
-                            apps.fps_game_app.as_mut().unwrap().tab - 1
-                        };
-                        apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                        // Bilardo nişanı: ok sol açı sola çevirir.
+                        if !apps
+                            .fps_game_app
+                            .as_mut()
+                            .unwrap()
+                            .nudge_billiards_aim(-0.03, 0.0)
+                        {
+                            let tab = if apps.fps_game_app.as_mut().unwrap().tab == 0 {
+                                apps::game::TAB_COUNT - 1
+                            } else {
+                                apps.fps_game_app.as_mut().unwrap().tab - 1
+                            };
+                            apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                        }
                         state.force_render = true;
                     } else if app_is_focused(&compositor, 17) {
                         // Şehir sürüşü: ok sola direksiyon.
@@ -6664,9 +6691,17 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else if app_is_focused(&compositor, 12) {
                         apps.viewer3d_app.as_mut().unwrap().rot_y += 0.1;
                     } else if app_is_focused(&compositor, 15) {
-                        let tab =
-                            (apps.fps_game_app.as_mut().unwrap().tab + 1) % apps::game::TAB_COUNT;
-                        apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                        // Bilardo nişanı: ok sağ açı sağa çevirir.
+                        if !apps
+                            .fps_game_app
+                            .as_mut()
+                            .unwrap()
+                            .nudge_billiards_aim(0.03, 0.0)
+                        {
+                            let tab = (apps.fps_game_app.as_mut().unwrap().tab + 1)
+                                % apps::game::TAB_COUNT;
+                            apps.fps_game_app.as_mut().unwrap().select_tab(tab);
+                        }
                         state.force_render = true;
                     } else if app_is_focused(&compositor, 17) {
                         // Şehir sürüşü: ok sağa direksiyon.
@@ -8091,6 +8126,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 if let Some(game) = apps.fps_3d_app.as_mut() {
                     game.cycle_weapon(if scroll_val > 0 { -1 } else { 1 });
                     state.force_render = true;
+                }
+            }
+
+            // Oyunlar (Bilardo): tekerlek vuruş gücünü ayarlar.
+            if app_is_focused(&compositor, 15) {
+                if let Some(game) = apps.fps_game_app.as_mut() {
+                    if game.adjust_billiards_power(if scroll_val > 0 { 0.05 } else { -0.05 }) {
+                        state.force_render = true;
+                    }
                 }
             }
 
@@ -10037,6 +10081,28 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             }
         }
 
+        // Oyunlar (Bilardo) fare nişanı: sol tuş sürüklemesi masada nişan
+        // açısını imleci izletir, sağ tuş sürüklemesi english spin ayarlar.
+        if app_is_focused(&compositor, 15) {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 15) {
+                let (ax, ay, aw, ah) = app_layout_rect(15, &w);
+                let pdx = mouse.x as isize - state.last_mouse_x as isize;
+                let pdy = mouse.y as isize - state.last_mouse_y as isize;
+                if apps.fps_game_app.as_mut().unwrap().billiards_pointer(
+                    mx.saturating_sub(ax),
+                    my.saturating_sub(ay),
+                    aw,
+                    ah,
+                    mouse.left_button,
+                    mouse.right_button,
+                    pdx,
+                    pdy,
+                ) {
+                    state.force_render = true;
+                }
+            }
+        }
+
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
         //
         // Göreli fare hareketi birikimli olarak uygulanır; mutlak işaretçide
@@ -10217,15 +10283,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         watchdog::heartbeat(idx, 15);
                     }
                     if game_elapsed_ms > GAME_UPDATE_BUDGET_MS {
+                        // Yavaş oyun asla kapatılmaz; yalnızca kötüleşme
+                        // döneminin başında bir kez uyarılır.
                         state.game_budget_strikes = state.game_budget_strikes.saturating_add(1);
-                        if state.game_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
-                            crate::serial_print(
-                                "[GAMES] Guard: oyun bütçeyi sürekli aşıyor, sonlandırılıyor\n",
-                            );
-                            if let Some(idx) = game_idx {
-                                terminate_app(idx, &mut compositor, &mut apps);
-                            }
-                        } else {
+                        if state.game_budget_strikes == 1 {
                             crate::serial_print("[GAMES] Uyarı: güncelleme bütçesi aştı (");
                             crate::serial_print_dec(game_elapsed_ms);
                             crate::serial_print(" ms > ");
@@ -10321,15 +10382,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         watchdog::heartbeat(idx, 16);
                     }
                     if fps3d_elapsed_ms > GAME_UPDATE_BUDGET_MS {
+                        // Yavaş oyun asla kapatılmaz; yalnızca kötüleşme
+                        // döneminin başında bir kez uyarılır.
                         state.fps3d_budget_strikes = state.fps3d_budget_strikes.saturating_add(1);
-                        if state.fps3d_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
-                            crate::serial_print(
-                                "[FPS-3D] Guard: oyun bütçeyi sürekli aşıyor, sonlandırılıyor\n",
-                            );
-                            if let Some(idx) = fps3d_idx {
-                                terminate_app(idx, &mut compositor, &mut apps);
-                            }
-                        } else {
+                        if state.fps3d_budget_strikes == 1 {
                             crate::serial_print("[FPS-3D] Uyarı: güncelleme bütçesi aştı (");
                             crate::serial_print_dec(fps3d_elapsed_ms);
                             crate::serial_print(" ms > ");

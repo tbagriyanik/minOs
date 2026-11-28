@@ -95,6 +95,12 @@ pub struct GameApp {
     pub billiards_aiming: bool,
     /// AI düşünme beklemesi.
     pub billiards_ai_wait: u8,
+    /// Sol tuş basılı güç şarjı sürüyor mu.
+    pub billiards_charge: bool,
+    /// Şarjın kaç tick'tir sürdüğü (kısa tıklamayı vuruştan ayırır).
+    pub billiards_charge_frames: u16,
+    /// Şarj salınımının fazı (güç üçgen dalgası üretir).
+    pub billiards_charge_t: f32,
     // --- Ses ---
     pub sound_pending: Sound,
     pub sound_volume: u8,
@@ -140,6 +146,9 @@ impl GameApp {
             billiards_selected_ball: None,
             billiards_aiming: false,
             billiards_ai_wait: 0,
+            billiards_charge: false,
+            billiards_charge_frames: 0,
+            billiards_charge_t: 0.0,
             sound_pending: Sound::None,
             sound_volume: 60,
             // Oyun sesleri kullanıcı özellikle açana kadar kapalıdır.
@@ -185,6 +194,23 @@ impl GameApp {
         let side = avail_w.min(avail_h).max(sp(96));
         let x = sp(8) + avail_w.saturating_sub(side) / 2;
         (x, top, side, side)
+    }
+
+    /// Bilardo masası: kare `board_rect` içinde dikey ortalanmış 2:1
+    /// dikdörtgen (BILLIARDS_TABLE_W : BILLIARDS_TABLE_H). Çizim,
+    /// tıklama ve fare nişanı aynı geometriyi kullanır; böylece
+    /// masanın üstündeki/altındaki boşluklar nişanı kaydırmaz.
+    fn billiards_table_rect(w: usize, h: usize) -> (usize, usize, usize, usize) {
+        let (bx, by, bw, bh) = Self::board_rect(w, h);
+        let table_w = bw;
+        let table_h = (bw as f32 * super::game_core::BILLIARDS_TABLE_H
+            / super::game_core::BILLIARDS_TABLE_W) as usize;
+        (
+            bx,
+            by + bh.saturating_sub(table_h) / 2,
+            table_w,
+            table_h.max(1),
+        )
     }
 
     /// "Yeni Oyun" düğmesi.
@@ -741,6 +767,21 @@ impl GameApp {
         // Bilardo simülasyonu ve AI
         if self.tab == TAB_BILLIARDS {
             changed |= self.billiards.tick();
+            // Sol tuş şarjı: güç 0→1→0 üçgen dalgasıyla salınır; sol tuş
+            // bırakılınca billiards_pointer shoot() çağırır.
+            if self.billiards.state == super::game_core::BilliardsState::Aiming
+                && self.billiards_charge
+            {
+                self.billiards_charge_frames = self.billiards_charge_frames.saturating_add(1);
+                self.billiards_charge_t += 0.045;
+                let t = self.billiards_charge_t % 2.0;
+                let power = if t < 1.0 { t } else { 2.0 - t };
+                self.billiards.aim_power = power.clamp(0.05, 1.0);
+                changed = true;
+            } else if self.billiards_charge {
+                self.billiards_charge = false;
+                self.billiards_charge_frames = 0;
+            }
             // AI vuruşu (basit: sıra stripes oyuncusunda ve aiming durumunda)
             if self.billiards.state == super::game_core::BilliardsState::Aiming
                 && self.billiards.current_player == super::game_core::BilliardsPlayerType::Stripes
@@ -1066,8 +1107,8 @@ impl GameApp {
                 "Select piece, click target; choose a piece on promotion",
             ),
             TAB_BILLIARDS => crate::gui::ui_text(
-                "Masa alanına tıkla vuruş yönü/gücü ayarla; Space ile vur",
-                "Click table to aim; Space to shoot",
+                "Fare nişanı izler; sol tuş basılı güç, bırak vur; sağ sürükle spin; Space vur",
+                "Mouse aims; hold left button to charge, release shoots; right-drag spin; Space shoots",
             ),
             _ => crate::gui::ui_text("", ""),
         };
@@ -1404,18 +1445,12 @@ impl GameApp {
     // -----------------------------------------------------------------------
 
     fn render_billiards(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
-        let board = Self::board_rect(w, h);
-        let (bx, by, bw, bh) = (x + board.0, y + board.1, board.2, board.3);
-
-        // Masa dünya koordinatlarında yatay dikdörtgendir
-        // (BILLIARDS_TABLE_W : BILLIARDS_TABLE_H = 2:1). board_rect kare
-        // döndürdüğü için masayı aynı oranda dikdörtgen olarak merkeze al;
-        // böylece toplar yatay olarak şişmeden daire olarak çizilir.
-        let table_w = bw;
-        let table_h = (bw as f32 * super::game_core::BILLIARDS_TABLE_H
-            / super::game_core::BILLIARDS_TABLE_W) as usize;
-        let table_x = bx;
-        let table_y = by + bh.saturating_sub(table_h) / 2;
+        // Masa dünya koordinatlarında yatay dikdörtgendir; board_rect
+        // kare döndürdüğü için masa aynı oranda dikdörtgen olarak
+        // ortalanır (billiards_table_rect ile aynı geometri).
+        let (ttx, tty, table_w, table_h) = Self::billiards_table_rect(w, h);
+        let table_x = x + ttx;
+        let table_y = y + tty;
 
         // Masa çerçevesi
         fb.draw_rounded_rect(
@@ -1532,6 +1567,12 @@ impl GameApp {
     ) {
         use super::game_core::{BILLIARDS_BALL_R, BILLIARDS_TABLE_H, BILLIARDS_TABLE_W};
 
+        // Işık yönü (yukarıdan hafif sağdan); normalize terimi kare
+        // başına bir kez hesaplanır, piksels başına sqrt tekrarlanmaz.
+        let l_len = fast_sqrt(0.3 * 0.3 + 0.2 * 0.2 + 0.9 * 0.9);
+        let light_gain = 0.7 * 0.9 / l_len;
+        let ambient = 0.3f32;
+
         // Basit 3D küre çizimi: üstten görünümde daire, ama gölgelendirme ile 3D hissi
         for ball in &self.billiards.balls {
             if !ball.in_play || ball.pocketed {
@@ -1549,84 +1590,164 @@ impl GameApp {
             // Top rengi
             let base_color = ball.color();
 
+            // Yuvarlanma modeli: top, hareket yönüne dik yatay eksen
+            // `a = (-uy, ux)` etrafında `ball.angle` kadar dönmüştür.
+            // Desen (şerit bandı, numara işareti, çap noktası) topun
+            // malzeme çerçevesinde sabittir; dünya normalini malzeme
+            // çerçevesine çevirmek için eksen etrafında -açı döndürürüz.
+            let speed = fast_sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+            let (ux, uy) = if speed > 0.0001 {
+                (ball.vx / speed, ball.vy / speed)
+            } else {
+                (ball.roll_ux, ball.roll_uy)
+            };
+            let ax = -uy;
+            let ay = ux;
+            let roll_sin = fast_sin(ball.angle);
+            let roll_cos = fast_cos(ball.angle);
+            let one_minus_cos = 1.0 - roll_cos;
+
+            // Şerit bandının simetri ekseni (kutup) dünya uzayında:
+            // başlangıçta dikey olan eksen, top yuvarlandıkça eğilir.
+            let pole_x = ay * roll_sin;
+            let pole_y = -ax * roll_sin;
+            let pole_z = roll_cos;
+
+            // Malzeme uzayındaki işaret yönlerini dünya uzayına çevir:
+            // W = q·cos + (a×q)·sin + a·(a·q)·(1−cos).
+            // Numara işareti malzeme güney kutbundadır (q = (0,0,-1));
+            // çap topu noktası q = (0.35, 0.15, -0.92) yönündedir.
+            let (mark_x, mark_y, mark_z) = if ball.kind == BallKind::Cue {
+                let (qx, qy, qz) = (0.35f32, 0.15f32, -0.92f32);
+                let qlen = fast_sqrt(qx * qx + qy * qy + qz * qz);
+                let (qx, qy, qz) = (qx / qlen, qy / qlen, qz / qlen);
+                let adq = ax * qx + ay * qy; // a·q (a_z = 0)
+                let cqx = ay * qz; // (a×q)_x
+                let cqy = -ax * qz; // (a×q)_y
+                let cqz = ax * qy - ay * qx; // (a×q)_z
+                (
+                    qx * roll_cos + cqx * roll_sin + ax * adq * one_minus_cos,
+                    qy * roll_cos + cqy * roll_sin + ay * adq * one_minus_cos,
+                    qz * roll_cos + cqz * roll_sin,
+                )
+            } else {
+                // q = (0,0,-1) için kapalı biçim.
+                (-ay * roll_sin, ax * roll_sin, -roll_cos)
+            };
+
             // 3D küre gölgelendirmesi: üstten ışık geliyormuş gibi
             // Merkez daha açık, kenarlar daha koyu
             let radius_isize = radius as isize;
+            let radius_sq_i = radius_isize * radius_isize;
+            let radius_f = radius as f32;
+            let inv_radius = 1.0 / radius_f;
             for dy in -radius_isize..=radius_isize {
                 let row = screen_y as isize + dy;
                 if row < 0 {
                     continue;
                 }
-                let dx_max = fast_sqrt((radius_isize * radius_isize - dy * dy) as f32) as isize;
+                let dx_max = fast_sqrt((radius_sq_i - dy * dy) as f32) as isize;
                 for dx in -dx_max..=dx_max {
                     let col = screen_x as isize + dx;
                     if col < 0 {
                         continue;
                     }
                     let dist_sq = dx * dx + dy * dy;
-                    let radius_sq = radius_isize * radius_isize;
-                    if dist_sq > radius_sq {
+                    if dist_sq > radius_sq_i {
                         continue;
                     }
-                    let dist = fast_sqrt(dist_sq as f32);
-                    let norm_dist = dist / radius as f32;
 
-                    // Küre normali (z bileşeni)
-                    let nz_sq = 1.0 - norm_dist * norm_dist;
+                    // Küre normali: yatay bileşenler doğrudan piksel
+                    // ofsetinden, dikey bileşen sqrt'siz türetilir.
+                    let nx = dx as f32 * inv_radius;
+                    let ny = dy as f32 * inv_radius;
+                    let nz_sq = 1.0 - nx * nx - ny * ny;
                     let nz = if nz_sq > 0.0 { fast_sqrt(nz_sq) } else { 0.0 };
-                    // Işık yönü (yukarıdan hafif sağdan)
-                    let lx = 0.3;
-                    let ly = -0.2;
-                    let lz = 0.9;
-                    let l_len = fast_sqrt(lx * lx + ly * ly + lz * lz);
-                    let diffuse_raw = lx * 0.0 + ly * 0.0 + lz * nz / l_len;
-                    let diffuse = if diffuse_raw > 0.0 { diffuse_raw } else { 0.0 };
-                    let ambient = 0.3;
-                    let intensity_raw = ambient + 0.7 * diffuse;
-                    let intensity = if intensity_raw < 1.0 {
-                        intensity_raw
-                    } else {
-                        1.0
-                    };
+                    let intensity = (ambient + light_gain * nz).min(1.0);
 
-                    let r = (((base_color >> 16) & 0xFF) as f32 * intensity) as u32;
-                    let g = (((base_color >> 8) & 0xFF) as f32 * intensity) as u32;
-                    let b = ((base_color & 0xFF) as f32 * intensity) as u32;
-                    let color = (r << 16) | (g << 8) | b;
-
-                    // Çizgili toplar için beyaz bant
-                    if ball.kind == BallKind::Stripe && ball.in_play {
-                        // Basit bant: yatay eksende
-                        let angle = ball.angle;
-                        let ca = fast_cos(angle);
-                        let sa = fast_sin(angle);
-                        let _local_x = dx as f32 * ca - dy as f32 * sa;
-                        let local_y = dx as f32 * sa + dy as f32 * ca;
-                        let stripe_width = radius as f32 * 0.4;
-                        if local_y.abs() < stripe_width {
-                            let stripe_color = ball.stripe_color();
-                            let sr = (stripe_color >> 16) & 0xFF;
-                            let sg = (stripe_color >> 8) & 0xFF;
-                            let sb = stripe_color & 0xFF;
+                    // Çizgili toplar: ekvator bandı. Bant, topun
+                    // malzeme eksenine (kutba) dikey mesafesiyle
+                    // belirlenir; top yuvardıkça bant yüzeyde kayar.
+                    if ball.kind == BallKind::Stripe {
+                        let s = nx * pole_x + ny * pole_y + nz * pole_z;
+                        if s.abs() < 0.32 {
+                            let w = (255.0 * intensity) as u32;
                             fb.draw_rect(
                                 col as usize,
                                 row as usize,
                                 1,
                                 1,
-                                (sr << 16) | (sg << 8) | sb,
+                                (w << 16) | (w << 8) | w,
                             );
                             continue;
                         }
                     }
 
-                    // 8 topu için numara
-                    if ball.kind == BallKind::Eight && dist < (radius as f32 * 0.3) {
-                        fb.draw_rect(col as usize, row as usize, 1, 1, 0xFFFFFF);
-                        continue;
+                    // Numara işareti: 8 topunda iki yan yüzde, diğer
+                    // numaralı toplarda tek yüzde beyaz leke. İşaret
+                    // top yuvardıkça ön yüzeyde belirip kaybolur.
+                    if ball.kind != BallKind::Cue {
+                        let d = nx * mark_x + ny * mark_y + nz * mark_z;
+                        if d > 0.86 {
+                            let w = (255.0 * intensity) as u32;
+                            fb.draw_rect(
+                                col as usize,
+                                row as usize,
+                                1,
+                                1,
+                                (w << 16) | (w << 8) | w,
+                            );
+                            continue;
+                        }
+                        if ball.kind == BallKind::Eight {
+                            // 8'in karşı yüzdeki ikinci işareti kutup
+                            // yönündedir (q2 = (0,0,1) → W = kutup).
+                            let d2 = nx * pole_x + ny * pole_y + nz * pole_z;
+                            if d2 > 0.86 {
+                                let w = (255.0 * intensity) as u32;
+                                fb.draw_rect(
+                                    col as usize,
+                                    row as usize,
+                                    1,
+                                    1,
+                                    (w << 16) | (w << 8) | w,
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        // Çap topu: kırmızı ölçü noktası.
+                        let d = nx * mark_x + ny * mark_y + nz * mark_z;
+                        if d > 0.90 {
+                            let rr = (224.0 * intensity) as u32;
+                            let gg = (64.0 * intensity) as u32;
+                            fb.draw_rect(
+                                col as usize,
+                                row as usize,
+                                1,
+                                1,
+                                (rr << 16) | (gg << 8) | 64,
+                            );
+                            continue;
+                        }
                     }
 
+                    let r = (((base_color >> 16) & 0xFF) as f32 * intensity) as u32;
+                    let g = (((base_color >> 8) & 0xFF) as f32 * intensity) as u32;
+                    let b = ((base_color & 0xFF) as f32 * intensity) as u32;
+                    let color = (r << 16) | (g << 8) | b;
                     fb.draw_rect(col as usize, row as usize, 1, 1, color);
                 }
+            }
+
+            // English spin göstergesi: çap topunun üstünde, seçim
+            // vektörünü gösteren küçük bir artı.
+            if ball.kind == BallKind::Cue
+                && (self.billiards.english_x != 0.0 || self.billiards.english_y != 0.0)
+            {
+                let ex = screen_x as isize + (self.billiards.english_x * radius as f32) as isize;
+                let ey = screen_y as isize - (self.billiards.english_y * radius as f32) as isize;
+                fb.draw_rect_outline(ex as usize, ey as usize, 5, 5, 0xFFD34E);
             }
 
             // Seçili top vurgusu
@@ -1969,10 +2090,8 @@ impl GameApp {
             return true;
         }
 
-        let board = Self::board_rect(w, h);
-        let (bx, by, bw, bh) = (board.0, board.1, board.2, board.3);
-
-        // Masa alanına tıklama
+        // Masa alanına tıklama — çizimle aynı geometri (billiards_table_rect).
+        let (bx, by, bw, bh) = Self::billiards_table_rect(w, h);
         if px >= bx && py >= by && px < bx + bw && py < by + bh {
             // Ekran koordinatlarını dünya koordinatlarına çevir
             let world_x = (px - bx) as f32 / bw as f32 * BILLIARDS_TABLE_W;
@@ -1985,18 +2104,8 @@ impl GameApp {
                     return true;
                 }
                 BilliardsState::Aiming => {
-                    // Vuruş yönünü ayarla (çap topundan tıklanan noktaya)
-                    let cue = self.billiards.cue_ball_ref();
-                    if cue.in_play {
-                        let dx = world_x - cue.x;
-                        let dy = world_y - cue.y;
-                        let angle = fast_atan2(dy, dx);
-                        let dist = fast_sqrt(dx * dx + dy * dy);
-                        let max_dist = billiards_max(BILLIARDS_TABLE_W, BILLIARDS_TABLE_H);
-                        let power = billiards_clamp(dist / max_dist, 0.1, 1.0);
-                        self.billiards.set_aim(angle, power);
-                        return true;
-                    }
+                    // Nişan açısı fareyi serbestçe izler (billiards_pointer);
+                    // burada yalnızca güç çubuğu tıklaması anlamlı.
                 }
                 _ => {}
             }
@@ -2017,6 +2126,118 @@ impl GameApp {
         }
 
         false
+    }
+
+    /// Bilardo sekmesinde fare işaretçisi:
+    /// - Nişan açısı imleci masa üzerinde serbestçe izler (tuş gerekmez).
+    /// - Sol tuşu masada basılı tutmak gücü 0→1→0 salınımıyla şarj eder
+    ///   (tick içinde); bırakınca vurulur. Kısa tıklama sadece nişan
+    ///   olarak kalır, vuruş yapmaz.
+    /// - Sağ tuş sürüklemesi english spin ayarlar.
+    ///   `(px, py)` pencere-içi koordinat, `(dx, dy)` önceki kareye göre
+    ///   işaretçi hareketi (piksel). Herhangi bir şey değiştiyse `true` döner.
+    pub fn billiards_pointer(
+        &mut self,
+        px: usize,
+        py: usize,
+        w: usize,
+        h: usize,
+        left_down: bool,
+        right_down: bool,
+        dx: isize,
+        dy: isize,
+    ) -> bool {
+        use super::game_core::{BilliardsState, BILLIARDS_TABLE_H, BILLIARDS_TABLE_W};
+
+        if self.tab != TAB_BILLIARDS {
+            self.billiards_charge = false;
+            return false;
+        }
+
+        let (bx, by, bw, bh) = Self::billiards_table_rect(w, h);
+        let over_table = px >= bx && py >= by && px < bx + bw && py < by + bh;
+        let aiming = self.billiards.state == BilliardsState::Aiming;
+        let mut changed = false;
+
+        // Sağ sürükleme: english spin (yatay = yan, dikey = üst/alt).
+        // Yalnızca spin gerçekten değiştiğinde true döner; aksi halde
+        // her kare force_render tetiklenip masaüstü boşa boyanır.
+        if right_down && (aiming || self.billiards.state == BilliardsState::BallInHand) {
+            let (ox, oy) = (self.billiards.english_x, self.billiards.english_y);
+            self.billiards.adjust_english(dx as f32, dy as f32);
+            changed |= self.billiards.english_x != ox || self.billiards.english_y != oy;
+        }
+
+        if aiming {
+            // Nişan açısı imleci izler: sol tuş basılı olsun ya da olmasın.
+            // Koordinatlar çizimle aynı masa geometrisine göre çevrilir.
+            if over_table {
+                let world_x = (px - bx) as f32 / bw as f32 * BILLIARDS_TABLE_W;
+                let world_y = (py - by) as f32 / bh as f32 * BILLIARDS_TABLE_H;
+                let cue = self.billiards.cue_ball_ref();
+                if cue.in_play {
+                    let ddx = world_x - cue.x;
+                    let ddy = world_y - cue.y;
+                    if ddx != 0.0 || ddy != 0.0 {
+                        let angle = fast_atan2(ddy, ddx);
+                        if self.billiards.aim_angle != angle {
+                            self.billiards.set_aim(angle, self.billiards.aim_power);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // Sol tuş: masada basılırsa şarj başlar; bırakılınca (masa
+            // içinde ya da dışında) yeterince şarj olduysa vurulur.
+            if left_down && over_table {
+                if !self.billiards_charge {
+                    self.billiards_charge = true;
+                    self.billiards_charge_frames = 0;
+                    self.billiards_charge_t = 0.0;
+                }
+            } else if !left_down && self.billiards_charge {
+                self.billiards_charge = false;
+                if self.billiards_charge_frames >= 8 {
+                    self.billiards.shoot();
+                    changed = true;
+                }
+                self.billiards_charge_frames = 0;
+            }
+        } else {
+            self.billiards_charge = false;
+            self.billiards_charge_frames = 0;
+        }
+
+        changed
+    }
+
+    /// Bilardo nişanını küçük adımlarla ayarlar (ok tuşları).
+    /// `d_angle` radyan, `d_power` 0..1. Yalnızca nişan durumunda etkili.
+    pub fn nudge_billiards_aim(&mut self, d_angle: f32, d_power: f32) -> bool {
+        if self.tab != TAB_BILLIARDS {
+            return false;
+        }
+        match self.billiards.state {
+            super::game_core::BilliardsState::Aiming => {
+                self.billiards.aim_angle += d_angle;
+                self.billiards.aim_power =
+                    billiards_clamp(self.billiards.aim_power + d_power, 0.05, 1.0);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Bilardo vuruş gücünü ayarlar (fare tekerleği).
+    pub fn adjust_billiards_power(&mut self, delta: f32) -> bool {
+        if self.tab != TAB_BILLIARDS
+            || self.billiards.state != super::game_core::BilliardsState::Aiming
+        {
+            return false;
+        }
+        self.billiards.aim_power = billiards_clamp(self.billiards.aim_power + delta, 0.05, 1.0);
+        true
     }
 
     /// Klavye kısayolları: 1-4 bölüm, N yeni oyun, S ses, U geri al.

@@ -8,11 +8,11 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64-blue.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-214%2C823%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![Host Tests](https://img.shields.io/badge/Host%20Tests-578%20tests-brightgreen.svg)](https://github.com/tbagriyanik/minos)
-[![Version](https://img.shields.io/badge/Version-v2.7.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Version](https://img.shields.io/badge/Version-v2.8.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 minOs is a standalone 64-bit (`x86_64`) operating system written in Rust. Its kernel uses `no_std` and `no_main`, and provides a graphical desktop with built-in applications.
 
-## Current · v2.7.0
+## Current · v2.8.0
 
 - The Paint app UI was redesigned end-to-end: two scale-aware tool strips, visible buttons with hover/press animation (Open/Save/Undo/Redo/Clear/Brush/Eraser/shapes), a color-picker popup, brush-tip preview, right-drag erase and Ctrl+N/Ctrl+O/Ctrl+S shortcuts; fast strokes and erasing are now gap-free via interpolation.
 - Application instances are lazily loaded: shell apps (File Manager, Settings, Browser, Music, Task Manager) stay resident; all other apps are loaded on first launch via `AppInstances::load` and dropped from memory when their last window closes — idle apps consume no RAM.

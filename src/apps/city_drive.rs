@@ -800,6 +800,39 @@ pub struct CityDriveApp {
     pub checkpoints: [(f32, f32); 8],
 }
 
+/// CITY-PROFILE: asama surelerini seri porta yazar (performans ayiklama).
+#[inline(never)]
+fn city_profile_dump(marks: &[u64; 6], t0: u64, win_w: usize, win_h: usize) {
+    static mut LAST_PR: u64 = 0;
+    let now = crate::monotonic_ms();
+    unsafe {
+        if now.wrapping_sub(LAST_PR) < 1500 {
+            return;
+        }
+        LAST_PR = now;
+    }
+    crate::serial_print("[CITY-PROFILE] sky=");
+    crate::serial_print_dec(marks[0]);
+    crate::serial_print(" ground=");
+    crate::serial_print_dec(marks[1].saturating_sub(marks[0]));
+    crate::serial_print(" walls=");
+    crate::serial_print_dec(marks[2].saturating_sub(marks[1]));
+    crate::serial_print(" sprites=");
+    crate::serial_print_dec(marks[3].saturating_sub(marks[2]));
+    crate::serial_print(" hud=");
+    crate::serial_print_dec(marks[4].saturating_sub(marks[3]));
+    crate::serial_print(" total=");
+    crate::serial_print_dec(now.saturating_sub(t0));
+    crate::serial_print(" win=");
+    crate::serial_print_dec(win_w as u64);
+    crate::serial_print("x");
+    crate::serial_print_dec(win_h as u64);
+    crate::serial_print(
+        "
+",
+    );
+}
+
 impl CityDriveApp {
     pub fn new() -> Self {
         let mut app = CityDriveApp {
@@ -1819,10 +1852,14 @@ impl CityDriveApp {
         horizon: usize,
         focal: f32,
         zbuf: &[f32; 1024],
+        budget: &TimeBudget,
     ) {
         for p in self.particles.iter() {
             if p.life <= 0.0 {
                 continue;
+            }
+            if budget.is_expired() {
+                return;
             }
             let (screen_x, _depth, scale) = match self.project(p.x, p.y, win_w, focal, zbuf) {
                 Some(v) => v,
@@ -1830,7 +1867,8 @@ impl CityDriveApp {
             };
             let t = p.life / p.max_life;
             let alpha = t.clamp(0.0, 1.0);
-            let size = (p.size * scale * 0.5).max(1.0) as usize;
+            // Yakın parçacıklar ekranı kaplayıp kareyi şişirmesin.
+            let size = ((p.size * scale * 0.5).max(1.0) as usize).min(160);
             let color = shade(p.color, alpha);
             let y0 = (horizon as f32 + CAM_H * scale - size as f32 * 0.5) as usize;
             let x0 = screen_x.saturating_sub(size as i32 / 2) as usize;
@@ -1853,6 +1891,8 @@ impl CityDriveApp {
         budget_ms: u64,
     ) -> bool {
         let budget = TimeBudget::new(budget_ms);
+        let __t0 = crate::monotonic_ms();
+        let mut __marks = [0u64; 6];
         if win_w < 64 || win_h < 64 {
             return true;
         }
@@ -1896,7 +1936,10 @@ impl CityDriveApp {
         };
         for row in 0..(horizon - top) {
             if budget.is_expired() {
-                return false;
+                {
+                    city_profile_dump(&__marks, __t0, win_w, win_h);
+                    return false;
+                }
             }
             let t = row as f32 / (horizon - top).max(1) as f32;
             let r = lerp_u8((sky_top >> 16) & 0xFF, (sky_horizon >> 16) & 0xFF, t);
@@ -1950,43 +1993,85 @@ impl CityDriveApp {
             }
         }
 
-        // 2) Zemin: ızgara izdüşümü (asfalt, kaldırım, park, şerit).
-        for row in (horizon..top + view_h).step_by(2) {
+        __marks[0] = crate::monotonic_ms() - __t0;
+        // 2) Zemin: izgara izdusumu (asfalt, kaldirim, park, serit).
+        // Uzaklikla cozunurluk duser: ufka yakin satirlar zaten ufak
+        // gorunur, bu yuzden genis hucrelerle cizilir; yalnizca on
+        // plandaki bant ince izgara kullanir. TCG gibi yavas sanal
+        // ortamlarda zemin projeksiyonu render butcesinin en buyuk
+        // kalemiydi (~70 ms / 80 ms); kademelendirme onu birkac kat
+        // azaltir.
+        let cam_h_focal = CAM_H * focal;
+        let inv_w = 2.0 / win_w as f32;
+        // Zemin izgarisi 4 px'lik satirlarla cizilir: zemin rengi
+        // uzaklikla puruzsuz degistigi ve serit isaretleri yatay
+        // seritler halinde genis yer kapladigi icin dikey cozunurluk
+        // kaybi gormezden gelinebilir; hucre sayisi ~4 kat duser.
+        for row in (horizon..top + view_h).step_by(4) {
             if budget.is_expired() {
-                return false;
+                {
+                    city_profile_dump(&__marks, __t0, win_w, win_h);
+                    return false;
+                }
             }
-            let dy = (row as f32 + 1.0) - horizon as f32;
+            let dy = (row as f32 + 2.0) - horizon as f32;
             if dy <= 0.0 {
                 continue;
             }
-            let dist = CAM_H * focal / dy;
+            let dist = cam_h_focal / dy;
             if dist > MAX_VIEW {
                 continue;
             }
-            for col in (0..win_w).step_by(4) {
-                let cxf = 2.0 * col as f32 / win_w as f32 - 1.0;
+            let cell = 8usize;
+            let cell_h = 4usize;
+            // Ayni renkli bitisik hucreleri yatay calistirmada birlestir:
+            // duzlük yol/sehir manzarasinda hucre basina draw_rect cagrisi
+            // yerine satir basina birkac cagri yeterlidir.
+            let mut run_col = 0usize;
+            let mut run_end = 0usize;
+            let mut run_color: Option<u32> = None;
+            for col in (0..win_w).step_by(cell) {
+                let cxf = col as f32 * inv_w - 1.0;
                 let rx = dir_x + plane_x * cxf;
                 let ry = dir_y + plane_y * cxf;
                 let fx = self.car_x + rx * dist;
                 let fy = self.car_y + ry * dist;
                 let mut color = self.floor_color(fx, fy, dist);
-                // Gece gölgelemesi.
+                // Gece golgelemesi.
                 if is_night {
                     let night_f = 0.35 + 0.35 * night_t;
                     color = shade(color, night_f);
                 }
-                fb.draw_rect(win_x + col, row, 4.min(win_w - col), 2, color);
+                if run_color == Some(color) {
+                    run_end = col + cell.min(win_w - col);
+                    continue;
+                }
+                if let Some(c) = run_color {
+                    fb.draw_rect(win_x + run_col, row, run_end - run_col, cell_h, c);
+                }
+                run_col = col;
+                run_end = col + cell.min(win_w - col);
+                run_color = Some(color);
+            }
+            if let Some(c) = run_color {
+                fb.draw_rect(win_x + run_col, row, run_end - run_col, cell_h, c);
             }
         }
 
+        __marks[1] = crate::monotonic_ms() - __t0;
         // 3) Binalar: raycasting duvar sütunları.
         // Geniş pencerelerde sprite derinlik testi de tam görünürlük alanını
         // kapsasın; 512 sütunluk tampon yüksek çözünürlükte araçları kırpıyordu.
         let mut zbuf = [MAX_VIEW; 1024];
-        let col_step = if win_w >= 500 { 2 } else { 1 };
+        // 760 px genislikte 2 px'lik sutunlar TCG'de ~40 ms tutuyordu;
+        // 3 px'lik sutunlar butceye sigar.
+        let col_step = if win_w >= 500 { 3 } else { 1 };
         for col in (0..win_w.min(1024)).step_by(col_step) {
             if budget.is_expired() {
-                return false;
+                {
+                    city_profile_dump(&__marks, __t0, win_w, win_h);
+                    return false;
+                }
             }
             let cxf = 2.0 * col as f32 / win_w as f32 - 1.0;
             let rx = dir_x + plane_x * cxf;
@@ -2092,56 +2177,139 @@ impl CityDriveApp {
             if row_start >= row_end {
                 continue;
             }
+            // Dikey calistirma birlestirme: ayni renkli ardisik satirlar tek
+            // draw_rect'te cizilir. Duvar bir sutunda cogunlukla tek renk
+            // oldugundan satir basina draw_rect yerine birkac cagri yeter.
+            let mut run_start = row_start;
+            let mut run_color: Option<u32> = None;
+            let inv_storey = 1.0 / STOREY_H;
+            let inv_scale = 1.0 / scale;
+            let horizon_f = horizon as f32;
             for row in row_start..row_end {
-                let z = CAM_H + (horizon as f32 - row as f32) / scale;
-                let storey_f = fractf(z / STOREY_H);
-                let storey_idx = floorf(z / STOREY_H) as i32;
+                if (row & 15) == 0 && budget.is_expired() {
+                    {
+                        city_profile_dump(&__marks, __t0, win_w, win_h);
+                        return false;
+                    }
+                }
+                let z = CAM_H + (horizon_f - row as f32) * inv_scale;
+                let z_storey = z * inv_storey;
+                let storey_f = fractf(z_storey);
+                let storey_idx = floorf(z_storey) as i32;
                 let is_top_row = row == row_start;
 
-                // Tavan/çatı çizgısı (en üst satır).
-                if is_top_row && storeys > 0.0 {
-                    fb.draw_rect(win_x + col, row, col_step, 1, roof_color);
+                let row_color = if is_top_row && storeys > 0.0 {
+                    // Tavan/cati cizgisi (en ust satir).
+                    roof_color
+                } else if storey_idx > 0 && storey_f < 0.03 {
+                    // Kornice: her kat arasi ince finta cizgi.
+                    cornice
+                } else if storey_idx == 0 && storey_f > 0.78 && storey_f < 0.92 && window_x {
+                    // Zemin kati kapisi (en altta, orta bolgede).
+                    shade(0x3A3A3A, factor)
+                } else {
+                    // Pencereler: kat basina iki pencere, gece yanik.
+                    let in_window_band = storey_f > 0.12 && storey_f < 0.55;
+                    let window_col =
+                        wall_u > 0.22 && wall_u < 0.42 || wall_u > 0.58 && wall_u < 0.78;
+                    let lit = is_night
+                        && ((hit_x * 13 + hit_y * 7 + row as i32 * 3 + storey_idx * 11) % 7) == 0;
+                    if in_window_band && window_col && window_x {
+                        if lit {
+                            lit_color
+                        } else {
+                            win_color
+                        }
+                    } else {
+                        wall_color
+                    }
+                };
+
+                if run_color == Some(row_color) {
                     continue;
                 }
-                // Körnice: her kat arası ince finta çizgi.
-                if storey_idx > 0 && storey_f < 0.03 {
-                    fb.draw_rect(win_x + col, row, col_step, 1, cornice);
-                    continue;
+                if let Some(c) = run_color {
+                    fb.draw_rect(win_x + col, run_start, col_step, row - run_start, c);
                 }
-                // Zemin katı kapısı (en altta, orta bölgede).
-                if storey_idx == 0 && storey_f > 0.78 && storey_f < 0.92 && window_x {
-                    fb.draw_rect(win_x + col, row, col_step, 1, shade(0x3A3A3A, factor));
-                    continue;
-                }
-                // Pencereler: kat başına iki pencere, gece yanık.
-                let in_window_band = storey_f > 0.12 && storey_f < 0.55;
-                let window_col = wall_u > 0.22 && wall_u < 0.42 || wall_u > 0.58 && wall_u < 0.78;
-                let lit = is_night
-                    && ((hit_x * 13 + hit_y * 7 + row as i32 * 3 + storey_idx * 11) % 7) == 0;
-                if in_window_band && window_col && window_x {
-                    let color = if lit { lit_color } else { win_color };
-                    fb.draw_rect(win_x + col, row, col_step, 1, color);
-                    continue;
-                }
-                fb.draw_rect(win_x + col, row, col_step, 1, wall_color);
+                run_start = row;
+                run_color = Some(row_color);
+            }
+            if let Some(c) = run_color {
+                fb.draw_rect(win_x + col, run_start, col_step, row_end - run_start, c);
             }
         }
 
+        __marks[2] = crate::monotonic_ms() - __t0;
         // 4) Sprite'lar: ödüller, trafik araçları ve parçacıklar.
-        self.draw_trees(fb, win_x, top, win_w, horizon, focal, &zbuf);
+        self.draw_trees(fb, win_x, top, win_w, horizon, focal, &zbuf, &budget);
+        if budget.is_expired() {
+            __marks[3] = crate::monotonic_ms() - __t0;
+            city_profile_dump(&__marks, __t0, win_w, win_h);
+            return false;
+        }
         for reward in self.rewards.iter() {
             if !reward.active {
                 continue;
             }
-            self.draw_reward(fb, top, win_w, horizon, focal, &zbuf, reward);
+            if budget.is_expired() {
+                {
+                    city_profile_dump(&__marks, __t0, win_w, win_h);
+                    return false;
+                }
+            }
+            self.draw_reward(fb, top, win_w, horizon, focal, &zbuf, reward, &budget);
         }
         self.draw_traffic_3d(
             fb, win_x, top, win_w, view_h, horizon, focal, &mut zbuf, &budget,
         );
-        self.draw_particles(fb, top, win_w, horizon, focal, &zbuf);
+        if budget.is_expired() {
+            __marks[3] = crate::monotonic_ms() - __t0;
+            city_profile_dump(&__marks, __t0, win_w, win_h);
+            return false;
+        }
+        self.draw_particles(fb, top, win_w, horizon, focal, &zbuf, &budget);
+        if budget.is_expired() {
+            __marks[3] = crate::monotonic_ms() - __t0;
+            city_profile_dump(&__marks, __t0, win_w, win_h);
+            return false;
+        }
 
+        __marks[3] = crate::monotonic_ms() - __t0;
         // 5) HUD.
         self.render_hud(fb, win_x, top, win_w, view_h);
+        __marks[4] = crate::monotonic_ms() - __t0;
+        let __tot = __marks[4];
+        static mut __LAST_PR: u64 = 0;
+        // Yalnizca butceye yakin gecen kareler raporlanir; normal ~65 ms
+        // render'larda seri portu bosuna mesgul etme.
+        if __tot > 75 {
+            let __now = crate::monotonic_ms();
+            unsafe {
+                if __now.wrapping_sub(__LAST_PR) > 2000 {
+                    __LAST_PR = __now;
+                    crate::serial_print("[CITY-PROFILE] sky=");
+                    crate::serial_print_dec(__marks[0]);
+                    crate::serial_print(" ground=");
+                    crate::serial_print_dec(__marks[1].saturating_sub(__marks[0]));
+                    crate::serial_print(" walls=");
+                    crate::serial_print_dec(__marks[2].saturating_sub(__marks[1]));
+                    crate::serial_print(" sprites=");
+                    crate::serial_print_dec(__marks[3].saturating_sub(__marks[2]));
+                    crate::serial_print(" hud=");
+                    crate::serial_print_dec(__marks[4].saturating_sub(__marks[3]));
+                    crate::serial_print(" total=");
+                    crate::serial_print_dec(__tot);
+                    crate::serial_print(" win=");
+                    crate::serial_print_dec(win_w as u64);
+                    crate::serial_print("x");
+                    crate::serial_print_dec(win_h as u64);
+                    crate::serial_print(
+                        "
+",
+                    );
+                }
+            }
+        }
         true
     }
 
@@ -2168,6 +2336,11 @@ impl CityDriveApp {
             T_PARK => PARK_COLOR,
             _ => ROAD_COLOR,
         };
+        // Uzaklikta serit/cizgi/doku detaylari zaten birkac pikselin
+        // altina duser; pahali modf/absf/hash zincirini atla.
+        if dist > 14.0 {
+            return shade(base, shade_f);
+        }
         let ly = modf(fy, ROAD_PERIOD as f32);
         let lx = modf(fx, ROAD_PERIOD as f32);
 
@@ -2520,6 +2693,7 @@ impl CityDriveApp {
         focal: f32,
         zbuf: &[f32; 1024],
         reward: &Reward,
+        budget: &TimeBudget,
     ) {
         let (screen_x, depth, scale) = match self.project(reward.x, reward.y, win_w, focal, zbuf) {
             Some(v) => v,
@@ -2528,8 +2702,11 @@ impl CityDriveApp {
         let (h_world, w_world) = reward.kind.dims();
         // Havada hafif salınım.
         let bob = sin(self.anim_t * 2.0 + reward.phase) * 0.07;
-        let size_y = (h_world * scale).max(4.0) as usize;
-        let size_x = (w_world * scale).max(4.0) as usize;
+        // Kameraya çok yakın ödüller devasa izdüşüm üretip kareyi şişirir;
+        // boyutu pencere ölçeğiyle sınırla.
+        let max_px = win_w.max(horizon.saturating_sub(win_y)).max(64);
+        let size_y = ((h_world * scale).max(4.0) as usize).min(max_px);
+        let size_x = ((w_world * scale).max(4.0) as usize).min(max_px);
         let bottom = horizon as f32 + (CAM_H - (0.32 + bob)) * scale;
         let top = bottom - size_y as f32;
         let y0 = (win_y as f32 + top).max(0.0) as usize;
@@ -2552,6 +2729,9 @@ impl CityDriveApp {
                 let rim = shade(0xF7DE8C, factor);
                 let shine = shade(0xFFF4C8, factor);
                 for row in 0..size_y {
+                    if (row & 15) == 0 && budget.is_expired() {
+                        return;
+                    }
                     let dy = row as f32 + 0.5 - r;
                     let hw = sqrtf((r * r - dy * dy).max(0.0));
                     if hw < 0.5 {
@@ -2704,9 +2884,13 @@ impl CityDriveApp {
         horizon: usize,
         focal: f32,
         zbuf: &[f32; 1024],
+        budget: &TimeBudget,
     ) {
         for cy in (0..CITY_H).step_by(2) {
             for cx in (0..CITY_W).step_by(2) {
+                if (cx & 7) == 0 && budget.is_expired() {
+                    return;
+                }
                 if self.map.tile(cx as i32, cy as i32) != T_PARK || hash4(cx, cy, 41, 7) % 100 >= 42
                 {
                     continue;

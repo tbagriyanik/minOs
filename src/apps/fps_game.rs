@@ -718,6 +718,11 @@ impl FpsGameApp {
         if self.result != GameResult::Playing {
             return;
         }
+        // Bozuk veya kenar-wraparound kaynaklı devasa deltalar döngüyü
+        // uzun süre kilitler (her 160 px'lik adım look() çağırır); toplam
+        // birikimi insanın algılayamayacağı bir sınıra kırp.
+        dx = dx.clamp(-2048, 2048);
+        dy = dy.clamp(-2048, 2048);
         while dx != 0 || dy != 0 {
             let step_x = dx.clamp(-160, 160);
             let step_y = dy.clamp(-120, 120);
@@ -1964,6 +1969,9 @@ impl FpsGameApp {
             let lo = start_x.max(col_start as isize);
             let hi = end_x.min(col_end as isize);
             for sx in lo..hi {
+                if (sx & 3) == 0 && budget.is_expired() {
+                    return false;
+                }
                 let sx_u = sx as usize;
                 if sx_u >= self.zbuf.len() {
                     break;
@@ -1979,6 +1987,9 @@ impl FpsGameApp {
                 }
                 let fb_x = win_x + sx_u * scale;
                 for y in draw_start..draw_end {
+                    if (y & 15) == 0 && budget.is_expired() {
+                        return false;
+                    }
                     let v = (((y as f32 + 0.5 - y_top) / sprite_h_px) * fps_sprites::SPR_H as f32)
                         as usize;
                     if v >= fps_sprites::SPR_H {
@@ -2046,6 +2057,9 @@ impl FpsGameApp {
             let lo = start_x.max(col_start as isize);
             let hi = end_x.min(col_end as isize);
             for sx in lo..hi {
+                if (sx & 3) == 0 && budget.is_expired() {
+                    return false;
+                }
                 let sx_u = sx as usize;
                 if sx_u >= self.zbuf.len() {
                     break;
@@ -2061,6 +2075,9 @@ impl FpsGameApp {
                 }
                 let fb_x = win_x + sx_u * scale;
                 for y in draw_start..draw_end {
+                    if (y & 15) == 0 && budget.is_expired() {
+                        return false;
+                    }
                     let v = (((y as f32 + 0.5 - y_top) / sprite_h_px) * fps_sprites::ITEM_H as f32)
                         as usize;
                     if v >= fps_sprites::ITEM_H {

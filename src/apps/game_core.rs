@@ -1812,12 +1812,21 @@ pub const BILLIARDS_POCKET_R: f32 = 0.055;
 pub const BILLIARDS_FRICTION: f32 = 0.008;
 /// Minimum hız eşiği (altında durdur).
 pub const BILLIARDS_MIN_SPEED: f32 = 0.001;
-/// Maksimum vuruş hızı.
-pub const BILLIARDS_MAX_SPEED: f32 = 1.5;
+/// Maksimum vuruş hızı (dünya birimi/tick). 2.0x1.0 birimlik masa için
+/// tokat hissi veren üst sınır; eski 1.5 değeri topları neredeyse
+/// anında delik gibi masadan çıkarıyordu.
+pub const BILLIARDS_MAX_SPEED: f32 = 0.14;
 /// Bir alt adımda bir topun en fazla bu kadar ilerlemesi hedeflenir.
 /// Hızlı topların tek bir adımda diğer topu veya çapayı geçmesini
 /// (tunneling) önlemek için hareket ve çarpışma denetimi alt adımlara bölünür.
 pub const BILLIARDS_SUB_STEP_MAX_DIST: f32 = BILLIARDS_BALL_R * 0.5;
+/// Yan spin (english) yol sapması katsayısı: hız ile çarpılıp ivmeye
+/// dönüşür, böylece sert vuruşta spin etkisi de büyür.
+const BILLIARDS_SPIN_ACCEL: f32 = 0.012;
+/// Üst/alt spin (follow/draw) hız katkısı katsayısı.
+const BILLIARDS_SPIN_FOLLOW: f32 = 0.006;
+/// Spin sönümlemesi (tick başına çarpan).
+const BILLIARDS_SPIN_DECAY: f32 = 0.90;
 /// Top sayısı (15 renkli + 1 beyaz).
 pub const BILLIARDS_BALL_COUNT: usize = 16;
 
@@ -1838,10 +1847,19 @@ pub struct BilliardsBall {
     pub y: f32,
     pub vx: f32,
     pub vy: f32,
-    /// Döndürme açısı (radyan) — 3D görünüm için.
+    /// Döndürme açısı (radyan) — topun son hareket yönüne dik yatay
+    /// eksen etrafındaki yuvarlanma fazı; işaretler/doku bunu izler.
     pub angle: f32,
-    /// Döndürme hızı (radyan/tick).
-    pub ang_vel: f32,
+    /// Son hareket yönü (birim vektör); durunca da dokunun ekseni
+    /// doğru kalsın diye saklanır.
+    pub roll_ux: f32,
+    pub roll_uy: f32,
+    /// Yan english spin'i (-1..1): çap topunun rotasyonunu yan yanal
+    /// büker ( Magnus benzeri basit model ).
+    pub spin_x: f32,
+    /// Üst/alt english spin'i (-1..1): pozitif topspin ileri iter,
+    /// negatif backspin geri çeker.
+    pub spin_y: f32,
     pub kind: BallKind,
     pub number: u8, // 1-15, 0 = çap topu
     pub pocketed: bool,
@@ -1856,7 +1874,10 @@ impl BilliardsBall {
             vx: 0.0,
             vy: 0.0,
             angle: 0.0,
-            ang_vel: 0.0,
+            roll_ux: 1.0,
+            roll_uy: 0.0,
+            spin_x: 0.0,
+            spin_y: 0.0,
             kind: BallKind::Cue,
             number: 0,
             pocketed: false,
@@ -1877,7 +1898,10 @@ impl BilliardsBall {
             vx: 0.0,
             vy: 0.0,
             angle: 0.0,
-            ang_vel: 0.0,
+            roll_ux: 1.0,
+            roll_uy: 0.0,
+            spin_x: 0.0,
+            spin_y: 0.0,
             kind,
             number,
             pocketed: false,
@@ -1961,6 +1985,10 @@ pub struct BilliardsGame {
     pub aim_angle: f32,
     /// Vuruş gücü (0.0 - 1.0).
     pub aim_power: f32,
+    /// English spin ayarı: x = yan (sol/sağ), y = üst/alt (follow/draw).
+    /// -1.0..1.0 aralığında; 0 ortadır.
+    pub english_x: f32,
+    pub english_y: f32,
     /// Son vuruş yapan oyuncu (0 = solids, 1 = stripes, 2 = henüz kimse).
     pub last_shooter: u8,
     /// Foul bayrağı.
@@ -2024,6 +2052,8 @@ impl BilliardsGame {
             cue_ball_in_hand: false,
             aim_angle: 0.0,
             aim_power: 0.5,
+            english_x: 0.0,
+            english_y: 0.0,
             last_shooter: 2,
             foul: false,
             winner: None,
@@ -2075,28 +2105,22 @@ impl BilliardsGame {
         let bottom = BILLIARDS_TABLE_H - BILLIARDS_CUSHION - BILLIARDS_BALL_R;
 
         let ball = &mut self.balls[i];
-        let mut hit = false;
         if ball.x <= left {
             ball.x = left;
             ball.vx = -ball.vx * 0.85;
-            hit = true;
         } else if ball.x >= right {
             ball.x = right;
             ball.vx = -ball.vx * 0.85;
-            hit = true;
         }
         if ball.y <= top {
             ball.y = top;
             ball.vy = -ball.vy * 0.85;
-            hit = true;
         } else if ball.y >= bottom {
             ball.y = bottom;
             ball.vy = -ball.vy * 0.85;
-            hit = true;
         }
-        if hit {
-            ball.ang_vel += (ball.vx + ball.vy) * 0.1;
-        }
+        // Çarpma yönü değişir; yuvarlanma ekseni tick'te hızdan
+        // yeniden hesaplandığı için burada ek iş gerekmez.
     }
 
     /// Top-top çarpışması (elastik).
@@ -2143,10 +2167,6 @@ impl BilliardsGame {
         self.balls[i].y -= ny * overlap * 0.5;
         self.balls[j].x += nx * overlap * 0.5;
         self.balls[j].y += ny * overlap * 0.5;
-
-        // Döndürme güncelle
-        self.balls[i].ang_vel = (self.balls[i].vx - self.balls[i].vy) * 0.5;
-        self.balls[j].ang_vel = (self.balls[j].vx - self.balls[j].vy) * 0.5;
     }
 
     /// Delik kontrolü.
@@ -2226,13 +2246,22 @@ impl BilliardsGame {
             return;
         }
         let angle = self.aim_angle;
-        let power = self.aim_power;
+        let power = self.aim_power.clamp(0.0, 1.0);
+        // Smoothstep güç eğrisi: düşük ve orta güçler ince ayar
+        // gerektiren hassas vuruşlar için yumuşatılır, %100 tokat kalır.
+        let shaped = power * power * (3.0 - 2.0 * power);
+        // Üst spin (follow) vuruşu hafif hızlandırır, backspin yavaşlatır.
+        let speed = shaped * (1.0 + self.english_y * 0.10);
+        let english_x = self.english_x;
+        let english_y = self.english_y;
         let cue = self.cue_ball();
         if !cue.in_play {
             return;
         }
-        cue.vx = billiards_cos(angle) * power * BILLIARDS_MAX_SPEED;
-        cue.vy = billiards_sin(angle) * power * BILLIARDS_MAX_SPEED;
+        cue.vx = billiards_cos(angle) * speed * BILLIARDS_MAX_SPEED;
+        cue.vy = billiards_sin(angle) * speed * BILLIARDS_MAX_SPEED;
+        cue.spin_x = english_x;
+        cue.spin_y = english_y;
         self.state = BilliardsState::Shooting;
         self.foul = false;
     }
@@ -2243,6 +2272,21 @@ impl BilliardsGame {
             self.aim_angle = angle;
             self.aim_power = billiards_clamp(power, 0.0, 1.0);
         }
+    }
+
+    /// English spin ayarını biriktirir (sürükleme ile).
+    /// `dx`/`dy` piksel cinsinden işaretçi hareketidir.
+    pub fn adjust_english(&mut self, dx: f32, dy: f32) {
+        if self.state == BilliardsState::Aiming || self.state == BilliardsState::BallInHand {
+            self.english_x = billiards_clamp(self.english_x + dx * 0.012, -1.0, 1.0);
+            self.english_y = billiards_clamp(self.english_y - dy * 0.012, -1.0, 1.0);
+        }
+    }
+
+    /// English spin'i sıfırlar.
+    pub fn clear_english(&mut self) {
+        self.english_x = 0.0;
+        self.english_y = 0.0;
     }
 
     /// Çap topunu masa üzerine yerleştirir (ball in hand).
@@ -2322,7 +2366,7 @@ impl BilliardsGame {
                     }
                 }
 
-                // Sürtünme, dönüş ve durdurma (tick başına bir kez).
+                // Sürtünme, dönüş, english spin ve durdurma (tick başına bir kez).
                 for ball in &mut self.balls {
                     if !ball.in_play {
                         continue;
@@ -2330,22 +2374,42 @@ impl BilliardsGame {
                     ball.vx *= 1.0 - BILLIARDS_FRICTION;
                     ball.vy *= 1.0 - BILLIARDS_FRICTION;
 
-                    // Döndürme güncelle (hıza göre)
+                    // Çap topu english: yan spin ilerleme yönüne dik ivme
+                    // uygular (top yol boyunca kıvrılır); üst/alt spin
+                    // hareket doğrultusunda itme/çekme yapar.
+                    if ball.kind == BallKind::Cue {
+                        let sp = billiards_sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+                        if sp > BILLIARDS_MIN_SPEED {
+                            let nx = -ball.vy / sp;
+                            let ny = ball.vx / sp;
+                            let side = ball.spin_x * BILLIARDS_SPIN_ACCEL * sp;
+                            ball.vx += nx * side;
+                            ball.vy += ny * side;
+                            let fwd = ball.spin_y * BILLIARDS_SPIN_FOLLOW * sp;
+                            ball.vx += (ball.vx / sp) * fwd;
+                            ball.vy += (ball.vy / sp) * fwd;
+                            ball.spin_x *= BILLIARDS_SPIN_DECAY;
+                            ball.spin_y *= BILLIARDS_SPIN_DECAY;
+                        }
+                    }
+
+                    // Yuvarlanma: top, hızına dik yatay eksen etrafında
+                    // döner. Bu tick'teki deplasman `speed` dünya birimi
+                    // olduğundan açısal ilerleme = speed / yarıçap.
                     let speed = billiards_sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
                     if speed > BILLIARDS_MIN_SPEED {
-                        // Döndürme ekseni: hareket yönüne dik
-                        let ang_vel_target = speed / BILLIARDS_BALL_R;
-                        ball.ang_vel = ball.ang_vel * 0.95 + ang_vel_target * 0.05;
-                        ball.angle += ball.ang_vel;
-                    } else {
-                        ball.ang_vel *= 0.9;
+                        ball.roll_ux = ball.vx / speed;
+                        ball.roll_uy = ball.vy / speed;
+                        ball.angle += speed / BILLIARDS_BALL_R;
+                        if ball.angle > core::f32::consts::TAU {
+                            ball.angle -= core::f32::consts::TAU;
+                        }
                     }
 
                     // Minimum hız altına düşerse durdur
                     if speed < BILLIARDS_MIN_SPEED {
                         ball.vx = 0.0;
                         ball.vy = 0.0;
-                        ball.ang_vel = 0.0;
                     }
 
                     changed = true;

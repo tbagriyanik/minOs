@@ -200,9 +200,19 @@ fn publish_runtime_app_memory(
         0,
     );
 
-    // Seri döküm pahalıdır: ~18 satır 115200 baud'da yüzlerce ms UART
-    // meşguliyeti ve SERIAL_LOCK tutma süresi demektir. Kayıt defteri her
-    // `apps::memory` anlık görüntüsü Görev Yöneticisi tarafından doğrudan okunur.
+    // Uygulama bellek kaydını seri olarak yayınla: `[APP-MEM] app=<id> bytes=<bytes>`
+    // satırları QEMU entegrasyon testleri ve harici izleyiciler tarafından okunur.
+    // Sadece sifirdan buyuk kayitlar yazilir (0 baytli uygulamalar zaten rapor degil).
+    for app_id in 0..=17 {
+        let bytes = apps::memory::sample(app_id);
+        if bytes > 0 {
+            serial_print("[APP-MEM] app=");
+            serial_print_dec(app_id as u64);
+            serial_print(" bytes=");
+            serial_print_dec(bytes as u64);
+            serial_print("\n");
+        }
+    }
 }
 
 /// `FileManagerApp` onay iletişim kutusu açıkken Enter onayını ilgili diyalog

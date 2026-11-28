@@ -135,6 +135,46 @@ impl Sprites {
         self.items[idx]
     }
 
+    /// Dusman sprite'inin ham piksel dilimi (kind/angle başına
+    /// `SPR_W * SPR_H` u32, satır-major). Geçersiz indekslerde `None`.
+    ///
+    /// Piksel başına `enemy()` çağırmak yerine dilim bir kez alınıp
+    /// `tex[v * SPR_W + u]` ile indekslenebilir; bu render iç döngüsünde
+    /// önemli ölçüde daha ucuzdur.
+    #[inline(always)]
+    pub fn enemy_sprite(&self, kind: u8, angle: u8) -> Option<&[u32]> {
+        let k = kind as usize;
+        let a = angle as usize;
+        if k >= ENEMY_KIND_COUNT || a >= ENEMY_ANGLE_COUNT {
+            return None;
+        }
+        let base = (k * ENEMY_ANGLE_COUNT + a) * SPR_W * SPR_H;
+        self.enemies.get(base..base + SPR_W * SPR_H)
+    }
+
+    /// Olum animasyonu karesinin ham piksel dilimi.
+    #[inline(always)]
+    pub fn death_sprite(&self, kind: u8, frame: u8) -> Option<&[u32]> {
+        let k = kind as usize;
+        let f = frame as usize;
+        if k >= ENEMY_KIND_COUNT || f >= ENEMY_DEATH_FRAMES {
+            return None;
+        }
+        let base = (k * ENEMY_DEATH_FRAMES + f) * SPR_W * SPR_H;
+        self.deaths.get(base..base + SPR_W * SPR_H)
+    }
+
+    /// Eşya sprite'ının ham piksel dilimi.
+    #[inline(always)]
+    pub fn item_sprite(&self, kind: u8) -> Option<&[u32]> {
+        let k = kind as usize;
+        if k >= ITEM_KIND_COUNT {
+            return None;
+        }
+        let base = k * ITEM_W * ITEM_H;
+        self.items.get(base..base + ITEM_W * ITEM_H)
+    }
+
     /// Silah sprite tek pikel.
     #[inline(always)]
     pub fn weapon(&self, kind: u8, x: usize, y: usize) -> u32 {

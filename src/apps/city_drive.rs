@@ -2012,31 +2012,42 @@ impl CityDriveApp {
         // azaltir.
         let cam_h_focal = CAM_H * focal;
         let inv_w = 2.0 / win_w as f32;
-        // Zemin izgarisi mesafeye gore kademelendirilir: on planda 2 px
-        // (pürüzsüz, aliassiz), ufka dogru 8 px'e kadar büyür. Uzaklikla
-        // renk puruzsuz degistigi ve piksel yogunlugu dustugu icin
-        // goruntu kaybi olmaz; sabit 2 px butceyi asiyordu.
-        let mut row = horizon;
-        let ground_end = top + view_h;
-        while row < ground_end {
+        // Zemin izgarisi altan ufa dogru cizilir: once en on plan (en
+        // pahali ve en gorunur bant) boyanir, butce dolarsa uzak
+        // bantlar eksik kalir — tersi olsaydi yolun kendisi kaybolurdu.
+        // Hucre boyutu ve detay kademesi mesafeye gore artar: dipte 2 px
+        // tam detay, ortada 4 px cizgi detayi, ufukta 6-12 px duz golge.
+        let mut row_bot = top + view_h;
+        while row_bot > horizon {
             if budget.is_expired() {
                 {
                     city_profile_dump(&__marks, __t0, win_w, win_h);
                     return false;
                 }
             }
-            let dy = (row as f32 + 2.0) - horizon as f32;
-            if dy <= 0.0 {
-                row += 2;
+            let dy_probe = (row_bot - 1) as f32 - horizon as f32;
+            if dy_probe <= 0.0 {
+                break;
+            }
+            let dist_probe = cam_h_focal / dy_probe;
+            if dist_probe > MAX_VIEW {
+                row_bot = row_bot.saturating_sub(8);
                 continue;
             }
-            let dist = cam_h_focal / dy;
-            if dist > MAX_VIEW {
-                row += 8;
-                continue;
+            let (cell, detail) = if dy_probe > 215.0 {
+                (2usize, 2u8)
+            } else if dy_probe > 80.0 {
+                (5usize, 1u8)
+            } else {
+                (((dist_probe * 0.5) as usize).clamp(6, 12), 1u8)
+            };
+            let cell_h = cell.min(row_bot - horizon);
+            if cell_h == 0 {
+                break;
             }
-            let cell = ((dist * 0.30) as usize).clamp(2, 8);
-            let cell_h = cell;
+            let row = row_bot - cell_h;
+            let dy = (row_bot as f32 - cell_h as f32 * 0.5) - horizon as f32;
+            let dist = cam_h_focal / dy.max(1.0);
             // Ayni renkli bitisik hucreleri yatay calistirmada birlestir:
             // duzlük yol/sehir manzarasinda hucre basina draw_rect cagrisi
             // yerine satir basina birkac cagri yeterlidir.
@@ -2049,7 +2060,7 @@ impl CityDriveApp {
                 let ry = dir_y + plane_y * cxf;
                 let fx = self.car_x + rx * dist;
                 let fy = self.car_y + ry * dist;
-                let mut color = self.floor_color(fx, fy, dist);
+                let mut color = self.floor_color(fx, fy, dist, detail);
                 // Gece golgelemesi.
                 if is_night {
                     let night_f = 0.35 + 0.35 * night_t;
@@ -2069,6 +2080,7 @@ impl CityDriveApp {
             if let Some(c) = run_color {
                 fb.draw_rect(win_x + run_col, row, run_end - run_col, cell_h, c);
             }
+            row_bot = row;
         }
 
         __marks[1] = crate::monotonic_ms() - __t0;
@@ -2352,7 +2364,9 @@ impl CityDriveApp {
     }
 
     /// Zemin rengini hesaplar (asfalt, kaldırım, park, yol şeridi).
-    fn floor_color(&self, fx: f32, fy: f32, dist: f32) -> u32 {
+    /// `detail`: 0 = taban renk (ufuk), 1 = serit/cizgi detaylari (orta),
+    /// 2 = tam detay (on plan, doku + kaldirim deseni dahil).
+    fn floor_color(&self, fx: f32, fy: f32, dist: f32, detail: u8) -> u32 {
         let cx = fx as i32;
         let cy = fy as i32;
         let kind = self.map.tile(cx, cy);
@@ -2362,9 +2376,10 @@ impl CityDriveApp {
             T_PARK => PARK_COLOR,
             _ => ROAD_COLOR,
         };
-        // Uzaklikta serit/cizgi/doku detaylari zaten birkac pikselin
-        // altina duser; pahali modf/absf/hash zincirini atla.
-        if dist > 14.0 {
+        // Uzaklikta veya kaba detay seviyesinde serit/cizgi/doku
+        // detaylari zaten birkac pikselin altina duser; pahali
+        // modf/absf/hash zincirinin bir kismini atla.
+        if dist > 14.0 || detail == 0 {
             return shade(base, shade_f);
         }
         let ly = modf(fy, ROAD_PERIOD as f32);
@@ -2408,14 +2423,16 @@ impl CityDriveApp {
                 return shade(0xB8B8B8, shade_f);
             }
         }
-        let roughness = if kind == T_ROAD {
+        // Dokusal varyasyon (asfalt greni, kaldirim tas deseni) yalnizca
+        // en yakin bantta; orta detayda cizgiler korunur, hash atlanir.
+        let roughness = if detail == 2 && kind == T_ROAD {
             0.94 + (hash4(cx as usize, cy as usize, 53, 17) % 7) as f32 * 0.015
         } else {
             1.0
         };
         let mut color = shade(base, shade_f * roughness);
         // Kaldırım taş dokusu (1 m plaka); asfalt düz kalır.
-        if kind == T_SIDEWALK && (cx + cy) & 1 == 0 {
+        if detail == 2 && kind == T_SIDEWALK && (cx + cy) & 1 == 0 {
             color = shade(color, 0.90);
         }
         color

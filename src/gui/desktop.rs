@@ -52,7 +52,7 @@ impl MinGuiCompositor {
     /// Sağ üst filigran (watermark) alanı. Dosya ızgarası bu köşeye taşmaz.
     pub fn desktop_watermark_rect(width: usize) -> (usize, usize, usize, usize) {
         let title = if crate::fs::diskfs::is_installed() {
-            "minOs Sarman Edition *"
+            "minOs Sarman Edition"
         } else {
             "minOs (Live)"
         };
@@ -70,7 +70,7 @@ impl MinGuiCompositor {
         // Masaüstü Sağ Üst minOs Kedi Logosu ve Başlığı (Watermark)
         // Metin genişliğine göre sağa hizalanır; sağ kenardan taşmaz.
         let title = if crate::fs::diskfs::is_installed() {
-            "minOs Sarman Edition *"
+            "minOs Sarman Edition"
         } else {
             "minOs (Live)"
         };

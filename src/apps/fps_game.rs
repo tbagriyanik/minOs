@@ -1968,8 +1968,6 @@ impl FpsGameApp {
             let screen_x = (iw as f32 * 0.5) * (1.0 + transform_x / transform_y);
             let half_w = sprite_w * 0.5;
             let sprite_px_w = half_w * focal / depth * 2.0;
-            let start_x = fast_floor(screen_x - sprite_px_w * 0.5) as isize;
-            let end_x = fast_ceil(screen_x + sprite_px_w * 0.5) as isize;
 
             let y_top = screen_y(horizon_f, v_scale, EYE_Z, bottom_z + sprite_h, depth);
             let y_bottom = screen_y(horizon_f, v_scale, EYE_Z, bottom_z, depth);
@@ -1978,7 +1976,6 @@ impl FpsGameApp {
             if draw_end <= draw_start {
                 continue;
             }
-            let sprite_h_px = (y_bottom - y_top).max(1.0);
 
             // Düşman açısı: gövdenin oyuncuya göre yönü.
             let angle = if e.alive {
@@ -2005,54 +2002,36 @@ impl FpsGameApp {
                 }
             };
 
-            let lo = start_x.max(col_start as isize);
-            let hi = end_x.min(col_end as isize);
-            for sx in lo..hi {
-                if (sx & 3) == 0 && budget.is_expired() {
-                    return false;
-                }
-                let sx_u = sx as usize;
-                if sx_u >= self.zbuf.len() {
-                    break;
-                }
-                if self.zbuf[sx_u] < depth {
-                    continue; // duvar arkasında kalıyor
-                }
-                // Doku u koordinatı.
-                let lateral = (sx as f32 + 0.5 - screen_x) * depth / focal;
-                let u = ((lateral + half_w) / sprite_w * fps_sprites::SPR_W as f32) as usize;
-                if u >= fps_sprites::SPR_W {
-                    continue;
-                }
-                let fb_x = win_x + sx_u * scale;
-                for y in draw_start..draw_end {
-                    if (y & 15) == 0 && budget.is_expired() {
-                        return false;
-                    }
-                    let v = (((y as f32 + 0.5 - y_top) / sprite_h_px) * fps_sprites::SPR_H as f32)
-                        as usize;
-                    if v >= fps_sprites::SPR_H {
-                        continue;
-                    }
-                    let color = if e.alive {
-                        self.sprites.enemy(e.kind, angle, u, v)
-                    } else {
-                        self.sprites.death(e.kind, death_frame, u, v)
-                    };
-                    if color & fps_sprites::ALPHA != 0 {
-                        continue;
-                    }
-                    let mut shaded = shade_color(color & 0x00FF_FFFF, factor);
-                    if e.hit_timer > 0 {
-                        shaded = 0xFF4040;
-                    }
-                    let fy = win_y + y * scale;
-                    for dy in 0..scale {
-                        unsafe {
-                            fb.fill_scene_span(fb_x, fy + dy, scale, shaded);
-                        }
-                    }
-                }
+            let tex = if e.alive {
+                self.sprites.enemy_sprite(e.kind, angle)
+            } else {
+                self.sprites.death_sprite(e.kind, death_frame)
+            };
+            let Some(tex) = tex else {
+                continue;
+            };
+            if !self.blit_sprite(
+                fb,
+                win_x,
+                win_y,
+                scale,
+                tex,
+                fps_sprites::SPR_W,
+                fps_sprites::SPR_H,
+                screen_x,
+                sprite_px_w,
+                y_top,
+                y_bottom,
+                draw_start,
+                draw_end,
+                depth,
+                factor,
+                e.hit_timer > 0,
+                col_start,
+                col_end,
+                budget,
+            ) {
+                return false;
             }
         }
 
@@ -2085,53 +2064,193 @@ impl FpsGameApp {
             let y_top = screen_y(horizon_f, v_scale, EYE_Z, sprite_h + bob, depth);
             let y_bottom = screen_y(horizon_f, v_scale, EYE_Z, bob, depth);
             let sprite_px_w = sprite_w * focal / depth;
-            let start_x = fast_floor(screen_x - sprite_px_w * 0.5) as isize;
-            let end_x = fast_ceil(screen_x + sprite_px_w * 0.5) as isize;
             let draw_start = (y_top.max(0.0) as usize).max(row_start).min(ih);
             let draw_end = (y_bottom.max(0.0) as usize).min(row_end).min(ih);
             if draw_end <= draw_start {
                 continue;
             }
-            let sprite_h_px = (y_bottom - y_top).max(1.0);
-            let lo = start_x.max(col_start as isize);
-            let hi = end_x.min(col_end as isize);
-            for sx in lo..hi {
-                if (sx & 3) == 0 && budget.is_expired() {
+            let Some(tex) = self.sprites.item_sprite(p.kind) else {
+                continue;
+            };
+            if !self.blit_sprite(
+                fb,
+                win_x,
+                win_y,
+                scale,
+                tex,
+                fps_sprites::ITEM_W,
+                fps_sprites::ITEM_H,
+                screen_x,
+                sprite_px_w,
+                y_top,
+                y_bottom,
+                draw_start,
+                draw_end,
+                depth,
+                factor,
+                false,
+                col_start,
+                col_end,
+                budget,
+            ) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Tek bir billboard sprite'ını ekrana basar (z-buffer ile kırpılır).
+    ///
+    /// İki yol vardır:
+    /// * **Yakın sprite (büyütme):** her doku texeli ekran üzerinde birden
+    ///   fazla iç piksel kaplar; texel başına tek uzun `fill_scene_span`
+    ///   dizisi çizilir. Bu, yakın düşmanların tüm ekranı kapladığı
+    ///   durumlarda piksel başına maliyeti katlanarak düşürür.
+    /// * **Uzak sprite (küçültme):** her iç piksel için doku örneklenir;
+    ///   ekran alanı zaten küçüktür.
+    ///
+    /// `tex` satır-major `tex_w * tex_h` u32 dilimidir; `ALPHA` bitli
+    /// texeller atlanır. `highlight` hasar parlaması içindir.
+    #[allow(clippy::too_many_arguments)]
+    fn blit_sprite(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        scale: usize,
+        tex: &[u32],
+        tex_w: usize,
+        tex_h: usize,
+        screen_x: f32,
+        sprite_px_w: f32,
+        y_top: f32,
+        y_bottom: f32,
+        draw_start: usize,
+        draw_end: usize,
+        depth: f32,
+        factor: u32,
+        highlight: bool,
+        col_start: usize,
+        col_end: usize,
+        budget: &TimeBudget,
+    ) -> bool {
+        let sprite_h_px = (y_bottom - y_top).max(1.0);
+        let start_x = fast_floor(screen_x - sprite_px_w * 0.5) as isize;
+        let end_x = fast_ceil(screen_x + sprite_px_w * 0.5) as isize;
+        let zbuf_len = self.zbuf.len() as isize;
+        let lo = start_x.max(col_start as isize).max(0);
+        let hi = end_x.min(col_end as isize).min(zbuf_len);
+        if hi <= lo || draw_end <= draw_start || tex_w == 0 || tex_h == 0 {
+            return true;
+        }
+
+        let texel_w = sprite_px_w / tex_w as f32;
+        let texel_h = sprite_h_px / tex_h as f32;
+
+        if texel_w >= 1.0 && texel_h >= 1.0 {
+            // Büyütme yolu: texel (u, v) şu iç-piksel aralığını kaplar:
+            //   sx ∈ [screen_x - 0.5 + (u - tex_w/2) * texel_w, ... + texel_w)
+            //   y  ∈ [y_top + v * texel_h - 0.5, ... + texel_h)
+            for v in 0..tex_h {
+                if budget.is_expired() {
                     return false;
                 }
-                let sx_u = sx as usize;
-                if sx_u >= self.zbuf.len() {
-                    break;
-                }
-                if self.zbuf[sx_u] < depth {
+                let row = &tex[v * tex_w..(v + 1) * tex_w];
+                let y0 = y_top + v as f32 * texel_h - 0.5;
+                let y1 = y_top + (v + 1) as f32 * texel_h - 0.5;
+                let iy0 = (fast_ceil(y0) as isize).max(draw_start as isize);
+                let iy1 = (fast_ceil(y1) as isize).min(draw_end as isize);
+                if iy1 <= iy0 {
                     continue;
                 }
-                let lateral = (sx as f32 + 0.5 - screen_x) * depth / focal;
-                let u =
-                    ((lateral + sprite_w * 0.5) / sprite_w * fps_sprites::ITEM_W as f32) as usize;
-                if u >= fps_sprites::ITEM_W {
-                    continue;
-                }
-                let fb_x = win_x + sx_u * scale;
-                for y in draw_start..draw_end {
-                    if (y & 15) == 0 && budget.is_expired() {
-                        return false;
-                    }
-                    let v = (((y as f32 + 0.5 - y_top) / sprite_h_px) * fps_sprites::ITEM_H as f32)
-                        as usize;
-                    if v >= fps_sprites::ITEM_H {
-                        continue;
-                    }
-                    let color = self.sprites.item(p.kind, u, v);
+                for (u, &color) in row.iter().enumerate() {
                     if color & fps_sprites::ALPHA != 0 {
                         continue;
                     }
-                    let shaded = shade_color(color & 0x00FF_FFFF, factor);
-                    let fy = win_y + y * scale;
-                    for dy in 0..scale {
-                        unsafe {
-                            fb.fill_scene_span(fb_x, fy + dy, scale, shaded);
+                    let mut shaded = shade_color(color & 0x00FF_FFFF, factor);
+                    if highlight {
+                        shaded = 0xFF4040;
+                    }
+                    let x0 = screen_x - 0.5 + (u as f32 - tex_w as f32 * 0.5) * texel_w;
+                    let x1 = screen_x - 0.5 + (u as f32 + 1.0 - tex_w as f32 * 0.5) * texel_w;
+                    let ix0 = (fast_ceil(x0) as isize).max(lo);
+                    let ix1 = (fast_ceil(x1) as isize).min(hi);
+                    if ix1 <= ix0 {
+                        continue;
+                    }
+                    // z-buffer sütun bazında: yalnızca duvarın önünde kalan
+                    // ardışık sütunlar tek span olarak doldurulur.
+                    let mut cx = ix0;
+                    while cx < ix1 {
+                        if (cx & 7) == 0 && budget.is_expired() {
+                            return false;
                         }
+                        if self.zbuf[cx as usize] < depth {
+                            cx += 1;
+                            continue;
+                        }
+                        let run0 = cx;
+                        while cx < ix1 && self.zbuf[cx as usize] >= depth {
+                            cx += 1;
+                        }
+                        let run_x = win_x + run0 as usize * scale;
+                        let run_len = (cx - run0) as usize * scale;
+                        for y in iy0..iy1 {
+                            if (y & 7) == 0 && budget.is_expired() {
+                                return false;
+                            }
+                            let fy = win_y + y as usize * scale;
+                            for dy in 0..scale {
+                                unsafe {
+                                    fb.fill_scene_span(run_x, fy + dy, run_len, shaded);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Küçültme yolu: her iç piksel için doku örneklenir.
+        let u_step = tex_w as f32 / sprite_px_w;
+        let u_bias = tex_w as f32 * 0.5;
+        for sx in lo..hi {
+            if (sx & 3) == 0 && budget.is_expired() {
+                return false;
+            }
+            let sx_u = sx as usize;
+            if sx_u >= self.zbuf.len() {
+                break;
+            }
+            if self.zbuf[sx_u] < depth {
+                continue; // duvar arkasında kalıyor
+            }
+            let u = ((sx as f32 + 0.5 - screen_x) * u_step + u_bias) as usize;
+            if u >= tex_w {
+                continue;
+            }
+            let fb_x = win_x + sx_u * scale;
+            for y in draw_start..draw_end {
+                if (y & 15) == 0 && budget.is_expired() {
+                    return false;
+                }
+                let v = (((y as f32 + 0.5 - y_top) / sprite_h_px) * tex_h as f32) as usize;
+                if v >= tex_h {
+                    continue;
+                }
+                let color = tex[v * tex_w + u];
+                if color & fps_sprites::ALPHA != 0 {
+                    continue;
+                }
+                let mut shaded = shade_color(color & 0x00FF_FFFF, factor);
+                if highlight {
+                    shaded = 0xFF4040;
+                }
+                let fy = win_y + y * scale;
+                for dy in 0..scale {
+                    unsafe {
+                        fb.fill_scene_span(fb_x, fy + dy, scale, shaded);
                     }
                 }
             }
@@ -2166,14 +2285,11 @@ impl FpsGameApp {
         let fx = win_x + (win_w.saturating_sub(draw_w)) / 2 + bob_x as usize;
         let fy = view_y + view_h.saturating_sub(draw_h) + (bob_y + recoil) as usize;
 
-        let sx_step = spr_w / draw_w.max(1);
-        let sy_step = spr_h / draw_h.max(1);
-
         for dy in 0..draw_h {
-            let v = (dy * sy_step).min(spr_h - 1);
+            let v = (dy * spr_h / draw_h).min(spr_h - 1);
             let fyy = fy + dy;
             for dx in 0..draw_w {
-                let u = (dx * sx_step).min(spr_w - 1);
+                let u = (dx * spr_w / draw_w).min(spr_w - 1);
                 let color = self.sprites.weapon(self.weapon, u, v);
                 if color & fps_sprites::ALPHA != 0 {
                     continue;
@@ -2594,8 +2710,11 @@ impl FpsGameApp {
                 fb.draw_rect(cx + 3, cy.saturating_sub(1), 5, 2, 0xD8F4FF);
                 fb.draw_rect(cx, cy, 1, 1, 0xFFFFFF);
 
-                // Elde tutulan silah.
-                self.render_weapon(fb, win_x, view_y, win_w, view_h);
+                // Elde tutulan silah: bütçe kalmadıysa atlanır; aksi halde
+                // ~76k piksellik çizim kare bütçesini aşabilir.
+                if !budget.is_expired() {
+                    self.render_weapon(fb, win_x, view_y, win_w, view_h);
+                }
 
                 // Hasar efekti.
                 if self.damage_flash_timer > 0 {
